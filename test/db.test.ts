@@ -4637,4 +4637,119 @@ describe('discord watches', () => {
       db.close();
     }
   });
+
+  test('unquarantineVersion resets invalid_choices alongside other fault counters', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.db.prepare(
+        'UPDATE ladder_entries SET crashes = 2, timeouts = 1, ooms = 1, invalid_choices = 7 ' +
+          'WHERE ladder_id = ? AND version_id = ?'
+      ).run('gen1ou20261109', ver.id);
+      db.quarantineVersion('alpha', '1.0', 'test quarantine', 1_700_000_020);
+      db.unquarantineVersion('alpha', '1.0', 1_700_000_030);
+      const row = db.db.prepare(
+        'SELECT crashes, timeouts, ooms, invalid_choices FROM ladder_entries ' +
+          'WHERE ladder_id = ? AND version_id = ?'
+      ).get('gen1ou20261109', ver.id) as {
+        crashes: number;
+        timeouts: number;
+        ooms: number;
+        invalid_choices: number;
+      };
+      expect(row).toEqual({crashes: 0, timeouts: 0, ooms: 0, invalid_choices: 0});
+    } finally {
+      db.close();
+    }
+  });
+
+  test('recordCompletedMatch ignores non-positive cpuCores without double-rounding', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      db.setAgentLadders(beta.id, ['rby'], 1_700_000_000);
+      const va = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/a.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      const vb = db.createSubmission({
+        agentId: beta.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/b.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: va.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.applySubmissionStatus({versionId: vb.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.recordCompletedMatch({
+        match: {
+          id: 'cpu-norm-1',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: va.id,
+          p2VersionId: vb.id,
+          seed: '1,2,3,4',
+          category: 'WL',
+          game1Outcome: 'W',
+          game2Outcome: 'L',
+          game1Turns: 10,
+          game2Turns: 10,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 10,
+          p1Game2PeakRam: 10,
+          p2Game1PeakRam: 10,
+          p2Game2PeakRam: 10,
+          p1Game1InitMillis: 10,
+          p1Game2InitMillis: 10,
+          p2Game1InitMillis: 10,
+          p2Game2InitMillis: 10,
+          p1Game1MeanTurnMillis: 10,
+          p1Game2MeanTurnMillis: 10,
+          p2Game1MeanTurnMillis: 10,
+          p2Game2MeanTurnMillis: 10,
+          p1Game1BankSeconds: 100,
+          p1Game2BankSeconds: 100,
+          p2Game1BankSeconds: 100,
+          p2Game2BankSeconds: 100,
+          // Zero game2 cpuCores must be ignored instead of halving to 1.0.
+          p1Game1CpuCores: 2.0,
+          p1Game2CpuCores: 0,
+          // Raw mean (1.06 + 1.16) / 2 = 1.11 -> 1.1 (double-rounding would yield 1.2).
+          p2Game1CpuCores: 1.06,
+          p2Game2CpuCores: 1.16,
+          completedAt: 1_700_000_020,
+        },
+      });
+      const recent = db.getRecentMatches(10);
+      expect(recent[0].p1.cpuCores).toBe(2);
+      expect(recent[0].games[1].p1.cpuCores).toBeUndefined();
+      expect(recent[0].p2.cpuCores).toBe(1.1);
+    } finally {
+      db.close();
+    }
+  });
 });

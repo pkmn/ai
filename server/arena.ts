@@ -2332,7 +2332,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
     let authToken: string | undefined;
     if (ver.authTokenEncoding) {
-      const sessionSecret = options.auth?.getConfig()?.sessionSecret;
+      const sessionSecret = getSessionSecret();
       if (!sessionSecret) {
         sendJson(res, 500, {error: 'SESSION_SECRET is required to decrypt artifact authToken.'});
         return;

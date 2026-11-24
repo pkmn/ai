@@ -3356,6 +3356,42 @@ describe('createServerApp production HTTP hardening', () => {
       }
     });
 
+  test('GET /api/arena/artifacts/:id falls back to SESSION_SECRET without options.auth',
+    async () => {
+      const prevSecret = process.env.SESSION_SECRET;
+      process.env.SESSION_SECRET = AUTH_CFG.sessionSecret;
+      try {
+        const a1 = db.getAgentBySlug('0-error')!;
+        const v1 = db.createSubmission({
+          agentId: a1.id,
+          version: '2.1.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/z-2.1.0.tar.zst',
+          sha256: SHA,
+          authTokenEncoding: encryptSecret('ghp_env_fallback', AUTH_CFG.sessionSecret),
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+        db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_760_000_020});
+        db.activateStagedVersion({versionId: v1.id, agentId: a1.id, now: 1_760_000_030});
+
+        const app = polka();
+        const ctrl = arena.register(app, {db, arenaSecret: ARENA_SECRET, publicDir: tmpDir});
+        const srv = await startTestServer(app);
+        try {
+          const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
+          const artifact = await client.getActivatedArtifact(v1.id);
+          expect(artifact.authToken).toBe('ghp_env_fallback');
+        } finally {
+          ctrl.close();
+          await srv.close();
+        }
+      } finally {
+        if (prevSecret === undefined) delete process.env.SESSION_SECRET;
+        else process.env.SESSION_SECRET = prevSecret;
+      }
+    });
+
   test('broadcast off completion triggers onUpdate plus live battle stream', async () => {
     db.upsertTournament({
       id: '2',

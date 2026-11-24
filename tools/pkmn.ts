@@ -413,7 +413,17 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
           throw new Error('Usage: pkmn quarantine <agent-slug> <version> [--reason "..."]');
         }
         const reason = flags.get('reason');
+        const activePoolsIds = database
+          .getLadders()
+          .filter(l => l.team === 'pools' && l.status !== 'archived')
+          .map(l => l.id);
         const res = database.quarantineVersion(slug, version, reason, now);
+        const pub = options.publicDir ?? render.PUBLIC_DIR;
+        for (const id of activePoolsIds) {
+          if (database.getLadder(id)?.status === 'archived') {
+            arena.promoteArchivedPoolsLogs(pub, id);
+          }
+        }
         const suffix = reason ? `: ${reason}` : '';
         log(
           `Quarantined ${res.agent.name} (${res.agent.slug}) version ` +
@@ -435,7 +445,14 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         if (!ladderId || !slug || !version) {
           throw new Error('Usage: pkmn retire <ladder_id> <agent-slug> <version>');
         }
+        const before = database.getLadder(ladderId);
         database.retireLadderEntry(ladderId, slug, version, now);
+        if (before?.team === 'pools' && before.status !== 'archived') {
+          const after = database.getLadder(ladderId);
+          if (after?.status === 'archived') {
+            arena.promoteArchivedPoolsLogs(options.publicDir ?? render.PUBLIC_DIR, ladderId);
+          }
+        }
         log(`Retired ${slug} version ${version} on ${ladderId}`);
         return;
       }

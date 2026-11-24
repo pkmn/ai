@@ -187,9 +187,11 @@ function resolvePayloadSideTelemetry(m: CompletedMatchPayload, side: 'p1' | 'p2'
   const g2Tp = side === 'p1' ? m.p1Game2TeamPreviewMillis : m.p2Game2TeamPreviewMillis;
   const g1Turn = side === 'p1' ? m.p1Game1MeanTurnMillis : m.p2Game1MeanTurnMillis;
   const g2Turn = side === 'p1' ? m.p1Game2MeanTurnMillis : m.p2Game2MeanTurnMillis;
-  const fallbackCpu = side === 'p1' ? m.p1CpuCores : m.p2CpuCores;
-  const g1Cpu = (side === 'p1' ? m.p1Game1CpuCores : m.p2Game1CpuCores) ?? fallbackCpu;
-  const g2Cpu = (side === 'p1' ? m.p1Game2CpuCores : m.p2Game2CpuCores) ?? fallbackCpu;
+  const positiveCpu = (v?: number) =>
+    (v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined);
+  const fallbackCpu = positiveCpu(side === 'p1' ? m.p1CpuCores : m.p2CpuCores);
+  const g1Cpu = positiveCpu(side === 'p1' ? m.p1Game1CpuCores : m.p2Game1CpuCores) ?? fallbackCpu;
+  const g2Cpu = positiveCpu(side === 'p1' ? m.p1Game2CpuCores : m.p2Game2CpuCores) ?? fallbackCpu;
   return {
     g1: {
       ram: g1Ram,
@@ -541,19 +543,21 @@ export function recordCompletedMatch(
 }
 
 function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
+  const readRawCpu = (side: 'p1' | 'p2', game: 1 | 2): number | undefined => {
+    const v = (r[`${side}_game${game}_cpu_cores`] as number | null) ?? undefined;
+    return v !== undefined && v > 0 ? v : undefined;
+  };
   const readGameSide = (side: 'p1' | 'p2', game: 1 | 2) => {
     const prefix = `${side}_game${game}`;
     const teamPreviewMillis = (r[`${prefix}_team_preview_millis`] as number | null) ?? undefined;
-    const cpuCores = (r[`${prefix}_cpu_cores`] as number | null) ?? undefined;
+    const cpuCores = readRawCpu(side, game);
     return {
       initMillis: r[`${prefix}_init_millis`] as number,
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       meanTurnMillis: r[`${prefix}_mean_turn_millis`] as number,
       bankSeconds: r[`${prefix}_bank_seconds`] as number,
       peakRam: r[`${prefix}_peak_ram`] as number,
-      ...(cpuCores !== undefined && cpuCores > 0
-        ? {cpuCores: Math.round(cpuCores * 10) / 10}
-        : {}),
+      ...(cpuCores !== undefined ? {cpuCores: Math.round(cpuCores * 10) / 10} : {}),
     };
   };
   const g1P1 = readGameSide('p1', 1);
@@ -562,8 +566,8 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
   const g2P2 = readGameSide('p2', 2);
   const p1TeamPreviewMillis = meanOptional(g1P1.teamPreviewMillis, g2P1.teamPreviewMillis);
   const p2TeamPreviewMillis = meanOptional(g1P2.teamPreviewMillis, g2P2.teamPreviewMillis);
-  const p1CpuCores = meanOptional(g1P1.cpuCores, g2P1.cpuCores);
-  const p2CpuCores = meanOptional(g1P2.cpuCores, g2P2.cpuCores);
+  const p1CpuCores = meanOptional(readRawCpu('p1', 1), readRawCpu('p1', 2));
+  const p2CpuCores = meanOptional(readRawCpu('p2', 1), readRawCpu('p2', 2));
   const p1TeamLabel = (r.p1_team_label as string | null) ?? undefined;
   const p2TeamLabel = (r.p2_team_label as string | null) ?? undefined;
   return {

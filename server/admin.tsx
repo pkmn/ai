@@ -9,7 +9,7 @@ import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/bui
 import * as util from '../static/util';
 
 import * as account from './account';
-import type * as arena from './arena';
+import * as arena from './arena';
 import {Auth, isAdmin, isCrossSiteRequest} from './auth';
 import {buildAiPanelClientJs} from './render';
 import * as system from './system';
@@ -19,6 +19,7 @@ export interface Options {
   db: db.Database;
   auth: Auth;
   arena?: arena.Handle;
+  publicDir?: string;
   vpsMonitor?: system.VpsHostMonitor;
   getVpsSystem?: (now: number) => system.VpsSystemInfo;
   now?: () => number;
@@ -2593,7 +2594,17 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const now = getNow();
     try {
+      const activePoolsIds = db
+        .getLadders()
+        .filter(l => l.team === 'pools' && l.status !== 'archived')
+        .map(l => l.id);
       const result = db.quarantineVersion(slug, version, reason, now);
+      const pubDir = options.publicDir ?? arena.PUBLIC_DIR;
+      for (const id of activePoolsIds) {
+        if (db.getLadder(id)?.status === 'archived') {
+          arena.promoteArchivedPoolsLogs(pubDir, id);
+        }
+      }
       const safe = {...result.version};
       delete safe.authTokenEncoding;
       sendJson(res, 200, {ok: true, version: safe});
@@ -2630,7 +2641,14 @@ export function register(app: polka.Polka, options: Options): Handle {
     const version = decodeParam(req.params.version);
     const now = getNow();
     try {
+      const before = db.getLadder(ladderId);
       db.retireLadderEntry(ladderId, slug, version, now);
+      if (before?.team === 'pools' && before.status !== 'archived') {
+        const after = db.getLadder(ladderId);
+        if (after?.status === 'archived') {
+          arena.promoteArchivedPoolsLogs(options.publicDir ?? arena.PUBLIC_DIR, ladderId);
+        }
+      }
       sendJson(res, 200, {ok: true});
     } catch (err: any) {
       const status = typeof err?.status === 'number'

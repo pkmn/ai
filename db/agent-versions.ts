@@ -1469,7 +1469,8 @@ export function unquarantineVersion(
               retired_at = COALESCE(retired_at, ?),
               crashes = 0,
               timeouts = 0,
-              ooms = 0
+              ooms = 0,
+              invalid_choices = 0
           WHERE ladder_id = ? AND version_id = ? AND role = 'quarantined'
         `).run(now, ladderId, ver.id);
         continue;
@@ -1506,7 +1507,8 @@ export function unquarantineVersion(
           retired_at = excluded.retired_at,
           crashes = 0,
           timeouts = 0,
-          ooms = 0
+          ooms = 0,
+          invalid_choices = 0
       `).run(ladderId, ver.id, nextRole, now, retiredAt);
 
       ensureAgentLadderStats(db, ladderId, ver.agentId);
