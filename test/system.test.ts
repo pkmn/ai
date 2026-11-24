@@ -416,4 +416,33 @@ describe('system telemetry parsers & TrafficTracker', () => {
       db.close();
     }
   });
+
+  test('TrafficTracker excludes diagnostic SSE streams from latency metrics', async () => {
+    const tracker = new system.TrafficTracker(() => 1_760_000_000);
+    const app = polka();
+    app.use(tracker.middleware());
+    app.get('/api/account/diagnostic/stream', (_req, res) => {
+      res.writeHead(200, {'Content-Type': 'text/event-stream'});
+      res.end(': ok\n\n');
+    });
+    app.get('/auth/discord/validate', (_req, res) => {
+      res.writeHead(204);
+      res.end();
+    });
+    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const addr = srv.address() as {port: number};
+    try {
+      await fetch(`http://127.0.0.1:${addr.port}/api/account/diagnostic/stream`);
+      await fetch(`http://127.0.0.1:${addr.port}/auth/discord/validate`);
+      const snap = tracker.snapshot({battles: 0, tournaments: 0, admin: 0}, 1_760_000_000);
+      expect(snap.requests1m).toBe(1);
+      expect(snap.meanLatencyMillis).toBeUndefined();
+      expect(snap.p95LatencyMillis).toBeUndefined();
+      expect(snap.activeVisitors5m).toBe(0);
+    } finally {
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+    }
+  });
 });

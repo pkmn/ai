@@ -2121,10 +2121,14 @@ export function register(app: polka.Polka, options: Options) {
     }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'private, no-cache, no-transform',
+      'Cache-Control': 'private, no-store, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     res.write(`event: idle\ndata: ${JSON.stringify({agentId: session.agent.id})}\n\n`);
     res.end();
   });

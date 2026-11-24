@@ -1982,5 +1982,15 @@ describe('account routes', () => {
         });
         expect(dupActivated.status).toBe(409);
       });
+
+    test('HEAD /api/account/diagnostic/stream closes with private no-store', async () => {
+      const res = await realFetch(`${baseUrl}/api/account/diagnostic/stream`, {
+        method: 'HEAD',
+        headers: {Cookie: cookieFor('pre')},
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/event-stream');
+      expect(res.headers.get('cache-control')).toBe('private, no-store, no-transform');
+    });
   });
 });

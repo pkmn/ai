@@ -1591,10 +1591,13 @@ function sendJson(res: http.ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-function openSse(res: http.ServerResponse) {
+function openSse(res: http.ServerResponse, privateNoStore = false) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader(
+    'Cache-Control',
+    privateNoStore ? 'private, no-store, no-transform' : 'no-cache, no-transform'
+  );
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
@@ -1988,18 +1991,15 @@ export function register(app: polka.Polka, options: Options): Handle {
     req: http.IncomingMessage,
     res: http.ServerResponse
   ) => {
-    openSse(res);
+    openSse(res, true);
+    if (req.method === 'HEAD') {
+      res.end();
+      return;
+    }
     let clients = diagnosticStreamClients.get(agentId);
     if (!clients) {
       clients = new Set();
       diagnosticStreamClients.set(agentId, clients);
-    }
-    clients.add(res);
-    const active = getLiveDiagnostic(agentId);
-    if (active) {
-      sendSse(res, 'diagnostic', active);
-    } else {
-      sendSse(res, 'idle', {agentId});
     }
     const cleanup = () => {
       const set = diagnosticStreamClients.get(agentId);
@@ -2009,6 +2009,13 @@ export function register(app: polka.Polka, options: Options): Handle {
     };
     req.on('close', cleanup);
     res.on('close', cleanup);
+    clients.add(res);
+    const active = getLiveDiagnostic(agentId);
+    if (active) {
+      sendSse(res, 'diagnostic', active);
+    } else {
+      sendSse(res, 'idle', {agentId});
+    }
   };
 
   const pushBattleEvent = (event: string, data: unknown) => {

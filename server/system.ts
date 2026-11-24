@@ -657,10 +657,11 @@ export class TrafficTracker {
         ? req.headers['x-real-ip'].trim()
         : undefined;
       const ip = realIp || req.socket?.remoteAddress || '';
-      const isStream = pathname === '/api/battles/stream' ||
-        pathname === '/api/admin/stream' ||
-        /^\/api\/tournaments\/[^/]+\/stream$/.test(pathname);
+      const isStream =
+        /^\/api\/(?:battles|admin|account\/diagnostic|tournaments\/[^/]+)\/stream\/?$/
+          .test(pathname);
       const isInternalArena = pathname.startsWith('/api/arena/') ||
+        pathname === '/auth/discord/validate' ||
         pathname === '/admin' ||
         pathname === '/admin.json' ||
         pathname.startsWith('/admin/') ||
