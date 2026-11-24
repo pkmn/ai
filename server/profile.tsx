@@ -551,11 +551,13 @@ function renderVersionsPane(opts: {
     .sort((a, b) => b.lcb - a.lcb)[0];
   const hasTeamPreview = entriesDesc.some(e => e.meanTeamPreviewMillis !== undefined);
   const hasCpu = entriesDesc.some(e => e.cpuMatches > 0 && e.meanCpuCores > 0);
-  const hasFaults = entriesDesc.some(e => (
-    e.crashes + e.timeouts + e.ooms + e.invalidChoices +
-    e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther +
-    e.unavailableChoices
-  ) > 0);
+  const colCount = 9 + (hasTeamPreview ? 1 : 0) + (hasCpu ? 1 : 0);
+
+  const renderCount = (n: number, isFault = true): util.Html => (
+    n > 0
+      ? (isFault ? <strong className='no'>{n}</strong> : <strong>{n}</strong>)
+      : <span className='muted'>0</span>
+  );
 
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
@@ -582,16 +584,11 @@ function renderVersionsPane(opts: {
                   CPU
                 </th>
               )}
-              {hasFaults && (
-                <th className='num' title='Cumulative game faults and protocol error breakdown'>
-                  Faults
-                </th>
-              )}
               <th className='num'>Submitted</th>
             </tr>
           </thead>
           <tbody>
-            {entriesDesc.map((e, idx) => {
+            {entriesDesc.flatMap((e, idx) => {
               const isPrimary = activePrimary?.versionId === e.versionId;
               const isRetired = e.role === 'retired';
               const eloRounded = Math.round(e.elo);
@@ -628,37 +625,18 @@ function renderVersionsPane(opts: {
               const totalFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
               const invalidTotal =
                 e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther;
-              const faultTipParts: string[] = [];
-              if (e.crashes > 0) faultTipParts.push(`${e.crashes} crash`);
-              if (e.timeouts > 0) faultTipParts.push(`${e.timeouts} timeout`);
-              if (e.ooms > 0) faultTipParts.push(`${e.ooms} OOM`);
-              if (e.invalidChoices > 0) {
-                faultTipParts.push(`${e.invalidChoices} invalid-choice forfeit`);
-              }
-              if (invalidTotal > 0) {
-                const cats: string[] = [];
-                if (e.invalidCantMove > 0) cats.push(`${e.invalidCantMove} can't move`);
-                if (e.invalidCantSwitch > 0) cats.push(`${e.invalidCantSwitch} can't switch`);
-                if (e.invalidTarget > 0) cats.push(`${e.invalidTarget} target`);
-                if (e.invalidOther > 0) cats.push(`${e.invalidOther} other`);
-                faultTipParts.push(`${invalidTotal} invalid (${cats.join(', ')})`);
-              }
-              if (e.unavailableChoices > 0) {
-                faultTipParts.push(`${e.unavailableChoices} unavailable (info)`);
-              }
-              const faultTip = faultTipParts.length > 0
-                ? faultTipParts.join(' · ')
-                : 'No recorded faults';
-              const classes: string[] = [];
+              const classes: string[] = ['battle-row'];
               if (isRetired) classes.push('secondary');
               if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
 
-              return (
+              return [
                 <tr
-                  className={classes.length > 0 ? classes.join(' ') : undefined}
+                  className={classes.join(' ')}
                   data-vrow={e.version}
+                  aria-expanded='false'
                 >
                   <td>
+                    <span className='battle-toggle' aria-hidden='true'>▸</span>
                     {isPrimary
                       ? <code><strong>{e.version}</strong></code>
                       : <code>{e.version}</code>}
@@ -678,16 +656,77 @@ function renderVersionsPane(opts: {
                   {hasCpu && (
                     <td className={e.cpuMatches > 0 ? 'num' : 'num muted'}>{cpuText}</td>
                   )}
-                  {hasFaults && (
-                    <td className='num' title={faultTip}>
-                      {totalFaults > 0
-                        ? <span className='no'>{totalFaults}</span>
-                        : <span className='muted'>0</span>}
-                    </td>
-                  )}
                   <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
-                </tr>
-              );
+                </tr>,
+                <tr className='battle-detail-row hide'>
+                  <td colSpan={colCount}>
+                    <div className='battle-detail'>
+                      <div className='battle-detail-grid'>
+                        <div className='battle-detail-card'>
+                          <div className='battle-detail-title'>
+                            <span>Game Faults</span>
+                            <span className='battle-detail-sub'>
+                              {renderCount(totalFaults)}
+                            </span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Crashes</span>
+                            <span>{renderCount(e.crashes)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Timeouts</span>
+                            <span>{renderCount(e.timeouts)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>OOMs</span>
+                            <span>{renderCount(e.ooms)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Invalid-choice forfeits</span>
+                            <span>{renderCount(e.invalidChoices)}</span>
+                          </div>
+                        </div>
+                        <div className='battle-detail-card'>
+                          <div className='battle-detail-title'>
+                            <span>Protocol Errors</span>
+                            <span className='battle-detail-sub'>
+                              {renderCount(invalidTotal)}
+                            </span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Can&apos;t move</span>
+                            <span>{renderCount(e.invalidCantMove)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Can&apos;t switch</span>
+                            <span>{renderCount(e.invalidCantSwitch)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Invalid target</span>
+                            <span>{renderCount(e.invalidTarget)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span className='muted'>Other invalid</span>
+                            <span>{renderCount(e.invalidOther)}</span>
+                          </div>
+                          <div className='battle-detail-line'>
+                            <span
+                              className='muted'
+                              title={
+                                'Informational [Unavailable choice] retries ' +
+                                '(not counted as faults)'
+                              }
+                            >
+                              Unavailable choices (info)
+                            </span>
+                            <span>{renderCount(e.unavailableChoices, false)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>,
+              ];
             })}
           </tbody>
         </table>
@@ -1276,14 +1315,21 @@ function buildProfileScript(
       if (!tbody || !pager) return;
       let page = 1;
       const apply = () => {
-        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const rows = Array.from(tbody.querySelectorAll('tr:not(.battle-detail-row)'));
         const total = rows.length;
         const totalPages = Math.max(1, Math.ceil(total / pageSize));
         if (page > totalPages) page = totalPages;
         if (page < 1) page = 1;
         const start = (page - 1) * pageSize;
         rows.forEach((row, idx) => {
-          row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+          const hidden = idx < start || idx >= start + pageSize;
+          row.classList.toggle('hide', hidden);
+          const detail = row.nextElementSibling;
+          if (hidden && detail && detail.classList.contains('battle-detail-row')) {
+            row.classList.remove('expanded');
+            row.setAttribute('aria-expanded', 'false');
+            detail.classList.add('hide');
+          }
         });
         updatePagerControls(pager, page, total);
       };
@@ -1637,6 +1683,19 @@ function buildProfileScript(
       void applyHash().then(applyInitParams);
     } else {
       applyInitParams();
+    }
+
+    if (versionsSec) {
+      versionsSec.addEventListener('click', e => {
+        if (e.target.closest('a,button,th')) return;
+        const row = e.target.closest('tr.battle-row[data-vrow]');
+        if (!row) return;
+        const detail = row.nextElementSibling;
+        if (!detail || !detail.classList.contains('battle-detail-row')) return;
+        const open = !detail.classList.toggle('hide');
+        row.classList.toggle('expanded', open);
+        row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
     }
 
     if (matchupsSec) {

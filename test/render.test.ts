@@ -760,7 +760,7 @@ describe('populated Arena leaderboard views', () => {
     expect(foulProfileHtml).not.toMatch(/Athena[\s\S]{0,80}Nemesis/);
     expect(foulProfileHtml).toContain('Page 1 of 6 (135 matches)');
     expect(foulProfileHtml).not.toContain('Page 1 of 2 (28 matches)');
-    expect((foulProfileHtml.match(/class="battle-row"/g) ?? [])).toHaveLength(25);
+    expect((foulProfileHtml.match(/class="battle-row" data-ver=/g) ?? [])).toHaveLength(25);
 
     const advPane = await h.getJson<{
       ladderKey: string;
@@ -940,11 +940,13 @@ describe('project de-registration', () => {
     try {
       const html = await h.getText('/projects/metamon/');
       expect(html).toContain('>CPU<');
-      expect(html).toContain('>Faults<');
+      expect(html).not.toContain('>Faults<');
       expect(html).toContain('6.4c');
-      expect(html).toContain('1 invalid-choice forfeit');
-      expect(html).toContain('3 invalid (2 can&#39;t move, 1 can&#39;t switch)');
-      expect(html).toContain('4 unavailable (info)');
+      expect(html).toContain('>Game Faults<');
+      expect(html).toContain('>Protocol Errors<');
+      expect(html).toContain('>Invalid-choice forfeits<');
+      expect(html).toContain('>Can&#39;t move<');
+      expect(html).toContain('>Unavailable choices (info)<');
 
       const json = await h.getJson<{
         ladders: Array<{

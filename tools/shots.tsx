@@ -497,6 +497,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/projects/0-error/',
       act: async page => {
         await page.selectOption('#ver-select', '1.2.0');
+        await page.click('#versions tbody tr.battle-row[data-vrow="1.2.0"] td:first-child');
       },
     },
     {
@@ -527,6 +528,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'projects',
       title: 'Profile (Provisional)',
       path: '/projects/pokerus/',
+      click: '#versions tbody tr.battle-row td:first-child',
     },
     {
       name: 'project-profile-qualified-empty',
