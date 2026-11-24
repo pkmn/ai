@@ -730,7 +730,10 @@ describe('glossary slash commands', () => {
   const {publicKey, privateKey} = crypto.generateKeyPairSync('ed25519');
   const verifyKey = publicKey.export({type: 'spki', format: 'der'}).subarray(12).toString('hex');
 
-  function signedInteraction(payload: object, timestamp = '1700000000') {
+  function signedInteraction(
+    payload: object,
+    timestamp = String(Math.floor(Date.now() / 1000))
+  ) {
     const body = JSON.stringify(payload);
     const sig = crypto
       .sign(undefined, Buffer.from(`${timestamp}${body}`), privateKey)
@@ -2296,13 +2299,14 @@ describe('live match watches (/watch)', () => {
   test('autocompletes agents (excluding selected counterpart) and active events', () => {
     const db = seedWatchDb();
     try {
+      const autoCtx: discord.InteractionContext = {db, nowSeconds: () => 1_700_000_000};
       const agentAuto = signedInteraction({
         type: 4,
         data: {name: 'watch', options: [{name: 'agent', value: '', focused: true}]},
       });
-      const resA = discord.handleInteraction(agentAuto.body, agentAuto.headers, verifyKey, {}, {
-        db,
-      });
+      const resA = discord.handleInteraction(
+        agentAuto.body, agentAuto.headers, verifyKey, {}, autoCtx
+      );
       expect(resA.status).toBe(200);
       const parsedA = JSON.parse(resA.body!) as {
         type: number;
@@ -2324,7 +2328,7 @@ describe('live match watches (/watch)', () => {
           ],
         },
       });
-      const resO = discord.handleInteraction(oppAuto.body, oppAuto.headers, verifyKey, {}, {db});
+      const resO = discord.handleInteraction(oppAuto.body, oppAuto.headers, verifyKey, {}, autoCtx);
       const parsedO = JSON.parse(resO.body!) as {
         data: {choices: Array<{name: string; value: string}>};
       };
@@ -2336,7 +2340,7 @@ describe('live match watches (/watch)', () => {
         type: 4,
         data: {name: 'watch', options: [{name: 'event', value: '', focused: true}]},
       });
-      const resE = discord.handleInteraction(evAuto.body, evAuto.headers, verifyKey, {}, {db});
+      const resE = discord.handleInteraction(evAuto.body, evAuto.headers, verifyKey, {}, autoCtx);
       const parsedE = JSON.parse(resE.body!) as {
         data: {choices: Array<{name: string; value: string}>};
       };
@@ -2688,6 +2692,96 @@ describe('live match watches (/watch)', () => {
       expect(db.listDiscordWatchesForUser('u2')).toEqual([]);
     } finally {
       console.warn = warnSpy;
+      db.close();
+    }
+  });
+
+  test('rejects replayed interaction timestamps outside the 5-minute window', () => {
+    const db = seedWatchDb();
+    try {
+      const stale = signedInteraction({type: 1}, '1700000000');
+      expect(
+        discord.handleInteraction(stale.body, stale.headers, verifyKey, {}, {
+          db,
+          nowSeconds: () => 1_700_000_301,
+        }).status
+      ).toBe(401);
+      expect(
+        discord.handleInteraction(stale.body, stale.headers, verifyKey, {}, {
+          db,
+          nowSeconds: () => 1_699_999_699,
+        }).status
+      ).toBe(401);
+      expect(
+        discord.handleInteraction(stale.body, stale.headers, verifyKey, {}, {
+          db,
+          nowSeconds: () => 1_700_000_300,
+        }).status
+      ).toBe(200);
+      const nonNumeric = signedInteraction({type: 1}, 'not-a-timestamp');
+      expect(
+        discord.handleInteraction(nonNumeric.body, nonNumeric.headers, verifyKey, {}, {
+          db,
+          nowSeconds: () => 1_700_000_000,
+        }).status
+      ).toBe(401);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('rejects watch:arm button clicks from departed guild members', () => {
+    const db = seedWatchDb();
+    try {
+      db.syncDiscordMembers([{id: 'u1', username: 'alice'}], 1_700_000_000);
+      const fp = db.getAgentBySlug('foul-play')!;
+      const btn = signedInteraction({
+        type: 3,
+        user: {id: 'ex-member', username: 'mallory'},
+        data: {custom_id: discord.formatWatchArmCustomId({agentId: fp.id}), component_type: 2},
+      }, '1700000000');
+      const res = discord.handleInteraction(btn.body, btn.headers, verifyKey, {}, {
+        db,
+        nowSeconds: () => 1_700_000_010,
+      });
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body!).data.content).toContain('only available to members');
+      expect(db.listDiscordWatchesForUser('ex-member')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('aborts remaining watch DM batch on long 429 without premature retry', async () => {
+    const db = seedWatchDb();
+    let fetchCalls = 0;
+    globalThis.fetch = (() => {
+      fetchCalls++;
+      return Promise.resolve({
+        status: 429,
+        ok: false,
+        json: () => Promise.resolve({retry_after: 120}),
+      });
+    }) as unknown as typeof fetch;
+    const errSpy = console.error;
+    console.error = () => {};
+    try {
+      const fp = db.getAgentBySlug('foul-play')!;
+      db.addDiscordWatch({discordId: 'u1', agentId: fp.id, now: 1_700_000_000});
+      db.addDiscordWatch({discordId: 'u2', agentId: fp.id, now: 1_700_000_001});
+      db.addDiscordWatch({discordId: 'u3', agentId: fp.id, now: 1_700_000_002});
+      const sent = await discord.notifyLiveMatch(db, 'bot-tok', {
+        matchId: 'm-429',
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        p1: {slug: 'foul-play', name: 'Foul Play', version: '1.2'},
+        p2: {slug: '0-error', name: '0-Error', version: '2.0'},
+      });
+      expect(sent).toBe(0);
+      expect(fetchCalls).toBe(1);
+    } finally {
+      console.error = errSpy;
+      globalThis.fetch = realFetch;
       db.close();
     }
   });

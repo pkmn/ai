@@ -162,11 +162,11 @@ export const EXT_ICON =
   '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>' +
   '</svg>';
 
-export function readBody(
+export function readBodyBuffer(
   req: http.IncomingMessage,
   maxBytes: number,
   limitMessage = 'Payload too large.'
-): Promise<string> {
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -185,7 +185,7 @@ export function readBody(
     req.on('end', () => {
       if (settled) return;
       settled = true;
-      resolve(Buffer.concat(chunks).toString('utf8'));
+      resolve(Buffer.concat(chunks));
     });
     req.on('error', err => {
       if (settled) return;
@@ -193,6 +193,14 @@ export function readBody(
       reject(err);
     });
   });
+}
+
+export async function readBody(
+  req: http.IncomingMessage,
+  maxBytes: number,
+  limitMessage = 'Payload too large.'
+): Promise<string> {
+  return (await readBodyBuffer(req, maxBytes, limitMessage)).toString('utf8');
 }
 
 // RFC 9110 §13.1.2 weak ETag comparison for `If-None-Match`. Nginx weakens strong ETags to

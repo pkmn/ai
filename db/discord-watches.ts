@@ -122,6 +122,32 @@ function canonicalizeAgents(
     : {agentId: opponentId, opponentId: agentId};
 }
 
+const STALE_WATCH_WHERE = `
+  created_at < ?
+  OR (
+    ladder_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM ladders l
+      WHERE l.id = discord_watches.ladder_id AND l.status = 'archived'
+    )
+  )
+  OR (
+    tournament_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM tournaments t
+      WHERE t.id = discord_watches.tournament_id AND t.status = 'completed'
+    )
+  )
+  OR EXISTS (
+    SELECT 1 FROM agents a
+    WHERE a.id = discord_watches.agent_id AND a.status = 'disabled'
+  )
+  OR (
+    opponent_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM agents o
+      WHERE o.id = discord_watches.opponent_id AND o.status = 'disabled'
+    )
+  )
+`;
+
 function getWatchViewById(db: DatabaseSync, id: number): View | undefined {
   const raw = db.prepare(`${SELECT_WATCH_VIEW} WHERE w.id = ?`)
     .get(id) as unknown as RawWatchViewRow | undefined;
@@ -160,11 +186,20 @@ export function addWatch(
       return {status: 'exists', watch: mapWatchView(existing)};
     }
 
-    const {count} = db.prepare(
+    let {count} = db.prepare(
       'SELECT COUNT(*) AS count FROM discord_watches WHERE discord_id = ?'
     ).get(input.discordId) as {count: number};
     if (count >= MAX_WATCHES_PER_USER) {
-      return {status: 'limit', limit: MAX_WATCHES_PER_USER};
+      db.prepare(`
+        DELETE FROM discord_watches
+        WHERE discord_id = ? AND (${STALE_WATCH_WHERE})
+      `).run(input.discordId, now - WATCH_TTL_SECONDS);
+      ({count} = db.prepare(
+        'SELECT COUNT(*) AS count FROM discord_watches WHERE discord_id = ?'
+      ).get(input.discordId) as {count: number});
+      if (count >= MAX_WATCHES_PER_USER) {
+        return {status: 'limit', limit: MAX_WATCHES_PER_USER};
+      }
     }
 
     const res = db.prepare(`
@@ -280,17 +315,10 @@ export function pruneExpiredWatches(
   const cutoff = now - WATCH_TTL_SECONDS;
   const res = db.prepare(`
     DELETE FROM discord_watches
-    WHERE created_at < ?
+    WHERE ${STALE_WATCH_WHERE}
       OR (
-        ladder_id IS NOT NULL AND EXISTS (
-          SELECT 1 FROM ladders l
-          WHERE l.id = discord_watches.ladder_id AND l.status = 'archived'
-        )
-      )
-      OR (
-        tournament_id IS NOT NULL AND EXISTS (
-          SELECT 1 FROM tournaments t
-          WHERE t.id = discord_watches.tournament_id AND t.status = 'completed'
+        EXISTS (SELECT 1 FROM discord_members LIMIT 1) AND NOT EXISTS (
+          SELECT 1 FROM discord_members dm WHERE dm.id = discord_watches.discord_id
         )
       )
   `).run(cutoff);

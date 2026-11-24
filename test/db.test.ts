@@ -4582,4 +4582,59 @@ describe('discord watches', () => {
       db.close();
     }
   });
+
+  test('pruneExpiredDiscordWatches removes watches for disabled agents or departed members', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      db.syncDiscordMembers([{id: 'u1', username: 'alice'}], 1_700_000_000);
+      db.addDiscordWatch({discordId: 'u1', agentId: alpha.id, now: 1_700_000_000});
+      db.addDiscordWatch({discordId: 'u1', agentId: beta.id, now: 1_700_000_001});
+      db.addDiscordWatch({discordId: 'u-departed', agentId: alpha.id, now: 1_700_000_002});
+
+      db.db.prepare('UPDATE agents SET status = ? WHERE id = ?').run('disabled', beta.id);
+      expect(db.pruneExpiredDiscordWatches(1_700_000_020)).toBe(2);
+      expect(db.listDiscordWatchesForUser('u1').map(w => w.agentSlug)).toEqual(['alpha']);
+      expect(db.listDiscordWatchesForUser('u-departed')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('addDiscordWatch prunes stale user watches before enforcing per-user limit', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      const gamma = db.getAgentBySlug('gamma')!;
+      const delta = db.getAgentBySlug('delta')!;
+      db.addDiscordWatch({discordId: 'u1', agentId: alpha.id, now: 1_700_000_000});
+      db.addDiscordWatch({discordId: 'u1', agentId: beta.id, now: 1_700_000_001});
+      db.addDiscordWatch({discordId: 'u1', agentId: gamma.id, now: 1_700_000_002});
+      db.addDiscordWatch({discordId: 'u1', agentId: delta.id, now: 1_700_000_003});
+      db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        ladderId: 'gen1ou20261109',
+        now: 1_700_000_004,
+      });
+      // Archive the ladder for the 5th watch; adding a new watch should succeed after inline prune.
+      db.setLadderStatus('gen1ou20261109', 'archived', 1_700_000_010);
+      const res = db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: beta.id,
+        ladderId: 'gen9randombattle20261109',
+        now: 1_700_000_020,
+      });
+      expect(res.status).toBe('added');
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(5);
+    } finally {
+      db.close();
+    }
+  });
 });

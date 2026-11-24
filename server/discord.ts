@@ -297,6 +297,9 @@ export function findMember(members: GuildMember[], owner: Owner): GuildMember | 
 }
 
 const MAX_DISCORD_RETRIES = 3;
+const MAX_RETRY_AFTER_SECONDS = 30;
+const MAX_INTERACTION_SKEW_SECONDS = 300;
+const WATCH_DM_MAX_AGE_MILLIS = 120_000;
 
 async function discordRequest(
   token: string,
@@ -312,14 +315,26 @@ async function discordRequest(
     },
     signal: init?.signal ?? AbortSignal.timeout(15_000),
   });
-  if (res.status === 429 && attempt < MAX_DISCORD_RETRIES) {
+  if (res.status === 429) {
     const body = await res.json().catch(() => ({})) as {retry_after?: number};
-    const waitMillis = Math.min(
-      30_000,
-      Math.max(100, Math.ceil((body.retry_after ?? 1) * 1000))
+    const retryAfterSeconds =
+      typeof body.retry_after === 'number' && Number.isFinite(body.retry_after)
+        ? body.retry_after
+        : 1;
+    // Never clamp long retry_after windows down to a shorter sleep — retrying before Discord's
+    // bucket resets counts toward the 10k/10m invalid-request ban. Fail fast above 30s instead.
+    if (attempt < MAX_DISCORD_RETRIES && retryAfterSeconds <= MAX_RETRY_AFTER_SECONDS) {
+      const waitMillis = Math.max(100, Math.ceil(retryAfterSeconds * 1000));
+      await new Promise(resolve => setTimeout(resolve, waitMillis));
+      return discordRequest(token, endpoint, init, attempt + 1);
+    }
+    const method = init?.method ?? 'GET';
+    throw Object.assign(
+      new Error(
+        `Discord API ${method} ${endpoint} rate-limited (429, retry_after=${retryAfterSeconds}s)`
+      ),
+      {status: 429, retryAfterSeconds}
     );
-    await new Promise(resolve => setTimeout(resolve, waitMillis));
-    return discordRequest(token, endpoint, init, attempt + 1);
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -2276,7 +2291,17 @@ export function autocompleteWatchAgents(
   exclude?: string
 ): Array<{name: string; value: string}> {
   const agents = database.listWatchableAgents();
-  const excludedAgent = exclude?.trim() ? resolveWatchAgent(database, exclude) : undefined;
+  const exTrimmed = exclude?.trim();
+  let excludedAgentId: number | undefined;
+  if (exTrimmed) {
+    const exLower = exTrimmed.toLowerCase();
+    const exId = util.toID(exTrimmed);
+    excludedAgentId = (
+      agents.find(a => a.slug === exLower) ??
+      agents.find(a => a.name.toLowerCase() === exLower) ??
+      (exId ? agents.find(a => util.toID(a.name) === exId) : undefined)
+    )?.id;
+  }
   const q = query.trim();
   const lower = q.toLowerCase();
   const id = util.toID(q);
@@ -2284,7 +2309,7 @@ export function autocompleteWatchAgents(
   const choices: Array<{name: string; value: string}> = [];
   const seen = new Set<string>();
   const add = (a: db.WatchableAgent) => {
-    if (excludedAgent?.id === a.id) return;
+    if (excludedAgentId === a.id) return;
     if (seen.has(a.slug) || choices.length >= 25) return;
     seen.add(a.slug);
     const label = a.active ? a.name : `${a.name} (inactive)`;
@@ -2410,7 +2435,10 @@ function resolveWatchEvent(
   if (trimmed.startsWith('ladder:')) {
     const id = trimmed.slice('ladder:'.length);
     const ladder = database.getLadder(id);
-    if (!ladder) return {error: `Unknown ladder: \`${id.slice(0, 60)}\`.`};
+    if (!ladder) {
+      const safe = id.replace(/[`\r\n]+/g, ' ').slice(0, 60);
+      return {error: `Unknown ladder: \`${safe}\`.`};
+    }
     if (ladder.status === 'archived') {
       return {error: `Ladder **${ladder.name}** is archived and no longer runs live matches.`};
     }
@@ -2419,7 +2447,10 @@ function resolveWatchEvent(
   if (trimmed.startsWith('tournament:')) {
     const id = trimmed.slice('tournament:'.length);
     const tournament = database.getTournament(id);
-    if (!tournament) return {error: `Unknown tournament: \`${id.slice(0, 60)}\`.`};
+    if (!tournament) {
+      const safe = id.replace(/[`\r\n]+/g, ' ').slice(0, 60);
+      return {error: `Unknown tournament: \`${safe}\`.`};
+    }
     if (tournament.status === 'completed') {
       return {error: `Tournament **${tournament.name}** has already completed.`};
     }
@@ -2492,7 +2523,8 @@ async function dispatchWatchDms(
   token: string,
   consumed: db.DiscordWatchView[],
   message: {content: string; url: string},
-  state: Map<string, string | undefined>
+  state: Map<string, string | undefined>,
+  deadlineMillis = Date.now() + WATCH_DM_MAX_AGE_MILLIS
 ): Promise<number> {
   if (consumed.length === 0) return 0;
   // Dedupe per recipient so a user watching both sides (or both broad + matchup) receives one DM,
@@ -2507,6 +2539,7 @@ async function dispatchWatchDms(
 
   let sent = 0;
   for (const [discordId, watch] of bestByUser) {
+    if (Date.now() > deadlineMillis) break;
     const components: ActionRowComponent[] = [
       {
         type: 1,
@@ -2528,6 +2561,10 @@ async function dispatchWatchDms(
       if (outcome === 'sent') sent++;
     } catch (err) {
       console.error(`Error sending live watch DM to ${discordId}:`, err);
+      if ((err as {status?: number})?.status === 429) {
+        // Stop hammering Discord for the remaining recipients after a persistent 429.
+        break;
+      }
     }
   }
   return sent;
@@ -2537,7 +2574,8 @@ export async function notifyLiveMatch(
   database: db.Database,
   token: string,
   match: LiveMatchSnapshot,
-  state = new Map<string, string | undefined>()
+  state = new Map<string, string | undefined>(),
+  deadlineMillis?: number
 ): Promise<number> {
   const p1Agent = database.getAgentBySlug(match.p1.slug);
   const p2Agent = database.getAgentBySlug(match.p2.slug);
@@ -2548,14 +2586,21 @@ export async function notifyLiveMatch(
     ladderId: match.ladderId,
   });
   if (consumed.length === 0) return 0;
-  return dispatchWatchDms(token, consumed, formatLiveMatchWatchDm(database, match), state);
+  return dispatchWatchDms(
+    token,
+    consumed,
+    formatLiveMatchWatchDm(database, match),
+    state,
+    deadlineMillis
+  );
 }
 
 export async function notifyLiveTournamentGame(
   database: db.Database,
   token: string,
   game: LiveTournamentGameSnapshot,
-  state = new Map<string, string | undefined>()
+  state = new Map<string, string | undefined>(),
+  deadlineMillis?: number
 ): Promise<number> {
   const p1Agent = database.getAgentBySlug(game.p1.slug);
   const p2Agent = database.getAgentBySlug(game.p2.slug);
@@ -2566,7 +2611,13 @@ export async function notifyLiveTournamentGame(
     tournamentId: game.tournamentId,
   });
   if (consumed.length === 0) return 0;
-  return dispatchWatchDms(token, consumed, formatLiveTournamentWatchDm(database, game), state);
+  return dispatchWatchDms(
+    token,
+    consumed,
+    formatLiveTournamentWatchDm(database, game),
+    state,
+    deadlineMillis
+  );
 }
 
 function getInteractionUserId(interaction: Interaction): string | undefined {
@@ -2821,6 +2872,11 @@ function handleWatchComponent(
 
   const arm = parseWatchArmCustomId(customId);
   if (arm) {
+    if (database.countDiscordMembers() > 0 && !database.isDiscordMember(userId)) {
+      return ephemeralReply(
+        'Match watch notifications are only available to members of the pkmn.ai Discord server.'
+      );
+    }
     const agent = database.getAgentById(arm.agentId);
     if (!agent || agent.status === 'disabled') {
       return ephemeralReply('That agent is no longer active.');
@@ -2853,12 +2909,21 @@ function handleWatchComponent(
 }
 
 export function verifySignature(
-  body: string,
+  body: string | Buffer,
   signature: string | undefined,
   timestamp: string | undefined,
-  verifyKey: string
+  verifyKey: string,
+  nowSeconds = Math.floor(Date.now() / 1000)
 ): boolean {
   if (!signature || !timestamp || !/^[0-9a-f]{128}$/i.test(signature)) return false;
+  if (!/^\d+$/.test(timestamp)) return false;
+  const tsSeconds = Number(timestamp);
+  if (
+    !Number.isSafeInteger(tsSeconds) ||
+    Math.abs(nowSeconds - tsSeconds) > MAX_INTERACTION_SKEW_SECONDS
+  ) {
+    return false;
+  }
   if (!/^[0-9a-f]{64}$/i.test(verifyKey)) return false;
   try {
     const key = crypto.createPublicKey({
@@ -2866,9 +2931,10 @@ export function verifySignature(
       format: 'der',
       type: 'spki',
     });
+    const bodyBuf = Buffer.isBuffer(body) ? body : Buffer.from(body, 'utf8');
     return crypto.verify(
       null,
-      Buffer.from(`${timestamp}${body}`),
+      Buffer.concat([Buffer.from(timestamp, 'utf8'), bodyBuf]),
       key,
       Buffer.from(signature, 'hex')
     );
@@ -2878,7 +2944,7 @@ export function verifySignature(
 }
 
 export function handleInteraction(
-  body: string,
+  body: string | Buffer,
   reqHeaders: http.IncomingHttpHeaders,
   verifyKey: string | undefined,
   glossary: Record<string, string>,
@@ -2890,14 +2956,15 @@ export function handleInteraction(
     !verifyKey ||
     typeof sig !== 'string' ||
     typeof ts !== 'string' ||
-    !verifySignature(body, sig, ts, verifyKey)
+    !verifySignature(body, sig, ts, verifyKey, ctx.nowSeconds?.())
   ) {
     return {status: 401, headers: {}};
   }
 
   let interaction: Interaction;
   try {
-    interaction = JSON.parse(body) as Interaction;
+    const text = Buffer.isBuffer(body) ? body.toString('utf8') : body;
+    interaction = JSON.parse(text) as Interaction;
   } catch {
     return {status: 400, headers: {}};
   }
@@ -3066,6 +3133,7 @@ export interface Handle {
 export interface SyncOnceOptions {
   state?: Map<string, string | undefined>;
   onVerifyKey?: (key: string) => void;
+  onCommandsSynced?: () => void;
   config?: Config;
 }
 
@@ -3075,7 +3143,7 @@ export async function syncOnce(
   vgcToken = '',
   opts: SyncOnceOptions = {}
 ) {
-  const {state = new Map<string, string | undefined>(), onVerifyKey} = opts;
+  const {state = new Map<string, string | undefined>(), onVerifyKey, onCommandsSynced} = opts;
   const config = opts.config ?? loadConfig();
 
   try {
@@ -3087,6 +3155,8 @@ export async function syncOnce(
       return;
     }
     console.error('Error syncing commands:', err);
+  } finally {
+    onCommandsSynced?.();
   }
 
   let members: GuildMember[] | undefined;
@@ -3241,6 +3311,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         verifyKey = k;
         resolveVerifyKey();
       },
+      onCommandsSynced: () => {
+        resolveVerifyKey();
+      },
     })
       .catch(err => {
         console.error('Error in initial Discord sync:', err);
@@ -3251,10 +3324,18 @@ export function register(app: polka.Polka, options: Options): Handle {
       });
   }
 
+  let watchDmQueue: Promise<unknown> = Promise.resolve();
+  const enqueueWatchDm = (fn: (deadlineMillis: number) => Promise<number>): Promise<number> => {
+    const deadlineMillis = Date.now() + WATCH_DM_MAX_AGE_MILLIS;
+    const next = watchDmQueue.then(() => fn(deadlineMillis), () => fn(deadlineMillis));
+    watchDmQueue = next.catch(() => 0);
+    return next;
+  };
+
   app.post('/discord/interactions', async (req, res) => {
-    let rawBody: string;
+    let rawBody: Buffer;
     try {
-      rawBody = await util.readBody(req, MAX_INTERACTION_BYTES);
+      rawBody = await util.readBodyBuffer(req, MAX_INTERACTION_BYTES);
     } catch (err: unknown) {
       const status = (err as {status?: number})?.status === 413 ? 413 : 500;
       if (status === 500) console.error('Error reading interaction request:', err);
@@ -3301,11 +3382,15 @@ export function register(app: polka.Polka, options: Options): Handle {
     },
     notifyLiveMatch: async match => {
       if (stopped || !token) return 0;
-      return notifyLiveMatch(options.db, token, match, state);
+      return enqueueWatchDm(
+        deadlineMillis => notifyLiveMatch(options.db, token, match, state, deadlineMillis)
+      );
     },
     notifyLiveTournamentGame: async game => {
       if (stopped || !token) return 0;
-      return notifyLiveTournamentGame(options.db, token, game, state);
+      return enqueueWatchDm(
+        deadlineMillis => notifyLiveTournamentGame(options.db, token, game, state, deadlineMillis)
+      );
     },
   };
 }
