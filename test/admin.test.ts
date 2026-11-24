@@ -1,4 +1,8 @@
+import {execFileSync} from 'child_process';
+import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
+import * as path from 'path';
 
 import polka from 'polka';
 
@@ -7,6 +11,7 @@ import * as admin from '../server/admin';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as system from '../server/system';
+import * as wiki from '../server/wiki';
 import {runPkmnCli} from '../tools/pkmn';
 
 const AUTH_CFG: auth.Config = {
@@ -789,4 +794,116 @@ describe('/admin dashboard & API', () => {
           .toBe(403);
       }
     });
+});
+
+describe('/admin recent wiki edits', () => {
+  let tmpDir: string;
+  let db: Database;
+  let server: http.Server;
+  let baseUrl: string;
+  let adminHandle: admin.Handle;
+  let activeSha: string;
+  let deleteSha: string;
+
+  const cookieFor = (login: string) => {
+    const token = auth.signToken(
+      {github: {id: 1001, login}, exp: Math.floor(Date.now() / 1000) + 3600},
+      AUTH_CFG.sessionSecret
+    );
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-admin-wiki-test-'));
+    const wikiDir = path.join(tmpDir, 'wiki');
+    const projectsFile = path.join(tmpDir, 'projects.yml');
+    fs.mkdirSync(path.join(wikiDir, 'projects'), {recursive: true});
+    fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
+
+    const git = (...args: string[]) => execFileSync('git', args, {cwd: wikiDir, stdio: 'pipe'});
+    git('init');
+    git('config', 'user.email', 'test@pkmn.ai');
+    git('config', 'user.name', 'scheibo');
+
+    fs.writeFileSync(path.join(wikiDir, 'projects', '0_ERROR.dj'), '# 0 ERROR\n', 'utf8');
+    git('add', 'projects/0_ERROR.dj');
+    git('commit', '-m', 'Document 0 ERROR architecture');
+    activeSha = git('rev-parse', 'HEAD').toString('utf8').trim();
+
+    fs.writeFileSync(path.join(wikiDir, 'Draft.dj'), '# Draft\n', 'utf8');
+    git('add', 'Draft.dj');
+    git('commit', '-m', 'Create Draft');
+    fs.unlinkSync(path.join(wikiDir, 'Draft.dj'));
+    git('add', '-A');
+    git('commit', '-m', 'Remove Draft');
+    deleteSha = git('rev-parse', 'HEAD').toString('utf8').trim();
+
+    db = new Database(':memory:');
+    db.syncLadders(undefined, 1_760_000_000);
+    db.syncProjectsFromYaml(PROJECTS_YAML, undefined, 1_760_000_000);
+
+    const authHandler = new auth.Auth({config: AUTH_CFG, db});
+    const wikiInstance = new wiki.Wiki({wikiDir, projectsFile, auth: authHandler, db, push: false});
+    const app = polka();
+    adminHandle = admin.register(app, {
+      db,
+      auth: authHandler,
+      wiki: wikiInstance,
+      now: () => 1_760_000_000,
+    });
+    server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    baseUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
+  });
+
+  afterAll(async () => {
+    adminHandle.close();
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    db.close();
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('GET /admin.json exposes recent wiki edits from the wiki repo', async () => {
+    const res = await fetch(`${baseUrl}/admin.json`, {headers: {Cookie: cookieFor('scheibo')}});
+    expect(res.status).toBe(200);
+    const body = await res.json() as admin.AdminSnapshot;
+    expect(body.wikiEdits).toHaveLength(3);
+    expect(body.wikiEdits[0]).toMatchObject({
+      sha: deleteSha,
+      slug: 'Draft',
+      deleted: true,
+      subject: 'Remove Draft',
+      displayAuthor: 'pre',
+    });
+    expect(body.wikiEdits[2]).toMatchObject({
+      sha: activeSha,
+      slug: 'projects/0_ERROR',
+      title: '0 ERROR',
+      pageHref: '/wiki/projects/0_ERROR',
+      revisionHref: `/wiki/projects/0_ERROR/${activeSha}`,
+      diffHref: `/wiki/projects/0_ERROR/${activeSha}?diff=1`,
+    });
+  });
+
+  test('GET /admin/ renders recent wiki edits with revision diff links', async () => {
+    const res = await fetch(`${baseUrl}/admin`, {headers: {Cookie: cookieFor('scheibo')}});
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('href="#wiki" class="subtle">Wiki</a>');
+    expect(html).toContain('href="/wiki/projects/0_ERROR"');
+    expect(html).toContain(`href="/wiki/projects/0_ERROR/${activeSha}"`);
+    expect(html).toContain(`href="/wiki/projects/0_ERROR/${activeSha}?diff=1"`);
+    expect(html).toContain('Document 0 ERROR architecture');
+  });
+
+  test('GET /admin/ omits snapshot links for deleted wiki edits', async () => {
+    const res = await fetch(`${baseUrl}/admin`, {headers: {Cookie: cookieFor('scheibo')}});
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('href="/wiki/Draft/history"');
+    expect(html).toContain('(deleted)');
+    expect(html).not.toContain(`href="/wiki/Draft/${deleteSha}"`);
+    expect(html).toContain(`href="/wiki/Draft/${deleteSha}?diff=1"`);
+  });
 });

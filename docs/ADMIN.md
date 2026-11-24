@@ -101,8 +101,9 @@ whenever the Arena heartbeats — load, RAM/swap, internal & `/Volumes/Archive` 
 network health, traffic/SSE viewers, error rates, backups/GCS archive sync, and pending OS updates),
 runner health, smoke queue & staged counts, ladder readiness, linked Discord/Smogon standing, inline
 per-ladder qualification toggles, cooldowns, `/info` telemetry status dots, CPU/fault/protocol-error
-aggregates, and inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, plus
-direct actions (refund cooldown, discard a staged version, retire an active version on a ladder,
+aggregates, inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, recent
+`pkmn/wiki` git edits (linking to page, revision, and diff for moderation), plus direct actions
+(refund cooldown, discard a staged version, retire an active version on a ladder,
 quarantine/unquarantine a version).
 
 ```sh

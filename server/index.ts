@@ -312,6 +312,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     db,
     auth: wikiInstance.auth,
     arena: arenaHandle,
+    wiki: wikiInstance,
     publicDir,
     vpsMonitor,
   });

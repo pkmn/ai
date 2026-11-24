@@ -2288,6 +2288,7 @@ async function startFixture(): Promise<Fixture> {
     db,
     auth: wikiInstance.auth,
     arena: arenaHandle,
+    wiki: wikiInstance,
     getVpsSystem: () => mockVpsSystem,
     now: () => NOW_SECONDS,
   });

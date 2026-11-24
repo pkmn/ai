@@ -14,11 +14,13 @@ import {Auth, isAdmin, isCrossSiteRequest} from './auth';
 import {AI_PANEL_STYLE} from './render';
 import * as system from './system';
 import {formatTournamentName} from './tournaments';
+import * as wiki from './wiki';
 
 export interface Options {
   db: db.Database;
   auth: Auth;
   arena?: arena.Handle;
+  wiki?: wiki.Wiki;
   publicDir?: string;
   vpsMonitor?: system.VpsHostMonitor;
   getVpsSystem?: (now: number) => system.VpsSystemInfo;
@@ -95,6 +97,7 @@ export interface AdminSnapshot {
   };
   ladders: AdminLadderItem[];
   agents: AdminAgentItem[];
+  wikiEdits: wiki.RecentEdit[];
 }
 
 const MAX_ADMIN_BODY_BYTES = 16 * 1024;
@@ -1174,7 +1177,8 @@ export function buildAdminSnapshot(
   adminLogin: string,
   arenaHandle?: arena.Handle,
   now = Math.floor(Date.now() / 1000),
-  systemSnapshot?: AdminSystemSnapshot
+  systemSnapshot?: AdminSystemSnapshot,
+  wikiEdits: wiki.RecentEdit[] = []
 ): AdminSnapshot {
   const currentLadders = database.getCurrentLadders();
   const ladderSummaries = database.getLadderAdminSummaries(now);
@@ -1281,6 +1285,7 @@ export function buildAdminSnapshot(
     },
     ladders,
     agents,
+    wikiEdits,
   };
 }
 
@@ -1762,6 +1767,61 @@ function renderProjectDetailPanel(
   );
 }
 
+function renderWikiEditsSection(edits: wiki.RecentEdit[]): util.Child {
+  return (
+    <section id='wiki'>
+      <h3><a href='#wiki' className='subtle'>Wiki</a></h3>
+      {edits.length === 0 ? (
+        <p className='muted'>No wiki edits yet.</p>
+      ) : (
+        <div className='table-wrap'>
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Page</th>
+                <th>Revision</th>
+                <th>Author</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              {edits.map(edit => {
+                const ghUrl = `https://github.com/${encodeURIComponent(edit.author)}`;
+                const isProject = edit.slug.startsWith('projects/');
+                return (
+                  <tr>
+                    <td className='muted'>
+                      <util.Time epoch={edit.timestamp} format='date' />
+                    </td>
+                    <td>
+                      <a href={edit.deleted ? edit.historyHref : edit.pageHref} className='subtle'>
+                        {isProject && <span className='muted'>projects/</span>}
+                        {edit.title}
+                      </a>
+                      {edit.deleted && <span className='muted'> (deleted)</span>}
+                    </td>
+                    <td>
+                      {edit.deleted
+                        ? <code>{edit.shortSha}</code>
+                        : <code><a href={edit.revisionHref}>{edit.shortSha}</a></code>}{' '}
+                      (<a href={edit.diffHref}>diff</a>)
+                    </td>
+                    <td>
+                      <a href={ghUrl} className='subtle'>{edit.displayAuthor}</a>
+                    </td>
+                    <td className='wrap'>{edit.subject}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function renderAdminPage(opts: {
   snapshot: AdminSnapshot;
   allLadders: db.LadderRow[];
@@ -2014,6 +2074,8 @@ export function renderAdminPage(opts: {
         )}
       </section>
 
+      {renderWikiEditsSection(snapshot.wikiEdits)}
+
       <script>{ADMIN_SCRIPT}</script>
     </>
   );
@@ -2173,7 +2235,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     return requireAdmin(req, res, true);
   };
 
-  const handleGetAdmin = (
+  const handleGetAdmin = async (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     forceJson: boolean
@@ -2184,7 +2246,8 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const now = getNow();
     const sys = collectSystemSnapshot(now);
-    const snapshot = buildAdminSnapshot(db, login, arenaHandle, now, sys);
+    const wikiEdits = options.wiki ? await options.wiki.getRecentEdits() : [];
+    const snapshot = buildAdminSnapshot(db, login, arenaHandle, now, sys, wikiEdits);
     if (wantsJson) {
       sendJson(res, 200, {
         ...snapshot,

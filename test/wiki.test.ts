@@ -1558,3 +1558,89 @@ describe('wiki database standing checks', () => {
     expect(res.status).toBe(403);
   });
 });
+
+describe('wiki recent edits', () => {
+  let tmpDir: string;
+  let wikiDir: string;
+  let wikiInstance: wiki.Wiki;
+
+  const git = (...args: string[]) => execFileSync('git', args, {cwd: wikiDir, stdio: 'pipe'});
+
+  beforeAll(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-wiki-recent-test-'));
+    wikiDir = path.join(tmpDir, 'wiki');
+    const projectsFile = path.join(tmpDir, 'projects.yml');
+    fs.mkdirSync(path.join(wikiDir, 'projects'), {recursive: true});
+    fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
+
+    git('init');
+    git('config', 'user.email', 'test@pkmn.ai');
+    git('config', 'user.name', 'scheibo');
+
+    fs.writeFileSync(path.join(wikiDir, 'index.dj'), '# Wiki\n', 'utf8');
+    git('add', 'index.dj');
+    git('commit', '-m', 'Create index');
+
+    fs.writeFileSync(path.join(wikiDir, 'projects', '0_ERROR.dj'), '# 0 ERROR\n', 'utf8');
+    git('add', 'projects/0_ERROR.dj');
+    git('-c', 'user.name=pmariglia', 'commit', '-m', 'Add project notes');
+
+    fs.writeFileSync(path.join(wikiDir, 'Temp_Page.dj'), '# Temp\n', 'utf8');
+    git('add', 'Temp_Page.dj');
+    git('commit', '-m', 'Create Temp Page');
+
+    fs.unlinkSync(path.join(wikiDir, 'Temp_Page.dj'));
+    git('add', '-A');
+    git('commit', '-m', 'Delete Temp Page');
+
+    wikiInstance = new wiki.Wiki({wikiDir, projectsFile, push: false});
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('lists commits newest-first with canonical wiki hrefs', async () => {
+    const edits = await wikiInstance.getRecentEdits();
+    expect(edits.map(e => e.subject)).toEqual([
+      'Delete Temp Page',
+      'Create Temp Page',
+      'Add project notes',
+      'Create index',
+    ]);
+    const idx = edits[3];
+    expect(idx.slug).toBe('index');
+    expect(idx.title).toBe('Wiki');
+    expect(idx.author).toBe('scheibo');
+    expect(idx.displayAuthor).toBe('pre');
+    expect(idx.pageHref).toBe('/wiki');
+    expect(idx.historyHref).toBe('/wiki/index/history');
+    expect(idx.revisionHref).toBe(`/wiki/index/${idx.sha}`);
+    expect(idx.diffHref).toBe(`/wiki/index/${idx.sha}?diff=1`);
+  });
+
+  test('resolves project page titles from projects.yml metadata', async () => {
+    const edits = await wikiInstance.getRecentEdits();
+    const proj = edits.find(e => e.slug === 'projects/0_ERROR')!;
+    expect(proj.title).toBe('0 ERROR');
+    expect(proj.displayAuthor).toBe('pmariglia');
+    expect(proj.pageHref).toBe('/wiki/projects/0_ERROR');
+    expect(proj.revisionHref).toBe(`/wiki/projects/0_ERROR/${proj.sha}`);
+    expect(proj.diffHref).toBe(`/wiki/projects/0_ERROR/${proj.sha}?diff=1`);
+  });
+
+  test('marks deleted page revisions with deleted flag', async () => {
+    const edits = await wikiInstance.getRecentEdits();
+    expect(edits[0].slug).toBe('Temp_Page');
+    expect(edits[0].deleted).toBe(true);
+    expect(edits[0].historyHref).toBe('/wiki/Temp_Page/history');
+    expect(edits[0].diffHref).toBe(`/wiki/Temp_Page/${edits[0].sha}?diff=1`);
+    expect(edits[1].deleted).toBeUndefined();
+  });
+
+  test('caps returned edits to the requested limit', async () => {
+    const edits = await wikiInstance.getRecentEdits(2);
+    expect(edits).toHaveLength(2);
+    expect(edits.map(e => e.subject)).toEqual(['Delete Temp Page', 'Create Temp Page']);
+  });
+});

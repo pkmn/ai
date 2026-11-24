@@ -68,6 +68,16 @@ export interface Revision {
   deleted?: boolean;
 }
 
+export interface RecentEdit extends Revision {
+  slug: string;
+  title: string;
+  displayAuthor: string;
+  pageHref: string;
+  historyHref: string;
+  revisionHref: string;
+  diffHref: string;
+}
+
 function isProjectNamespace(slug: string): boolean {
   return slug.startsWith(PROJECTS_PREFIX);
 }
@@ -1325,6 +1335,69 @@ export class Wiki {
         });
       }
       return revisions;
+    } catch {
+      return [];
+    }
+  }
+
+  async getRecentEdits(limit = util.TABLE_PAGE_SIZE): Promise<RecentEdit[]> {
+    if (limit <= 0 || !fs.existsSync(this.wikiDir)) return [];
+    this.refreshMetadata();
+    try {
+      const {stdout} = await execFileAsync(
+        'git',
+        [
+          '-c',
+          'core.quotePath=false',
+          'log',
+          '--no-renames',
+          '--name-status',
+          '-n',
+          String(Math.max(limit * 2, limit)),
+          '--format=%x1e%H%x09%h%x09%an%x09%at%x09%s',
+          '--',
+          '*.dj',
+        ],
+        {cwd: this.wikiDir, timeout: 15_000}
+      );
+      const edits: RecentEdit[] = [];
+      for (const block of stdout.split('\x1e')) {
+        const lines = block.split('\n').filter(Boolean);
+        if (lines.length < 2) continue;
+        const [sha, shortSha, author, ts, ...rest] = lines[0].split('\t');
+        const timestamp = Number(ts);
+        const subject = rest.join('\t');
+        const displayAuthor = this.formatAuthor(author);
+        for (const fileLine of lines.slice(1)) {
+          const tab = fileLine.indexOf('\t');
+          if (tab < 0) continue;
+          const status = fileLine.slice(0, tab);
+          const relPath = fileLine.slice(tab + 1).trim();
+          if (!relPath.endsWith('.dj')) continue;
+          const slug = relPath.slice(0, -3);
+          if (!isValidSlug(slug)) continue;
+          const encoded = encodeSlug(slug);
+          const revisionHref = `/wiki/${encoded}/${sha}`;
+          const deleted = status === 'D';
+          edits.push({
+            sha,
+            shortSha,
+            author,
+            displayAuthor,
+            timestamp,
+            subject,
+            ...(deleted ? {deleted: true} : {}),
+            slug,
+            title: this.projectPages.get(slug)?.name ?? formatTitle(slug),
+            pageHref: slug === 'index' ? '/wiki' : `/wiki/${encoded}`,
+            historyHref: `/wiki/${encoded}/history`,
+            revisionHref,
+            diffHref: `${revisionHref}?diff=1`,
+          });
+          if (edits.length >= limit) return edits;
+        }
+      }
+      return edits;
     } catch {
       return [];
     }
