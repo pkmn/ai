@@ -339,7 +339,7 @@ describe('/admin dashboard & API', () => {
             totalBytes: 460 * GIB,
             usedBytes: 100 * GIB,
             availableBytes: 360 * GIB,
-            ioBytesPerSec: 2 * 1024 * 1024,
+            ioBytesPerSecond: 2 * 1024 * 1024,
             iops: 40,
           },
           {
@@ -350,8 +350,8 @@ describe('/admin dashboard & API', () => {
         ],
         network: {
           iface: 'en0',
-          rxBytesPerSec: 12000,
-          txBytesPerSec: 8000,
+          rxBytesPerSecond: 12000,
+          txBytesPerSecond: 8000,
           rxErrors: 0,
           txErrors: 0,
           internal: {target: 'VPS tunnel', ok: true, rttMillis: 19, checkedAt: now},

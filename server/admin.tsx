@@ -11,7 +11,7 @@ import * as util from '../static/util';
 import * as account from './account';
 import * as arena from './arena';
 import {Auth, isAdmin, isCrossSiteRequest} from './auth';
-import {buildAiPanelClientJs} from './render';
+import {AI_PANEL_STYLE} from './render';
 import * as system from './system';
 import {formatTournamentName} from './tournaments';
 
@@ -125,7 +125,8 @@ const SLOT_LABELS: Record<db.LadderSlot, string> = {
   vgc: 'VGC',
 };
 
-const STYLE = fs.readFileSync(util.root('static', 'style', 'admin.css'), 'utf8');
+const STYLE =
+  `${AI_PANEL_STYLE}\n${fs.readFileSync(util.root('static', 'style', 'admin.css'), 'utf8')}`;
 
 const ADMIN_SCRIPT = `
   document.addEventListener('DOMContentLoaded', () => {
@@ -354,209 +355,10 @@ const ADMIN_SCRIPT = `
       });
     });
 
-    ${buildAiPanelClientJs()}
-
-    const SPEED_KEY = 'pkmn-viewer-speed';
-    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
-
-    const postToFrame = (frameEl, msg) => {
-      if (frameEl && frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage(msg, '*');
-      }
-    };
-
-    const syncFramePrefs = frameEl => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      postToFrame(frameEl, {type: 'theme', dark});
-      try {
-        const saved = localStorage.getItem(SPEED_KEY);
-        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
-          postToFrame(frameEl, {type: 'speed', speed: saved});
-        }
-      } catch {}
-    };
-
-    new MutationObserver(() => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      document.querySelectorAll('iframe.replay-viewer-frame').forEach(f => {
-        postToFrame(f, {type: 'theme', dark});
-      });
-    }).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
-
-    const renderDiagReplayAi = (slot, activeTurn) => {
-      const panel = slot && slot.querySelector('.replay-ai-panel');
-      if (!panel) return;
-      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
-      if (tele.length === 0) {
-        panel.innerHTML = '';
-        panel.classList.add('hide');
-        return;
-      }
-      let snap = tele[0];
-      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
-      for (let i = 0; i < tele.length; i++) {
-        if (tele[i].turn <= target) snap = tele[i];
-      }
-      const winHistory = [];
-      for (let i = 0; i < tele.length; i++) {
-        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
-        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
-        if (p1w !== undefined || p2w !== undefined) {
-          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
-        }
-      }
-      const html = renderAiPanelHtml(
-        slot._p1Name || 'P1',
-        slot._p2Name || 'P2',
-        snap.p1,
-        snap.p2,
-        winHistory,
-        {activeTurn: snap.turn, interactive: true}
-      );
-      panel.innerHTML = html;
-      panel.classList.toggle('hide', !html);
-    };
-
-    window.addEventListener('message', ev => {
-      const data = ev.data;
-      if (!data || typeof data !== 'object') return;
-      const frames = document.querySelectorAll('iframe.replay-viewer-frame');
-      let fromViewer = false;
-      for (let i = 0; i < frames.length; i++) {
-        if (ev.source === frames[i].contentWindow) {
-          fromViewer = true;
-          break;
-        }
-      }
-      if (!fromViewer) return;
-      if (
-        data.type === 'speed' &&
-        typeof data.speed === 'string' &&
-        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
-      ) {
-        try {
-          localStorage.setItem(SPEED_KEY, data.speed);
-        } catch {}
-        return;
-      }
-      if (data.type === 'playback' && typeof data.turn === 'number') {
-        document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
-          const f = slot.querySelector('iframe.replay-viewer-frame');
-          if (f && ev.source === f.contentWindow) renderDiagReplayAi(slot, data.turn);
-        });
-        return;
-      }
-      if (data.type !== 'ready') return;
-      document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
-        const f = slot.querySelector('iframe.replay-viewer-frame');
-        if (f && ev.source === f.contentWindow) {
-          slot._viewerReady = true;
-          syncFramePrefs(f);
-          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
-            postToFrame(f, {
-              type: 'load',
-              lines: slot._pendingLines,
-              live: false,
-              side: 'p1',
-            });
-          }
-        }
-      });
-    });
-
-    const loadDiagReplayInto = async (wrap, diagId, allIds, allLabels) => {
-      wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
-      try {
-        const res = await fetch('/api/admin/diagnostics/' + diagId + '/log', {
-          headers: {Accept: 'application/json'},
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const lines = Array.isArray(data.lines) ? data.lines : [];
-        wrap._pendingLines = lines;
-        wrap._p1Name = data.p1Name || 'P1';
-        wrap._p2Name = data.p2Name || 'P2';
-        wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
-        const tabsHtml = allIds.length > 1
-          ? '<div class="diag-tabs">' + allIds.map((id, i) => (
-            '<button type="button" class="link-btn diag-tab-btn' +
-              (id === diagId ? ' active' : '') + '" data-diag-id="' + escAi(id) + '">' +
-              escAi(allLabels[i] || ('Game ' + (i + 1))) + '</button>'
-          )).join('<span class="muted">·</span>') + '</div>'
-          : '';
-        wrap.innerHTML =
-          tabsHtml +
-          '<div class="ai-panel replay-ai-panel hide"></div>' +
-          '<div class="viewer-wrap">' +
-            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
-              'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
-          '</div>';
-        wrap.querySelectorAll('.diag-tab-btn').forEach(tabBtn => {
-          tabBtn.addEventListener('click', () => {
-            const nextId = tabBtn.getAttribute('data-diag-id');
-            if (nextId && nextId !== diagId) {
-              void loadDiagReplayInto(wrap, nextId, allIds, allLabels);
-            }
-          });
-        });
-        renderDiagReplayAi(wrap, 0);
-      } catch {
-        wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
-      }
-    };
-
-    const toggleDiagRow = (row) => {
-      const rawIds = row.getAttribute('data-diag-ids') || '';
-      const allIds = rawIds.split(',').filter(Boolean);
-      if (!allIds.length || !row.parentNode) return;
-      const allLabels = (row.getAttribute('data-diag-labels') || '').split('|');
-      const existing = row.nextElementSibling;
-      if (existing && existing.classList.contains('diag-replay-row')) {
-        existing.remove();
-        row.classList.remove('expanded');
-        row.setAttribute('aria-expanded', 'false');
-        return;
-      }
-      row.classList.add('expanded');
-      row.setAttribute('aria-expanded', 'true');
-      const detailRow = document.createElement('tr');
-      detailRow.className = 'diag-replay-row';
-      const td = document.createElement('td');
-      td.colSpan = 6;
-      const wrap = document.createElement('div');
-      wrap.className = 'diag-replay-wrap';
-      wrap.addEventListener('click', wev => {
-        const hit = wev.target && wev.target.closest
-          ? wev.target.closest('[data-seek-turn]')
-          : null;
-        if (!hit) return;
-        const turn = Number(hit.getAttribute('data-seek-turn'));
-        if (!Number.isFinite(turn)) return;
-        const f = wrap.querySelector('iframe.replay-viewer-frame');
-        if (f) postToFrame(f, {type: 'seek', turn});
-        renderDiagReplayAi(wrap, turn);
-      });
-      td.appendChild(wrap);
-      detailRow.appendChild(td);
-      row.parentNode.insertBefore(detailRow, row.nextSibling);
-      void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
-    };
-
-    document.querySelectorAll('tr.battle-row[data-diag-ids]').forEach(row => {
-      row.addEventListener('click', ev => {
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
-        toggleDiagRow(row);
-      });
-      row.addEventListener('keydown', ev => {
-        if (ev.key === 'Enter' || ev.key === ' ') {
-          if (ev.target && ev.target.closest && ev.target.closest('a,button,input')) return;
-          ev.preventDefault();
-          toggleDiagRow(row);
-        }
-      });
-    });
+    ${account.buildDiagnosticReplayClientJs({
+      apiPrefix: '/api/admin/diagnostics',
+      rowSelector: 'tr.battle-row[data-diag-ids]',
+    })}
 
     document.querySelectorAll('button[data-action="quarantine"]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -800,16 +602,16 @@ function renderDiskRow(d: system.DiskMetrics): util.Child {
   const pctClass = pct !== undefined && pct >= DISK_CRIT_PCT
     ? 'no'
     : pct !== undefined && pct >= DISK_WARN_PCT ? 'warn' : undefined;
-  const totalIo = d.readBytesPerSec !== undefined && d.writeBytesPerSec !== undefined
-    ? d.readBytesPerSec + d.writeBytesPerSec
-    : d.ioBytesPerSec;
+  const totalIo = d.readBytesPerSecond !== undefined && d.writeBytesPerSecond !== undefined
+    ? d.readBytesPerSecond + d.writeBytesPerSecond
+    : d.ioBytesPerSecond;
   const ioParts: string[] = [];
   if (totalIo !== undefined) ioParts.push(formatRate(totalIo));
   if (d.iops !== undefined) ioParts.push(`${d.iops} IOPS`);
   const busyHigh = d.busyPct !== undefined && d.busyPct >= 80;
   const tipParts: string[] = [d.mount];
-  if (d.readBytesPerSec !== undefined && d.writeBytesPerSec !== undefined) {
-    tipParts.push(`R ${formatRate(d.readBytesPerSec)} · W ${formatRate(d.writeBytesPerSec)}`);
+  if (d.readBytesPerSecond !== undefined && d.writeBytesPerSecond !== undefined) {
+    tipParts.push(`R ${formatRate(d.readBytesPerSecond)} · W ${formatRate(d.writeBytesPerSecond)}`);
   }
   if (d.busyPct !== undefined) tipParts.push(`${d.busyPct}% busy`);
   return (
@@ -1096,10 +898,10 @@ function renderSystemCards(
             {vps.network.iface && (
               <span className='sys-line muted'>
                 {vps.network.iface}
-                {vps.network.rxBytesPerSec !== undefined &&
-                  vps.network.txBytesPerSec !== undefined &&
-                  ` ↓${formatRate(vps.network.rxBytesPerSec)} ` +
-                  `↑${formatRate(vps.network.txBytesPerSec)}`}
+                {vps.network.rxBytesPerSecond !== undefined &&
+                  vps.network.txBytesPerSecond !== undefined &&
+                  ` ↓${formatRate(vps.network.rxBytesPerSecond)} ` +
+                  `↑${formatRate(vps.network.txBytesPerSecond)}`}
                 {' · '}
                 <span className={vpsNetErrs > 0 ? 'warn' : undefined}>{vpsNetErrs} err</span>
               </span>
@@ -1216,10 +1018,10 @@ function renderSystemCards(
               {arenaSys.network.iface && (
                 <span className='sys-line muted'>
                   {arenaSys.network.iface}
-                  {arenaSys.network.rxBytesPerSec !== undefined &&
-                    arenaSys.network.txBytesPerSec !== undefined &&
-                    ` ↓${formatRate(arenaSys.network.rxBytesPerSec)} ` +
-                    `↑${formatRate(arenaSys.network.txBytesPerSec)}`}
+                  {arenaSys.network.rxBytesPerSecond !== undefined &&
+                    arenaSys.network.txBytesPerSecond !== undefined &&
+                    ` ↓${formatRate(arenaSys.network.rxBytesPerSecond)} ` +
+                    `↑${formatRate(arenaSys.network.txBytesPerSecond)}`}
                   {' · '}
                   <span className={arenaNetErrs > 0 ? 'warn' : undefined}>{arenaNetErrs} err</span>
                 </span>
@@ -1762,7 +1564,9 @@ function renderProjectDetailPanel(
       )}
 
       <div>
-        <h4>History ({versions.length})</h4>
+        <h4>
+          History ({versions.length > 15 ? `latest 15 of ${versions.length}` : versions.length})
+        </h4>
         {versions.length === 0 ? (
           <p className='muted'>No versions submitted yet.</p>
         ) : (
@@ -2513,44 +2317,38 @@ export function register(app: polka.Polka, options: Options): Handle {
     return Number.isSafeInteger(n) && n > 0 ? n : undefined;
   };
 
-  app.get('/api/admin/diagnostics/:id/log', (req, res) => {
-    if (!requireAdmin(req, res, true)) return;
+  const resolveAdminDiagnostic = (
+    req: http.IncomingMessage & {params: Record<string, string | string[] | undefined>},
+    res: http.ServerResponse,
+    missingLabel: string
+  ): {diag: db.SmokeDiagnosticRow; agent: db.AgentRow} | undefined => {
+    if (!requireAdmin(req, res, true)) return undefined;
     const id = parsePositiveIntParam(req.params.id);
     if (id === undefined) {
       sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
-      return;
+      return undefined;
     }
     const diag = db.getSmokeDiagnosticById(id);
     if (!diag) {
-      sendJson(res, 404, {error: 'Diagnostic log not found.'});
-      return;
+      sendJson(res, 404, {error: `Diagnostic ${missingLabel} not found.`});
+      return undefined;
     }
     const agent = db.getAgentById(diag.agentId);
     if (!agent) {
       sendJson(res, 404, {error: 'Project not found.'});
-      return;
+      return undefined;
     }
-    account.sendDiagnosticLogResponse(req, res, diag, agent);
+    return {diag, agent};
+  };
+
+  app.get('/api/admin/diagnostics/:id/log', (req, res) => {
+    const resolved = resolveAdminDiagnostic(req, res, 'log');
+    if (resolved) account.sendDiagnosticLogResponse(req, res, resolved.diag, resolved.agent);
   });
 
   app.get('/api/admin/diagnostics/:id/stderr', (req, res) => {
-    if (!requireAdmin(req, res, true)) return;
-    const id = parsePositiveIntParam(req.params.id);
-    if (id === undefined) {
-      sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
-      return;
-    }
-    const diag = db.getSmokeDiagnosticById(id);
-    if (!diag) {
-      sendJson(res, 404, {error: 'Diagnostic stderr not found.'});
-      return;
-    }
-    const agent = db.getAgentById(diag.agentId);
-    if (!agent) {
-      sendJson(res, 404, {error: 'Project not found.'});
-      return;
-    }
-    account.sendDiagnosticStderrResponse(req, res, diag, agent);
+    const resolved = resolveAdminDiagnostic(req, res, 'stderr');
+    if (resolved) account.sendDiagnosticStderrResponse(req, res, resolved.diag, resolved.agent);
   });
 
   app.post('/api/admin/versions/:id/discard', (req, res) => {

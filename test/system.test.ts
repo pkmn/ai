@@ -509,15 +509,15 @@ describe('system telemetry parsers & TrafficTracker', () => {
     };
     const r1 = system.advanceLinuxDiskRates(diskState, s1, 2000);
     expect(r1).toEqual({
-      readBytesPerSec: 10240,
-      writeBytesPerSec: 5120,
+      readBytesPerSecond: 10240,
+      writeBytesPerSecond: 5120,
       iops: 15,
       busyPct: 10,
     });
     // Burst sample 50ms later must preserve previous rates and baseline timestamp.
     const rBurst = system.advanceLinuxDiskRates(diskState, s1, 2050);
     expect(rBurst).toEqual(r1);
-    expect(diskState.prev?.atMs).toBe(2000);
+    expect(diskState.prev?.atMillis).toBe(2000);
 
     const netState: system.NetRateState = {};
     expect(
@@ -528,13 +528,13 @@ describe('system telemetry parsers & TrafficTracker', () => {
     const nr1 = system.advanceNetRates(netState, {
       iface: 'eth0', rxBytes: 3000, txBytes: 1500, rxErrors: 0, txErrors: 0,
     }, 2000);
-    expect(nr1).toEqual({rxBytesPerSec: 2000, txBytesPerSec: 1000});
+    expect(nr1).toEqual({rxBytesPerSecond: 2000, txBytesPerSecond: 1000});
     expect(
       system.advanceNetRates(netState, {
         iface: 'eth0', rxBytes: 3000, txBytes: 1500, rxErrors: 0, txErrors: 0,
       }, 2050)
     ).toEqual(nr1);
-    expect(netState.prev?.atMs).toBe(2000);
+    expect(netState.prev?.atMillis).toBe(2000);
   });
 
   test('ArenaHostMonitor rescans when updates-status.json arrives after archive-status.json',

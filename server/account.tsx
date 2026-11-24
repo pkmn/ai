@@ -12,7 +12,7 @@ import * as util from '../static/util';
 
 import type * as arena from './arena';
 import {Auth, REGISTER_ISSUE_URL, isCrossSiteRequest} from './auth';
-import {buildAiPanelClientJs, renderAiPanelHtml} from './render';
+import {AI_PANEL_STYLE, buildAiPanelClientJs, renderAiPanelHtml} from './render';
 import * as serverTeams from './teams';
 
 const GITHUB_RELEASE_ASSET_API_RE = /^\/repos\/[^/]+\/[^/]+\/releases\/assets\/\d+$/;
@@ -96,7 +96,218 @@ const MAX_SUBMISSION_BYTES = 512 * 1024;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
 
-const STYLE = fs.readFileSync(util.root('static', 'style', 'account.css'), 'utf8');
+const STYLE =
+  `${AI_PANEL_STYLE}\n${fs.readFileSync(util.root('static', 'style', 'account.css'), 'utf8')}`;
+
+export function buildDiagnosticReplayClientJs(opts: {
+  apiPrefix: string;
+  rowSelector: string;
+  frameSelector?: string;
+  onLiveFrameReady?: string;
+}): string {
+  const frameSel = opts.frameSelector ?? 'iframe.replay-viewer-frame';
+  const liveReadyBlock = opts.onLiveFrameReady ?? '';
+  return `
+    ${buildAiPanelClientJs()}
+
+    const SPEED_KEY = 'pkmn-viewer-speed';
+    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
+
+    const postToFrame = (frameEl, msg) => {
+      if (frameEl && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage(msg, '*');
+      }
+    };
+
+    const syncFramePrefs = frameEl => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      postToFrame(frameEl, {type: 'theme', dark});
+      try {
+        const saved = localStorage.getItem(SPEED_KEY);
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
+          postToFrame(frameEl, {type: 'speed', speed: saved});
+        }
+      } catch {}
+    };
+
+    const renderDiagReplayAi = (slot, activeTurn) => {
+      const panel = slot && slot.querySelector('.replay-ai-panel');
+      if (!panel) return;
+      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
+      if (tele.length === 0) {
+        panel.innerHTML = '';
+        panel.classList.add('hide');
+        return;
+      }
+      let snap = tele[0];
+      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
+      for (let i = 0; i < tele.length; i++) {
+        if (tele[i].turn <= target) snap = tele[i];
+      }
+      const winHistory = [];
+      for (let i = 0; i < tele.length; i++) {
+        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
+        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
+        if (p1w !== undefined || p2w !== undefined) {
+          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
+        }
+      }
+      const html = renderAiPanelHtml(
+        slot._p1Name || 'P1',
+        slot._p2Name || 'P2',
+        snap.p1,
+        snap.p2,
+        winHistory,
+        {activeTurn: snap.turn, interactive: true}
+      );
+      panel.innerHTML = html;
+      panel.classList.toggle('hide', !html);
+    };
+
+    window.addEventListener('message', ev => {
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      const frames = document.querySelectorAll(${JSON.stringify(frameSel)});
+      let fromViewer = false;
+      for (let i = 0; i < frames.length; i++) {
+        if (ev.source === frames[i].contentWindow) {
+          fromViewer = true;
+          break;
+        }
+      }
+      if (!fromViewer) return;
+      if (
+        data.type === 'speed' &&
+        typeof data.speed === 'string' &&
+        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      ) {
+        try {
+          localStorage.setItem(SPEED_KEY, data.speed);
+        } catch {}
+        return;
+      }
+      ${liveReadyBlock}
+      if (data.type === 'playback' && typeof data.turn === 'number') {
+        document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+          const f = slot.querySelector('iframe.replay-viewer-frame');
+          if (f && ev.source === f.contentWindow) renderDiagReplayAi(slot, data.turn);
+        });
+        return;
+      }
+      if (data.type !== 'ready') return;
+      document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+        const f = slot.querySelector('iframe.replay-viewer-frame');
+        if (f && ev.source === f.contentWindow) {
+          slot._viewerReady = true;
+          syncFramePrefs(f);
+          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
+            postToFrame(f, {
+              type: 'load',
+              lines: slot._pendingLines,
+              live: false,
+              side: 'p1',
+            });
+          }
+        }
+      });
+    });
+
+    const loadDiagReplayInto = async (wrap, diagId, allIds, allLabels) => {
+      wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
+      try {
+        const res = await fetch(${JSON.stringify(`${opts.apiPrefix}/`)} + diagId + '/log', {
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const lines = Array.isArray(data.lines) ? data.lines : [];
+        wrap._pendingLines = lines;
+        wrap._p1Name = data.p1Name || 'P1';
+        wrap._p2Name = data.p2Name || 'P2';
+        wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
+        const tabsHtml = allIds.length > 1
+          ? '<div class="diag-tabs">' + allIds.map((id, i) => (
+            '<button type="button" class="link-btn diag-tab-btn' +
+              (id === diagId ? ' active' : '') + '" data-diag-id="' + escAi(id) + '">' +
+              escAi(allLabels[i] || ('Game ' + (i + 1))) + '</button>'
+          )).join('<span class="muted">·</span>') + '</div>'
+          : '';
+        wrap.innerHTML =
+          tabsHtml +
+          '<div class="ai-panel replay-ai-panel hide"></div>' +
+          '<div class="viewer-wrap">' +
+            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
+              'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
+          '</div>';
+        wrap.querySelectorAll('.diag-tab-btn').forEach(tabBtn => {
+          tabBtn.addEventListener('click', () => {
+            const nextId = tabBtn.getAttribute('data-diag-id');
+            if (nextId && nextId !== diagId) {
+              void loadDiagReplayInto(wrap, nextId, allIds, allLabels);
+            }
+          });
+        });
+        renderDiagReplayAi(wrap, 0);
+      } catch {
+        wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
+      }
+    };
+
+    const toggleDiagRow = row => {
+      const rawIds = row.getAttribute('data-diag-ids') || '';
+      const allIds = rawIds.split(',').filter(Boolean);
+      if (!allIds.length || !row.parentNode) return;
+      const allLabels = (row.getAttribute('data-diag-labels') || '').split('|');
+      const existing = row.nextElementSibling;
+      if (existing && existing.classList.contains('diag-replay-row')) {
+        existing.remove();
+        row.classList.remove('expanded');
+        row.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      row.classList.add('expanded');
+      row.setAttribute('aria-expanded', 'true');
+      const detailRow = document.createElement('tr');
+      detailRow.className = 'diag-replay-row';
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      const wrap = document.createElement('div');
+      wrap.className = 'diag-replay-wrap';
+      wrap.addEventListener('click', wev => {
+        const hit = wev.target && wev.target.closest
+          ? wev.target.closest('[data-seek-turn]')
+          : null;
+        if (!hit) return;
+        const turn = Number(hit.getAttribute('data-seek-turn'));
+        if (!Number.isFinite(turn)) return;
+        const f = wrap.querySelector('iframe.replay-viewer-frame');
+        if (f) postToFrame(f, {type: 'seek', turn});
+        renderDiagReplayAi(wrap, turn);
+      });
+      td.appendChild(wrap);
+      detailRow.appendChild(td);
+      row.parentNode.insertBefore(detailRow, row.nextSibling);
+      void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
+    };
+
+    document.querySelectorAll(${JSON.stringify(opts.rowSelector)}).forEach(row => {
+      row.addEventListener('click', ev => {
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+          return;
+        }
+        toggleDiagRow(row);
+      });
+      row.addEventListener('keydown', ev => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+          return;
+        }
+        ev.preventDefault();
+        toggleDiagRow(row);
+      });
+    });
+  `;
+}
 
 const ACCOUNT_SCRIPT = `
   document.addEventListener('DOMContentLoaded', () => {
@@ -399,62 +610,6 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
-    ${buildAiPanelClientJs()}
-
-    const SPEED_KEY = 'pkmn-viewer-speed';
-    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
-
-    const postToFrame = (frameEl, msg) => {
-      if (frameEl && frameEl.contentWindow) {
-        frameEl.contentWindow.postMessage(msg, '*');
-      }
-    };
-
-    const syncFramePrefs = frameEl => {
-      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-      postToFrame(frameEl, {type: 'theme', dark});
-      try {
-        const saved = localStorage.getItem(SPEED_KEY);
-        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
-          postToFrame(frameEl, {type: 'speed', speed: saved});
-        }
-      } catch {}
-    };
-
-    const renderDiagReplayAi = (slot, activeTurn) => {
-      const panel = slot && slot.querySelector('.replay-ai-panel');
-      if (!panel) return;
-      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
-      if (tele.length === 0) {
-        panel.innerHTML = '';
-        panel.classList.add('hide');
-        return;
-      }
-      let snap = tele[0];
-      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
-      for (let i = 0; i < tele.length; i++) {
-        if (tele[i].turn <= target) snap = tele[i];
-      }
-      const winHistory = [];
-      for (let i = 0; i < tele.length; i++) {
-        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
-        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
-        if (p1w !== undefined || p2w !== undefined) {
-          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
-        }
-      }
-      const html = renderAiPanelHtml(
-        slot._p1Name || 'P1',
-        slot._p2Name || 'P2',
-        snap.p1,
-        snap.p2,
-        winHistory,
-        {activeTurn: snap.turn, interactive: true}
-      );
-      panel.innerHTML = html;
-      panel.classList.toggle('hide', !html);
-    };
-
     const liveBox = document.getElementById('live-diagnostic');
     const liveFrame = document.getElementById('diag-live-frame');
     let liveReady = false;
@@ -467,6 +622,20 @@ const ACCOUNT_SCRIPT = `
         if (Array.isArray(parsed)) livePendingLines = parsed;
       } catch {}
     }
+
+    ${buildDiagnosticReplayClientJs({
+      apiPrefix: '/api/account/diagnostics',
+      rowSelector: '#history tbody tr.battle-row[data-diag-ids]',
+      frameSelector: 'iframe.viewer-frame',
+      onLiveFrameReady: `
+      if (liveFrame && ev.source === liveFrame.contentWindow && data.type === 'ready') {
+        liveReady = true;
+        liveLinesSent = 0;
+        syncFramePrefs(liveFrame);
+        if (livePendingLines.length > 0) flushLiveLines(livePendingLines);
+        return;
+      }`,
+    })}
 
     const flushLiveLines = (lines, key) => {
       if (!liveFrame || !Array.isArray(lines) || lines.length === 0) return;
@@ -487,60 +656,6 @@ const ACCOUNT_SCRIPT = `
       }
       liveLinesSent = lines.length;
     };
-
-    window.addEventListener('message', ev => {
-      const data = ev.data;
-      if (!data || typeof data !== 'object') return;
-      const frames = document.querySelectorAll('iframe.viewer-frame');
-      let fromViewer = false;
-      for (let i = 0; i < frames.length; i++) {
-        if (ev.source === frames[i].contentWindow) {
-          fromViewer = true;
-          break;
-        }
-      }
-      if (!fromViewer) return;
-      if (
-        data.type === 'speed' &&
-        typeof data.speed === 'string' &&
-        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
-      ) {
-        try {
-          localStorage.setItem(SPEED_KEY, data.speed);
-        } catch {}
-        return;
-      }
-      if (liveFrame && ev.source === liveFrame.contentWindow && data.type === 'ready') {
-        liveReady = true;
-        liveLinesSent = 0;
-        syncFramePrefs(liveFrame);
-        if (livePendingLines.length > 0) flushLiveLines(livePendingLines);
-        return;
-      }
-      if (data.type === 'playback' && typeof data.turn === 'number') {
-        document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
-          const f = slot.querySelector('iframe.replay-viewer-frame');
-          if (f && ev.source === f.contentWindow) renderDiagReplayAi(slot, data.turn);
-        });
-        return;
-      }
-      if (data.type !== 'ready') return;
-      document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
-        const f = slot.querySelector('iframe.replay-viewer-frame');
-        if (f && ev.source === f.contentWindow) {
-          slot._viewerReady = true;
-          syncFramePrefs(f);
-          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
-            postToFrame(f, {
-              type: 'load',
-              lines: slot._pendingLines,
-              live: false,
-              side: 'p1',
-            });
-          }
-        }
-      });
-    });
 
     if (liveBox && typeof EventSource === 'function') {
       const titleEl = document.getElementById('diag-live-title');
@@ -627,100 +742,6 @@ const ACCOUNT_SCRIPT = `
           }
           buttons.forEach(b => { b.disabled = false; });
         }
-      });
-    });
-
-    const loadDiagReplayInto = async (wrap, diagId, allIds, allLabels) => {
-      wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
-      try {
-        const res = await fetch('/api/account/diagnostics/' + diagId + '/log', {
-          headers: {Accept: 'application/json'},
-        });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const data = await res.json();
-        const lines = Array.isArray(data.lines) ? data.lines : [];
-        wrap._pendingLines = lines;
-        wrap._p1Name = data.p1Name || 'P1';
-        wrap._p2Name = data.p2Name || 'P2';
-        wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
-        const tabsHtml = allIds.length > 1
-          ? '<div class="diag-tabs">' + allIds.map((id, i) => (
-            '<button type="button" class="link-btn diag-tab-btn' +
-              (id === diagId ? ' active' : '') + '" data-diag-id="' + escAi(id) + '">' +
-              escAi(allLabels[i] || ('Game ' + (i + 1))) + '</button>'
-          )).join('<span class="muted">·</span>') + '</div>'
-          : '';
-        wrap.innerHTML =
-          tabsHtml +
-          '<div class="ai-panel replay-ai-panel hide"></div>' +
-          '<div class="viewer-wrap">' +
-            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
-              'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
-          '</div>';
-        wrap.querySelectorAll('.diag-tab-btn').forEach(tabBtn => {
-          tabBtn.addEventListener('click', () => {
-            const nextId = tabBtn.getAttribute('data-diag-id');
-            if (nextId && nextId !== diagId) {
-              void loadDiagReplayInto(wrap, nextId, allIds, allLabels);
-            }
-          });
-        });
-        renderDiagReplayAi(wrap, 0);
-      } catch {
-        wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
-      }
-    };
-
-    document.querySelectorAll('#history tbody tr.battle-row[data-diag-ids]').forEach(row => {
-      const toggleRow = () => {
-        const rawIds = row.getAttribute('data-diag-ids') || '';
-        const allIds = rawIds.split(',').filter(Boolean);
-        if (!allIds.length || !row.parentNode) return;
-        const allLabels = (row.getAttribute('data-diag-labels') || '').split('|');
-        const existing = row.nextElementSibling;
-        if (existing && existing.classList.contains('diag-replay-row')) {
-          existing.remove();
-          row.classList.remove('expanded');
-          row.setAttribute('aria-expanded', 'false');
-          return;
-        }
-        row.classList.add('expanded');
-        row.setAttribute('aria-expanded', 'true');
-        const detailRow = document.createElement('tr');
-        detailRow.className = 'diag-replay-row';
-        const td = document.createElement('td');
-        td.colSpan = 6;
-        const wrap = document.createElement('div');
-        wrap.className = 'diag-replay-wrap';
-        wrap.addEventListener('click', wev => {
-          const hit = wev.target && wev.target.closest
-            ? wev.target.closest('[data-seek-turn]')
-            : null;
-          if (!hit) return;
-          const turn = Number(hit.getAttribute('data-seek-turn'));
-          if (!Number.isFinite(turn)) return;
-          const f = wrap.querySelector('iframe.replay-viewer-frame');
-          if (f) postToFrame(f, {type: 'seek', turn});
-          renderDiagReplayAi(wrap, turn);
-        });
-        td.appendChild(wrap);
-        detailRow.appendChild(td);
-        row.parentNode.insertBefore(detailRow, row.nextSibling);
-        void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
-      };
-      row.addEventListener('click', ev => {
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
-        toggleRow();
-      });
-      row.addEventListener('keydown', ev => {
-        if (ev.key !== 'Enter' && ev.key !== ' ') return;
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
-        ev.preventDefault();
-        toggleRow();
       });
     });
 
@@ -2264,7 +2285,6 @@ export function register(app: polka.Polka, options: Options) {
       const updated = db.discardStagedVersion({
         versionId,
         agentId: session.agent.id,
-        now: getNow(),
       });
       sendJson(res, 200, {
         ok: true,

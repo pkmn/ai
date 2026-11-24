@@ -223,12 +223,6 @@ export interface GameTimerOptions extends TimerOverrides {
   readyGraceSeconds?: number;
 }
 
-export const SMOKE_TIMERS: GameTimerOptions = {
-  startingBankSeconds: 60,
-  readyGraceSeconds: arena.READY_GRACE_SECONDS,
-  maxTurnSeconds: 60,
-};
-
 export interface ResolvedClockTimers {
   startingBankMillis: number;
   graceMillis: number;

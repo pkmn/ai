@@ -6,6 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as tls from 'tls';
 
+import * as util from '../static/util';
+
 export interface LoadMetrics {
   load1: number;
   load5: number;
@@ -32,9 +34,9 @@ export interface DiskMetrics {
   totalBytes?: number;
   usedBytes?: number;
   availableBytes?: number;
-  readBytesPerSec?: number;
-  writeBytesPerSec?: number;
-  ioBytesPerSec?: number;
+  readBytesPerSecond?: number;
+  writeBytesPerSecond?: number;
+  ioBytesPerSecond?: number;
   iops?: number;
   busyPct?: number;
 }
@@ -49,8 +51,8 @@ export interface NetworkProbe {
 
 export interface NetworkMetrics {
   iface?: string;
-  rxBytesPerSec?: number;
-  txBytesPerSec?: number;
+  rxBytesPerSecond?: number;
+  txBytesPerSecond?: number;
   rxErrors?: number;
   txErrors?: number;
   internal?: NetworkProbe;
@@ -198,18 +200,18 @@ const MAX_TRACKED_VISITORS = 5000;
 const MAX_LATENCY_SAMPLES = 200;
 
 export function latestScheduledWindowStart(
-  nowSec: number,
+  nowSeconds: number,
   hour: number,
   minute: number,
   useUtc: boolean
 ): number {
-  const d = new Date(nowSec * 1000);
+  const d = new Date(nowSeconds * 1000);
   const candidate = useUtc
     ? Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour, minute) / 1000)
     : Math.floor(
       new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, minute, 0, 0).getTime() / 1000
     );
-  return candidate <= nowSec ? candidate : candidate - 86400;
+  return candidate <= nowSeconds ? candidate : candidate - 86400;
 }
 
 export function parseProcMeminfo(text: string): {
@@ -324,10 +326,10 @@ export function parseUbuntuUpdates(
   checkedAt: number
 ): UpdateStatus | undefined {
   if (text === undefined && !rebootRequired) return undefined;
-  const pendingMatch = text ? /(\d+)\s+updates?\s+can\s+be\s+applied/i.exec(text) : null;
+  const pendingMatch = text ? /(\d+)\s+updates?\s+can\s+be\s+applied/i.exec(text) : undefined;
   const secMatch = text
     ? /(\d+)\s+of\s+these\s+updates?\s+are\s+(?:standard\s+)?security\s+updates?/i.exec(text)
-    : null;
+    : undefined;
   const pending = pendingMatch ? Number(pendingMatch[1]) : 0;
   const security = secMatch ? Number(secMatch[1]) : 0;
   return {
@@ -525,9 +527,9 @@ function scanLatestBackup(
       backupCount++;
       try {
         const st = fs.statSync(path.join(dir, name));
-        const mtimeSec = Math.floor(st.mtimeMs / 1000);
-        if (lastBackupAt === undefined || mtimeSec > lastBackupAt) {
-          lastBackupAt = mtimeSec;
+        const mtimeSeconds = Math.floor(st.mtimeMs / 1000);
+        if (lastBackupAt === undefined || mtimeSeconds > lastBackupAt) {
+          lastBackupAt = mtimeSeconds;
           lastBackupBytes = st.size;
         }
       } catch {}
@@ -543,7 +545,7 @@ const GIT_COMMIT: string | undefined = (() => {
     const out = childProcess.execFileSync(
       'git',
       ['rev-parse', '--short=8', 'HEAD'],
-      {cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', timeout: 1000}
+      {cwd: util.ROOT, encoding: 'utf8', timeout: 1000}
     ).trim();
     return /^[0-9a-f]{7,12}$/i.test(out) ? out.slice(0, 8) : undefined;
   } catch {
@@ -600,15 +602,15 @@ async function probeHttpsUrl(url: string, label: string): Promise<NetworkProbe> 
   }
 }
 
-function readTlsCertStatus(certPath: string, nowSec: number): TlsCertStatus | undefined {
+function readTlsCertStatus(certPath: string, nowSeconds: number): TlsCertStatus | undefined {
   try {
     if (!fs.existsSync(certPath)) return undefined;
     const pem = fs.readFileSync(certPath, 'utf8');
     const cert = new crypto.X509Certificate(pem);
     const expiresAt = Math.floor(Date.parse(cert.validTo) / 1000);
     if (!Number.isFinite(expiresAt)) return undefined;
-    const daysRemaining = Math.floor((expiresAt - nowSec) / 86400);
-    return {expiresAt, daysRemaining, checkedAt: nowSec};
+    const daysRemaining = Math.floor((expiresAt - nowSeconds) / 86400);
+    return {expiresAt, daysRemaining, checkedAt: nowSeconds};
   } catch {
     return undefined;
   }
@@ -618,7 +620,7 @@ export function probeTlsCertEndpoint(
   host: string,
   port: number,
   servername: string,
-  nowSec: number,
+  nowSeconds: number,
   timeoutMillis = PROBE_TIMEOUT_MILLIS
 ): Promise<TlsCertStatus | undefined> {
   return new Promise(resolve => {
@@ -646,8 +648,8 @@ export function probeTlsCertEndpoint(
           finish(undefined);
           return;
         }
-        const daysRemaining = Math.floor((expiresAt - nowSec) / 86400);
-        finish({expiresAt, daysRemaining, checkedAt: nowSec});
+        const daysRemaining = Math.floor((expiresAt - nowSeconds) / 86400);
+        finish({expiresAt, daysRemaining, checkedAt: nowSeconds});
       } catch {
         finish(undefined);
       }
@@ -695,7 +697,7 @@ export class TrafficTracker {
     next: (err?: unknown) => void
   ) => void {
     return (req, res, next) => {
-      const startMs = Date.now();
+      const startMillis = Date.now();
       const rawUrl = req.url ?? '/';
       const pathname = rawUrl.split('?')[0];
       const realIp = typeof req.headers['x-real-ip'] === 'string'
@@ -715,7 +717,7 @@ export class TrafficTracker {
       res.once('finish', () => {
         this.record({
           status: res.statusCode,
-          durationMillis: Math.max(0, Date.now() - startMs),
+          durationMillis: Math.max(0, Date.now() - startMillis),
           ip,
           pathname,
           isStream,
@@ -734,8 +736,8 @@ export class TrafficTracker {
     isStream?: boolean;
     isInternalArena?: boolean;
   }): void {
-    const nowSec = this.now();
-    const minute = Math.floor(nowSec / 60);
+    const nowSeconds = this.now();
+    const minute = Math.floor(nowSeconds / 60);
     const slot = ((minute % 60) + 60) % 60;
     const bucket = this.buckets[slot];
     if (bucket.minute !== minute) {
@@ -754,7 +756,7 @@ export class TrafficTracker {
         bucket.errors4xx++;
       } else if (input.status >= 500) {
         bucket.errors5xx++;
-        this.last5xx = {at: nowSec, path: input.pathname, status: input.status};
+        this.last5xx = {at: nowSeconds, path: input.pathname, status: input.status};
       }
       if (!input.isStream) {
         if (this.latencies.length < MAX_LATENCY_SAMPLES) {
@@ -766,25 +768,25 @@ export class TrafficTracker {
       }
       if (input.ip && !input.isStream) {
         if (this.visitors.size >= MAX_TRACKED_VISITORS && !this.visitors.has(input.ip)) {
-          this.pruneVisitors(nowSec);
+          this.pruneVisitors(nowSeconds);
         }
         if (this.visitors.size < MAX_TRACKED_VISITORS || this.visitors.has(input.ip)) {
-          this.visitors.set(input.ip, nowSec);
+          this.visitors.set(input.ip, nowSeconds);
         }
       }
     }
   }
 
-  private pruneVisitors(nowSec: number): void {
-    const cutoff = nowSec - VISITOR_WINDOW_SECONDS;
+  private pruneVisitors(nowSeconds: number): void {
+    const cutoff = nowSeconds - VISITOR_WINDOW_SECONDS;
     for (const [ip, seen] of this.visitors) {
       if (seen < cutoff) this.visitors.delete(ip);
     }
   }
 
-  snapshot(sse: SseViewerCounts, nowSec = this.now()): TrafficMetrics {
-    this.pruneVisitors(nowSec);
-    const currentMinute = Math.floor(nowSec / 60);
+  snapshot(sse: SseViewerCounts, nowSeconds = this.now()): TrafficMetrics {
+    this.pruneVisitors(nowSeconds);
+    const currentMinute = Math.floor(nowSeconds / 60);
     const cutoffMinute = currentMinute - 59;
     let requests1m = 0;
     let requests1h = 0;
@@ -812,7 +814,7 @@ export class TrafficTracker {
       p95LatencyMillis = Math.round(sorted[p95Index]);
     }
 
-    const last5xx = this.last5xx && nowSec - this.last5xx.at <= 3600 ? this.last5xx : undefined;
+    const last5xx = this.last5xx && nowSeconds - this.last5xx.at <= 3600 ? this.last5xx : undefined;
     return {
       sse,
       activeVisitors5m: this.visitors.size,
@@ -838,22 +840,22 @@ export interface VpsMonitorOptions {
 }
 
 export interface LinuxDiskRateState {
-  prev?: {atMs: number; sample: ProcDiskSample};
-  rates?: {readBytesPerSec: number; writeBytesPerSec: number; iops: number; busyPct: number};
+  prev?: {atMillis: number; sample: ProcDiskSample};
+  rates?: {readBytesPerSecond: number; writeBytesPerSecond: number; iops: number; busyPct: number};
 }
 
 export function advanceLinuxDiskRates(
   state: LinuxDiskRateState,
   cur: ProcDiskSample,
-  nowMs: number
+  nowMillis: number
 ): LinuxDiskRateState['rates'] {
   if (state.prev?.sample.name !== cur.name) {
-    state.prev = {atMs: nowMs, sample: cur};
+    state.prev = {atMillis: nowMillis, sample: cur};
     state.rates = undefined;
     return undefined;
   }
-  const dtSec = (nowMs - state.prev.atMs) / 1000;
-  if (dtSec < 0.5) {
+  const dtSeconds = (nowMillis - state.prev.atMillis) / 1000;
+  if (dtSeconds < 0.5) {
     // Keep the previous baseline and most recent rates during sub-500ms bursts (e.g. /admin load
     // immediately followed by /api/admin/stream connect) so rates are never erased.
     return state.rates;
@@ -864,39 +866,39 @@ export function advanceLinuxDiskRates(
     Math.max(0, cur.writesCompleted - state.prev.sample.writesCompleted);
   const dTicks = Math.max(0, cur.ioTicksMillis - state.prev.sample.ioTicksMillis);
   state.rates = {
-    readBytesPerSec: Math.round((dReadSec * 512) / dtSec),
-    writeBytesPerSec: Math.round((dWriteSec * 512) / dtSec),
-    iops: Math.round(dOps / dtSec),
-    busyPct: Math.min(100, Math.round((dTicks / (dtSec * 1000)) * 100)),
+    readBytesPerSecond: Math.round((dReadSec * 512) / dtSeconds),
+    writeBytesPerSecond: Math.round((dWriteSec * 512) / dtSeconds),
+    iops: Math.round(dOps / dtSeconds),
+    busyPct: Math.min(100, Math.round((dTicks / (dtSeconds * 1000)) * 100)),
   };
-  state.prev = {atMs: nowMs, sample: cur};
+  state.prev = {atMillis: nowMillis, sample: cur};
   return state.rates;
 }
 
 export interface NetRateState {
-  prev?: {atMs: number; sample: NetCounterSample};
-  rates?: {rxBytesPerSec: number; txBytesPerSec: number};
+  prev?: {atMillis: number; sample: NetCounterSample};
+  rates?: {rxBytesPerSecond: number; txBytesPerSecond: number};
 }
 
 export function advanceNetRates(
   state: NetRateState,
   cur: NetCounterSample,
-  nowMs: number
+  nowMillis: number
 ): NetRateState['rates'] {
   if (state.prev?.sample.iface !== cur.iface) {
-    state.prev = {atMs: nowMs, sample: cur};
+    state.prev = {atMillis: nowMillis, sample: cur};
     state.rates = undefined;
     return undefined;
   }
-  const dtSec = (nowMs - state.prev.atMs) / 1000;
-  if (dtSec < 0.5) {
+  const dtSeconds = (nowMillis - state.prev.atMillis) / 1000;
+  if (dtSeconds < 0.5) {
     return state.rates;
   }
   state.rates = {
-    rxBytesPerSec: Math.round(Math.max(0, cur.rxBytes - state.prev.sample.rxBytes) / dtSec),
-    txBytesPerSec: Math.round(Math.max(0, cur.txBytes - state.prev.sample.txBytes) / dtSec),
+    rxBytesPerSecond: Math.round(Math.max(0, cur.rxBytes - state.prev.sample.rxBytes) / dtSeconds),
+    txBytesPerSecond: Math.round(Math.max(0, cur.txBytes - state.prev.sample.txBytes) / dtSeconds),
   };
-  state.prev = {atMs: nowMs, sample: cur};
+  state.prev = {atMillis: nowMillis, sample: cur};
   return state.rates;
 }
 
@@ -970,14 +972,14 @@ export class VpsHostMonitor {
   }
 
   async refreshTlsCert(): Promise<TlsCertStatus | undefined> {
-    const nowSec = this.now();
-    let cert = readTlsCertStatus(this.tlsCertPath, nowSec);
+    const nowSeconds = this.now();
+    let cert = readTlsCertStatus(this.tlsCertPath, nowSeconds);
     if (!cert && this.tlsProbe) {
       cert = await probeTlsCertEndpoint(
         this.tlsProbe.host,
         this.tlsProbe.port,
         this.tlsProbe.servername,
-        nowSec
+        nowSeconds
       );
     }
     this.cachedTlsCert = cert;
@@ -1009,8 +1011,8 @@ export class VpsHostMonitor {
     arenaFaults24h: ArenaFaultsSummary;
     lastHeartbeatAt?: number;
   }): VpsSystemInfo {
-    const nowSec = this.now();
-    const nowMs = Date.now();
+    const nowSeconds = this.now();
+    const nowMillis = Date.now();
     const [load1, load5, load15] = os.loadavg();
     const load: LoadMetrics = {
       load1: Number(load1.toFixed(2)),
@@ -1022,13 +1024,13 @@ export class VpsHostMonitor {
     };
 
     const memory = this.sampleMemory();
-    const disks = this.sampleDisks(nowMs);
-    const network = this.sampleNetwork(nowSec, nowMs, input.lastHeartbeatAt);
-    const updates = this.sampleUpdates(nowSec);
-    const backups = this.sampleBackups(nowSec);
+    const disks = this.sampleDisks(nowMillis);
+    const network = this.sampleNetwork(nowSeconds, nowMillis, input.lastHeartbeatAt);
+    const updates = this.sampleUpdates(nowSeconds);
+    const backups = this.sampleBackups(nowSeconds);
     const database = statDatabaseFiles(this.dbPath);
     const traffic = this.traffic
-      ? this.traffic.snapshot(input.sse, nowSec)
+      ? this.traffic.snapshot(input.sse, nowSeconds)
       : {
         sse: input.sse,
         activeVisitors5m: 0,
@@ -1039,18 +1041,18 @@ export class VpsHostMonitor {
         errors5xx1h: 0,
       };
     if (!this.tlsChecked) {
-      this.cachedTlsCert = readTlsCertStatus(this.tlsCertPath, nowSec);
+      this.cachedTlsCert = readTlsCertStatus(this.tlsCertPath, nowSeconds);
       this.tlsChecked = true;
     }
     const tlsCert = this.cachedTlsCert
       ? {
         ...this.cachedTlsCert,
-        daysRemaining: Math.floor((this.cachedTlsCert.expiresAt - nowSec) / 86400),
+        daysRemaining: Math.floor((this.cachedTlsCert.expiresAt - nowSeconds) / 86400),
       }
       : undefined;
 
     return {
-      collectedAt: nowSec,
+      collectedAt: nowSeconds,
       hostname: os.hostname(),
       platform: `${os.type()} ${os.release()} (${os.arch()})`,
       nodeVersion: process.version,
@@ -1101,7 +1103,7 @@ export class VpsHostMonitor {
     };
   }
 
-  private sampleDisks(nowMs: number): DiskMetrics[] {
+  private sampleDisks(nowMillis: number): DiskMetrics[] {
     const rootDisk = statMountSpace('/', 'Root', true);
     if (process.platform === 'linux') {
       try {
@@ -1112,10 +1114,10 @@ export class VpsHostMonitor {
         const dev = pickRootLinuxDisk(stats, mounts);
         const cur = dev ? stats.get(dev) : undefined;
         if (cur) {
-          const rates = advanceLinuxDiskRates(this.diskRateState, cur, nowMs);
+          const rates = advanceLinuxDiskRates(this.diskRateState, cur, nowMillis);
           if (rates) {
-            rootDisk.readBytesPerSec = rates.readBytesPerSec;
-            rootDisk.writeBytesPerSec = rates.writeBytesPerSec;
+            rootDisk.readBytesPerSecond = rates.readBytesPerSecond;
+            rootDisk.writeBytesPerSecond = rates.writeBytesPerSecond;
             rootDisk.iops = rates.iops;
             rootDisk.busyPct = rates.busyPct;
           }
@@ -1126,8 +1128,8 @@ export class VpsHostMonitor {
   }
 
   private sampleNetwork(
-    nowSec: number,
-    nowMs: number,
+    nowSeconds: number,
+    nowMillis: number,
     lastHeartbeatAt?: number
   ): NetworkMetrics {
     const out: NetworkMetrics = {};
@@ -1138,10 +1140,10 @@ export class VpsHostMonitor {
           out.iface = cur.iface;
           out.rxErrors = cur.rxErrors;
           out.txErrors = cur.txErrors;
-          const rates = advanceNetRates(this.netRateState, cur, nowMs);
+          const rates = advanceNetRates(this.netRateState, cur, nowMillis);
           if (rates) {
-            out.rxBytesPerSec = rates.rxBytesPerSec;
-            out.txBytesPerSec = rates.txBytesPerSec;
+            out.rxBytesPerSecond = rates.rxBytesPerSecond;
+            out.txBytesPerSecond = rates.txBytesPerSecond;
           }
         }
       } catch {}
@@ -1152,16 +1154,16 @@ export class VpsHostMonitor {
         out.internal = {
           target: 'SSH tunnel :2222',
           ok: tunnelOpen,
-          checkedAt: nowSec,
+          checkedAt: nowSeconds,
           ...(!tunnelOpen ? {error: 'not listening'} : {}),
         };
       } catch {}
     } else if (lastHeartbeatAt !== undefined) {
-      const age = Math.max(0, nowSec - lastHeartbeatAt);
+      const age = Math.max(0, nowSeconds - lastHeartbeatAt);
       out.internal = {
         target: 'Arena heartbeat',
         ok: age < 15 * 60,
-        checkedAt: nowSec,
+        checkedAt: nowSeconds,
         ...(age >= 15 * 60 ? {error: `stale (${Math.floor(age / 60)}m)`} : {}),
       };
     }
@@ -1172,7 +1174,7 @@ export class VpsHostMonitor {
     return out;
   }
 
-  private sampleUpdates(nowSec: number): UpdateStatus | undefined {
+  private sampleUpdates(nowSeconds: number): UpdateStatus | undefined {
     if (process.platform !== 'linux') return undefined;
     let text: string | undefined;
     try {
@@ -1184,12 +1186,12 @@ export class VpsHostMonitor {
     try {
       rebootRequired = fs.existsSync(VPS_REBOOT_PATH);
     } catch {}
-    return parseUbuntuUpdates(text, rebootRequired, nowSec);
+    return parseUbuntuUpdates(text, rebootRequired, nowSeconds);
   }
 
-  private sampleBackups(nowSec: number): BackupStatus {
+  private sampleBackups(nowSeconds: number): BackupStatus {
     const windowStart = latestScheduledWindowStart(
-      nowSec,
+      nowSeconds,
       VPS_BACKUP_HOUR_UTC,
       VPS_BACKUP_MINUTE_UTC,
       true
@@ -1203,13 +1205,13 @@ export class VpsHostMonitor {
     if (
       this.cachedBackups &&
       this.lastBackupScanAt !== undefined &&
-      nowSec - this.lastBackupScanAt < BACKUP_RETRY_SECONDS
+      nowSeconds - this.lastBackupScanAt < BACKUP_RETRY_SECONDS
     ) {
       return this.cachedBackups;
     }
     const scanned = scanLatestBackup(this.backupDir, /^arena-.*\.sqlite\.zst$/);
-    this.cachedBackups = {...scanned, checkedAt: nowSec};
-    this.lastBackupScanAt = nowSec;
+    this.cachedBackups = {...scanned, checkedAt: nowSeconds};
+    this.lastBackupScanAt = nowSeconds;
     return this.cachedBackups;
   }
 }
@@ -1222,7 +1224,6 @@ export interface ArenaMonitorOptions {
   archiveStatusPath?: string;
   updatesStatusPath?: string;
   requireGcsSync?: boolean;
-  devMode?: boolean;
   now?: () => number;
 }
 
@@ -1256,8 +1257,8 @@ export class ArenaHostMonitor {
   private defaultIface: string | undefined;
   private rootDiskName: string | undefined;
   private archiveDiskName: string | undefined;
-  private prevIostat: {atMs: number; disks: Map<string, MacIostatSample>} | undefined;
-  private lastIostatRates: Map<string, {ioBytesPerSec: number; iops: number}>;
+  private prevIostat: {atMillis: number; disks: Map<string, MacIostatSample>} | undefined;
+  private lastIostatRates: Map<string, {ioBytesPerSecond: number; iops: number}>;
   private readonly netRateState: NetRateState;
   private lastFastAt: number | undefined;
   private lastSlowAt: number | undefined;
@@ -1302,22 +1303,22 @@ export class ArenaHostMonitor {
   // Called explicitly between matches and during idle loops so telemetry subprocesses never
   // execute mid-battle.
   async maybeRefresh(): Promise<void> {
-    const nowSec = this.now();
+    const nowSeconds = this.now();
     const tasks: Array<Promise<unknown>> = [];
-    const needBackup = this.shouldScanBackups(nowSec);
+    const needBackup = this.shouldScanBackups(nowSeconds);
     if (needBackup) {
-      this.refreshBackups(nowSec);
+      this.refreshBackups(nowSeconds);
     }
     const needFast = this.lastFastAt === undefined ||
-      nowSec - this.lastFastAt >= FAST_SAMPLE_SECONDS;
+      nowSeconds - this.lastFastAt >= FAST_SAMPLE_SECONDS;
     const needSlow = this.lastSlowAt === undefined ||
-      nowSec - this.lastSlowAt >= SLOW_PROBE_SECONDS;
+      nowSeconds - this.lastSlowAt >= SLOW_PROBE_SECONDS;
     if (needSlow) {
-      this.lastSlowAt = nowSec;
+      this.lastSlowAt = nowSeconds;
       tasks.push(this.refreshSlow().catch(() => {}));
     }
     if (needFast) {
-      this.lastFastAt = nowSec;
+      this.lastFastAt = nowSeconds;
       tasks.push(this.refreshFast(true).catch(() => {}));
     }
     if (tasks.length > 0) {
@@ -1375,12 +1376,12 @@ export class ArenaHostMonitor {
   // between paused turns during long matches, refreshes all fast host probes (`~11ms` warm on
   // macOS, skipping one-time `diskutil`/`route` discovery) at most once per `FAST_SAMPLE_SECONDS`.
   async takePendingSnapshot(): Promise<ArenaSystemInfo | undefined> {
-    const nowSec = this.now();
+    const nowSeconds = this.now();
     if (
       this.latest &&
-      (this.lastFastAt === undefined || nowSec - this.lastFastAt >= FAST_SAMPLE_SECONDS)
+      (this.lastFastAt === undefined || nowSeconds - this.lastFastAt >= FAST_SAMPLE_SECONDS)
     ) {
-      this.lastFastAt = nowSec;
+      this.lastFastAt = nowSeconds;
       await this.refreshFast(false).catch(() => {});
     }
     const snap = this.getSnapshot();
@@ -1419,9 +1420,9 @@ export class ArenaHostMonitor {
     }
   }
 
-  private shouldScanBackups(nowSec: number): boolean {
+  private shouldScanBackups(nowSeconds: number): boolean {
     const windowStart = latestScheduledWindowStart(
-      nowSec,
+      nowSeconds,
       ARENA_MAINTENANCE_HOUR_UTC,
       ARENA_MAINTENANCE_MINUTE_UTC,
       true
@@ -1437,14 +1438,14 @@ export class ArenaHostMonitor {
     }
     if (
       this.lastBackupScanAt !== undefined &&
-      nowSec - this.lastBackupScanAt < BACKUP_RETRY_SECONDS
+      nowSeconds - this.lastBackupScanAt < BACKUP_RETRY_SECONDS
     ) {
       return false;
     }
     return true;
   }
 
-  refreshBackups(nowSec = this.now()): BackupStatus {
+  refreshBackups(nowSeconds = this.now()): BackupStatus {
     const archiveMounted = this.isArchiveMounted();
     const scannedBackup = archiveMounted
       ? scanLatestBackup(
@@ -1463,10 +1464,10 @@ export class ArenaHostMonitor {
       backupCount: scannedBackup.backupCount,
       ...(archiveStatus?.gcsSyncedAt ? {lastArchiveUploadAt: archiveStatus.gcsSyncedAt} : {}),
       ...(archiveStatus?.error ? {archiveError: archiveStatus.error} : {}),
-      checkedAt: nowSec,
+      checkedAt: nowSeconds,
     };
     this.cachedBackups = backups;
-    this.lastBackupScanAt = nowSec;
+    this.lastBackupScanAt = nowSeconds;
     if (this.latest) {
       this.latest = {
         ...this.latest,
@@ -1479,9 +1480,9 @@ export class ArenaHostMonitor {
   }
 
   async refreshFast(allowDiscovery = true): Promise<ArenaSystemInfo> {
-    const nowSec = this.now();
-    this.lastFastAt = nowSec;
-    const nowMs = Date.now();
+    const nowSeconds = this.now();
+    this.lastFastAt = nowSeconds;
+    const nowMillis = Date.now();
     const [load1, load5, load15] = os.loadavg();
     const load: LoadMetrics = {
       load1: Number(load1.toFixed(2)),
@@ -1525,7 +1526,7 @@ export class ArenaHostMonitor {
         }
         if (!this.defaultIface) {
           const routeOut = await execTextAsync('route', ['-n', 'get', 'default']);
-          const m = routeOut ? /interface:\s*(\S+)/.exec(routeOut) : null;
+          const m = routeOut ? /interface:\s*(\S+)/.exec(routeOut) : undefined;
           if (m) this.defaultIface = m[1];
         }
       }
@@ -1555,10 +1556,10 @@ export class ArenaHostMonitor {
       if (iostatOut) {
         const curDisks = parseMacIostat(iostatOut);
         if (!this.prevIostat) {
-          this.prevIostat = {atMs: nowMs, disks: curDisks};
+          this.prevIostat = {atMillis: nowMillis, disks: curDisks};
         } else {
-          const dtSec = (nowMs - this.prevIostat.atMs) / 1000;
-          if (dtSec >= 0.5) {
+          const dtSeconds = (nowMillis - this.prevIostat.atMillis) / 1000;
+          if (dtSeconds >= 0.5) {
             const updateIo = (target: DiskMetrics, diskName?: string) => {
               if (!diskName) return;
               const cur = curDisks.get(diskName);
@@ -1567,21 +1568,21 @@ export class ArenaHostMonitor {
               const dMb = Math.max(0, cur.megabytes - prev.megabytes);
               const dXfrs = Math.max(0, cur.transfers - prev.transfers);
               const rates = {
-                ioBytesPerSec: Math.round((dMb * 1024 * 1024) / dtSec),
-                iops: Math.round(dXfrs / dtSec),
+                ioBytesPerSecond: Math.round((dMb * 1024 * 1024) / dtSeconds),
+                iops: Math.round(dXfrs / dtSeconds),
               };
               this.lastIostatRates.set(diskName, rates);
-              target.ioBytesPerSec = rates.ioBytesPerSec;
+              target.ioBytesPerSecond = rates.ioBytesPerSecond;
               target.iops = rates.iops;
             };
             updateIo(rootDisk, this.rootDiskName);
             if (archiveMounted) updateIo(archiveDisk, this.archiveDiskName);
-            this.prevIostat = {atMs: nowMs, disks: curDisks};
+            this.prevIostat = {atMillis: nowMillis, disks: curDisks};
           } else {
             const reuseIo = (target: DiskMetrics, diskName?: string) => {
               const cached = diskName ? this.lastIostatRates.get(diskName) : undefined;
               if (!cached) return;
-              target.ioBytesPerSec = cached.ioBytesPerSec;
+              target.ioBytesPerSecond = cached.ioBytesPerSecond;
               target.iops = cached.iops;
             };
             reuseIo(rootDisk, this.rootDiskName);
@@ -1596,18 +1597,18 @@ export class ArenaHostMonitor {
           network.iface = curNet.iface;
           network.rxErrors = curNet.rxErrors;
           network.txErrors = curNet.txErrors;
-          const rates = advanceNetRates(this.netRateState, curNet, nowMs);
+          const rates = advanceNetRates(this.netRateState, curNet, nowMillis);
           if (rates) {
-            network.rxBytesPerSec = rates.rxBytesPerSec;
-            network.txBytesPerSec = rates.txBytesPerSec;
+            network.rxBytesPerSecond = rates.rxBytesPerSecond;
+            network.txBytesPerSecond = rates.txBytesPerSecond;
           }
         }
       }
     }
 
-    const backups = this.cachedBackups ?? this.refreshBackups(nowSec);
+    const backups = this.cachedBackups ?? this.refreshBackups(nowSeconds);
     this.latest = {
-      collectedAt: nowSec,
+      collectedAt: nowSeconds,
       hostname: os.hostname(),
       platform: `${os.type()} ${os.release()} (${os.arch()})`,
       nodeVersion: process.version,

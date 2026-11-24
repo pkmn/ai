@@ -700,7 +700,6 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     teamPool?: string[];
     smokeTeams?: [string, string];
     rootName: string;
-    baseline?: {command: string; args: string[]};
     entrant?: {command: string; args: string[]};
   }) {
     const alerts: serverArena.StaffAlertPayload[] = [];
@@ -747,10 +746,6 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
     } as unknown as serverArena.Client;
 
     const rootDir = path.join(tmpDir, opts.rootName);
-    const baseline = opts.baseline ?? {
-      command: relayBin,
-      args: [root('arena', 'bin', 'baseline')],
-    };
     const entrantCmd = opts.entrant ?? {
       command: relayBin,
       args: [defaultAgentScript],
@@ -762,8 +757,8 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         displayName: 'Baseline',
         vmHost: '127.0.0.1',
         controlSocket: '',
-        localCommand: baseline.command,
-        localArgs: baseline.args,
+        localCommand: relayBin,
+        localArgs: [root('arena', 'bin', 'baseline')],
       },
       rootDir,
       prepareSubmissionRootfs: () => 1024,
@@ -805,7 +800,6 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
       format: 'gen9randombattle',
       team: 'random',
       rootName: 'gcp-smoke-double-crash',
-      baseline: {command: process.execPath, args: ['-e', 'process.exit(1)']},
       entrant: {command: process.execPath, args: ['-e', 'process.exit(1)']},
     });
     await h.coord.processPendingSubmissions('92');

@@ -132,7 +132,6 @@ export interface ActivateStagedVersionInput {
 export interface DiscardStagedVersionInput {
   versionId: number;
   agentId: number;
-  now?: number;
 }
 
 export interface ApplySubmissionStatusResult {

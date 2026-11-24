@@ -210,7 +210,6 @@ export async function runDaemon(opts: {
           return false;
         }
       },
-      devMode: isDev,
     })
     : undefined;
   if (hostMonitor) {

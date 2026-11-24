@@ -24,7 +24,12 @@ export const PUBLIC_DIR = util.root('public');
 export const STATIC_DIR =
   process.env.MOCK === '1' ? util.root('.mock', 'static') : util.root('static');
 
-export const ARENA_STYLE = fs.readFileSync(util.root('static', 'style', 'arena.css'), 'utf8');
+export const AI_PANEL_STYLE = fs.readFileSync(
+  util.root('static', 'style', 'ai-panel.css'),
+  'utf8'
+);
+export const ARENA_STYLE =
+  `${AI_PANEL_STYLE}\n${fs.readFileSync(util.root('static', 'style', 'arena.css'), 'utf8')}`;
 
 const SERIES_COLORS = [
   'var(--hl-symbol)',
