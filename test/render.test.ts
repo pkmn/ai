@@ -3648,11 +3648,13 @@ describe('JSON route parity & retired pool archives', () => {
     }
   });
 
-  test('renders Account navigation link on /arena/ hub', async () => {
+  test('omits redundant inline Account link on /arena/ hub', async () => {
     const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
     try {
       const html = await h.getText('/arena/');
-      expect(html).toContain('<a href="/account/">Account</a>');
+      expect(html).not.toContain('<nav aria-label="Arena">');
+      expect(html).not.toContain('<a href="/account/">Account</a>');
+      expect(html).toContain('id="account-link"');
     } finally {
       await h.close();
     }

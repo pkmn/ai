@@ -3439,9 +3439,6 @@ function renderArenaHubHtml(opts: {
 
   const arenaContent = String(
     <>
-      <nav aria-label='Arena'>
-        <a href='/account/'>Account</a>
-      </nav>
       <section id='overview' className='arena-blurb'>
         {util.raw(blurbHtml)}
       </section>
