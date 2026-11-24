@@ -327,22 +327,29 @@ export class Auth {
     return this.resolveSession(req)?.session;
   }
 
+  private resolveGitHubSession(
+    session: Session
+  ): {login: string; githubId: number} | undefined {
+    if (!session.github) return undefined;
+    if (this.db) {
+      if (session.github.id > 0) {
+        const byId = this.db.getDeveloperByGitHubId(session.github.id);
+        if (byId) return {login: byId.githubLogin, githubId: byId.githubId ?? session.github.id};
+      }
+      const byLogin = this.db.getDeveloperByGitHub(session.github.login);
+      if (byLogin?.githubId !== undefined && byLogin.githubId !== session.github.id) {
+        return undefined;
+      }
+      if (byLogin) {
+        return {login: session.github.login, githubId: byLogin.githubId ?? session.github.id};
+      }
+    }
+    return {login: session.github.login, githubId: session.github.id};
+  }
+
   getGitHubUser(req: http.IncomingMessage): string | undefined {
     const session = this.getSession(req);
-    if (session?.github) {
-      if (this.db) {
-        if (session.github.id > 0) {
-          const byId = this.db.getDeveloperByGitHubId(session.github.id);
-          if (byId) return byId.githubLogin;
-        }
-        const byLogin = this.db.getDeveloperByGitHub(session.github.login);
-        if (byLogin?.githubId !== undefined && byLogin.githubId !== session.github.id) {
-          return undefined;
-        }
-      }
-      return session.github.login;
-    }
-    return undefined;
+    return session ? this.resolveGitHubSession(session)?.login : undefined;
   }
 
   isAuthorizedGitHub(login: string | undefined): boolean {
@@ -370,13 +377,12 @@ export class Auth {
     if (!session?.github && !session?.discord) {
       return {authenticated: false};
     }
-    const ghLogin = this.getGitHubUser(req);
-    if (ghLogin && session.github) {
-      const githubId = this.db?.getDeveloperByGitHub(ghLogin)?.githubId ?? session.github.id;
+    const gh = this.resolveGitHubSession(session);
+    if (gh) {
       return {
         authenticated: true,
-        username: ghLogin,
-        ...(githubId > 0 ? {avatarUrl: githubAvatarUrl(githubId)} : {}),
+        username: gh.login,
+        ...(gh.githubId > 0 ? {avatarUrl: githubAvatarUrl(gh.githubId)} : {}),
       };
     }
     if (session.discord && /^\d+$/.test(session.discord.id)) {

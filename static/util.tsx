@@ -522,7 +522,9 @@ export const TABLE_PAGER_SCRIPT = `
     const wrap = pager.previousElementSibling;
     const tbody = wrap ? wrap.querySelector('tbody') : undefined;
     if (!tbody) return;
-    const rows = Array.from(tbody.querySelectorAll('tr'));
+    const rows = Array.from(tbody.querySelectorAll('tr')).filter(
+      r => !r.classList.contains('diag-replay-row') && !r.classList.contains('battle-detail-row')
+    );
     const prevBtn = pager.querySelector('[data-pager-prev]');
     const nextBtn = pager.querySelector('[data-pager-next]');
     const infoEl = pager.querySelector('[data-pager-info]');
@@ -536,7 +538,20 @@ export const TABLE_PAGER_SCRIPT = `
       if (page < 1) page = 1;
       const start = (page - 1) * pageSize;
       rows.forEach((row, idx) => {
-        row.classList.toggle('hide', idx < start || idx >= start + pageSize);
+        const hidden = idx < start || idx >= start + pageSize;
+        row.classList.toggle('hide', hidden);
+        if (hidden) {
+          const next = row.nextElementSibling;
+          if (next && next.classList.contains('diag-replay-row')) {
+            next.remove();
+            row.classList.remove('expanded');
+            row.setAttribute('aria-expanded', 'false');
+          } else if (next && next.classList.contains('battle-detail-row')) {
+            next.classList.add('hide');
+            row.classList.remove('expanded');
+            row.setAttribute('aria-expanded', 'false');
+          }
+        }
       });
       pager.classList.toggle('hide', totalPages <= 1);
       if (prevBtn) prevBtn.disabled = page <= 1;

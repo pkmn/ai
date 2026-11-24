@@ -642,6 +642,7 @@ function renderVersionsPane(opts: {
               return [
                 <tr
                   className={classes.join(' ')}
+                  tabIndex={0}
                   data-vrow={e.version}
                   aria-expanded='false'
                 >
@@ -1502,6 +1503,11 @@ function buildProfileScript(
     const syncUrl = hashOverride => {
       if (!history.replaceState) return;
       const url = new URL(location.href);
+      if (curVer && curVer !== 'all') {
+        url.searchParams.set('v', curVer);
+      } else {
+        url.searchParams.delete('v');
+      }
       if (curOpp && curOpp !== 'all') {
         url.searchParams.set('vs', curOpp);
       } else {
@@ -1654,7 +1660,10 @@ function buildProfileScript(
     };
 
     if (verSelect) {
-      verSelect.addEventListener('change', () => applyStats(verSelect.value));
+      verSelect.addEventListener('change', () => {
+        applyStats(verSelect.value);
+        syncUrl();
+      });
     }
 
     if (oppSelect) {
@@ -1715,15 +1724,25 @@ function buildProfileScript(
     }
 
     if (versionsSec) {
-      versionsSec.addEventListener('click', e => {
-        if (e.target.closest('a,button,th')) return;
-        const row = e.target.closest('tr.battle-row[data-vrow]');
-        if (!row) return;
+      const toggleVersionRow = row => {
         const detail = row.nextElementSibling;
         if (!detail || !detail.classList.contains('battle-detail-row')) return;
         const open = !detail.classList.toggle('hide');
         row.classList.toggle('expanded', open);
         row.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      versionsSec.addEventListener('click', e => {
+        if (e.target.closest('a,button,th')) return;
+        const row = e.target.closest('tr.battle-row[data-vrow]');
+        if (row) toggleVersionRow(row);
+      });
+      versionsSec.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.target.closest('a,button,th')) return;
+        const row = e.target.closest('tr.battle-row[data-vrow]');
+        if (!row) return;
+        e.preventDefault();
+        toggleVersionRow(row);
       });
     }
 
@@ -1935,6 +1954,7 @@ export function buildAgentProfileDocument(opts: {
         meanRam: Math.round(e.meanRam),
         peakRam: Math.round(e.peakRam),
         ...(e.cpuMatches > 0 ? {meanCpuCores: Math.round(e.meanCpuCores * 10) / 10} : {}),
+        ...(e.supportsInfo !== undefined ? {supportsInfo: e.supportsInfo} : {}),
         faults: {
           crashes: e.crashes,
           timeouts: e.timeouts,

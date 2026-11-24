@@ -459,6 +459,7 @@ const ACCOUNT_SCRIPT = `
     const liveFrame = document.getElementById('diag-live-frame');
     let liveReady = false;
     let liveLinesSent = 0;
+    let liveKey = liveBox ? (liveBox.dataset.initialKey || '') : '';
     let livePendingLines = [];
     if (liveBox && liveBox.dataset.initialLines) {
       try {
@@ -467,8 +468,12 @@ const ACCOUNT_SCRIPT = `
       } catch {}
     }
 
-    const flushLiveLines = lines => {
+    const flushLiveLines = (lines, key) => {
       if (!liveFrame || !Array.isArray(lines) || lines.length === 0) return;
+      if (key && key !== liveKey) {
+        liveKey = key;
+        liveLinesSent = 0;
+      }
       livePendingLines = lines;
       if (!liveFrame.getAttribute('src')) {
         liveFrame.setAttribute('src', '/arena/viewer/');
@@ -567,7 +572,8 @@ const ACCOUNT_SCRIPT = `
             aiEl.classList.toggle('hide', !html);
           }
           if (Array.isArray(snap.lines) && snap.lines.length > 0) {
-            flushLiveLines(snap.lines);
+            const snapKey = String(snap.versionId || '') + ':' + String(snap.format || '');
+            flushLiveLines(snap.lines, snapKey);
           }
         } catch {}
       });
@@ -666,10 +672,7 @@ const ACCOUNT_SCRIPT = `
     };
 
     document.querySelectorAll('#history tbody tr.battle-row[data-diag-ids]').forEach(row => {
-      row.addEventListener('click', ev => {
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
+      const toggleRow = () => {
         const rawIds = row.getAttribute('data-diag-ids') || '';
         const allIds = rawIds.split(',').filter(Boolean);
         if (!allIds.length || !row.parentNode) return;
@@ -678,9 +681,11 @@ const ACCOUNT_SCRIPT = `
         if (existing && existing.classList.contains('diag-replay-row')) {
           existing.remove();
           row.classList.remove('expanded');
+          row.setAttribute('aria-expanded', 'false');
           return;
         }
         row.classList.add('expanded');
+        row.setAttribute('aria-expanded', 'true');
         const detailRow = document.createElement('tr');
         detailRow.className = 'diag-replay-row';
         const td = document.createElement('td');
@@ -702,6 +707,20 @@ const ACCOUNT_SCRIPT = `
         detailRow.appendChild(td);
         row.parentNode.insertBefore(detailRow, row.nextSibling);
         void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
+      };
+      row.addEventListener('click', ev => {
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+          return;
+        }
+        toggleRow();
+      });
+      row.addEventListener('keydown', ev => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+          return;
+        }
+        ev.preventDefault();
+        toggleRow();
       });
     });
 
@@ -791,7 +810,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                     <td><tt>{e.ladderName}</tt></td>
                     <td>
                       <code><strong>{e.version}</strong></code>
-                      {renderInfoSupportDot(e.smokeSupportsInfo)}
+                      {util.renderInfoDot(e.smokeSupportsInfo)}
                     </td>
                     <td className='num'>
                       {e.rankCurrent !== undefined
@@ -816,7 +835,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                   <td><tt>{e.ladderName}</tt></td>
                   <td>
                     <code>{e.version}</code>
-                    {renderInfoSupportDot(e.smokeSupportsInfo)}
+                    {util.renderInfoDot(e.smokeSupportsInfo)}
                   </td>
                   <td className='num muted'>—</td>
                   <td className='num'>{elo} <span className='muted'>±{ci}</span></td>
@@ -851,6 +870,9 @@ function renderLiveDiagnosticSection(
     <section
       id='live-diagnostic'
       className={liveDiagnostic ? 'live-diag-box' : 'live-diag-box hide'}
+      data-initial-key={liveDiagnostic
+        ? `${liveDiagnostic.versionId}:${liveDiagnostic.format}`
+        : undefined}
       data-initial-lines={liveDiagnostic?.lines?.length
         ? JSON.stringify(liveDiagnostic.lines)
         : undefined}
@@ -905,10 +927,6 @@ export function formatSmokeStatsText(v: db.VersionHistoryView): string | undefin
   return statsParts.length > 0 ? statsParts.join(' · ') : undefined;
 }
 
-function renderInfoSupportDot(supportsInfo?: boolean): util.Child {
-  return util.renderInfoDot(supportsInfo);
-}
-
 export function diagnosticTargetLabel(
   d: db.SmokeDiagnosticSummary,
   ladderNameById: ReadonlyMap<string, string>
@@ -923,17 +941,17 @@ export function renderDiagnosticLinks(
   ladderNameById: ReadonlyMap<string, string>,
   apiPrefix = '/api/account/diagnostics'
 ): util.Child {
-  if (!diagnostics?.length) return undefined;
-  const multi = diagnostics.length > 1;
+  const available = diagnostics?.filter(d => d.hasStderr || d.hasLog);
+  if (!available?.length) return undefined;
+  const multi = available.length > 1;
   return (
     <div className='diag-links'>
-      {diagnostics.map(d => (
+      {available.map(d => (
         <span>
           {multi && <><tt>{diagnosticTargetLabel(d, ladderNameById)}</tt>: </>}
-          <a href={`${apiPrefix}/${d.id}/stderr`}>STDERR</a>
-          {d.hasLog && (
-            <> · <a href={`${apiPrefix}/${d.id}/log?download=1`}>log</a></>
-          )}
+          {d.hasStderr && <a href={`${apiPrefix}/${d.id}/stderr`}>STDERR</a>}
+          {d.hasStderr && d.hasLog && ' · '}
+          {d.hasLog && <a href={`${apiPrefix}/${d.id}/log?download=1`}>log</a>}
         </span>
       ))}
     </div>
@@ -958,6 +976,7 @@ export function sendDiagnosticLogResponse(
     res.writeHead(200, {
       'Content-Type': 'text/plain; charset=utf-8',
       'Content-Disposition': `attachment; filename="${filename}"`,
+      'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'private, no-store',
     });
     res.end(diag.battleLog);
@@ -1011,6 +1030,7 @@ export function sendDiagnosticStderrResponse(
   res.writeHead(200, {
     'Content-Type': 'text/plain; charset=utf-8',
     'Content-Disposition': `attachment; filename="${filename}"`,
+    'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'private, no-store',
   });
   res.end(body);
@@ -1067,7 +1087,7 @@ function renderStagedSection(opts: {
             <div className='staged-head'>
               <span>
                 <strong><code>{v.version}</code></strong>
-                {renderInfoSupportDot(v.smokeSupportsInfo)} passed diagnostic testing on{' '}
+                {util.renderInfoDot(v.smokeSupportsInfo)} passed diagnostic testing on{' '}
                 <tt>{targets.join(', ')}</tt>
                 {statsText && <> <span className='muted'>({statsText})</span></>}
               </span>
@@ -1242,6 +1262,8 @@ function renderHistorySection(
               return (
                 <tr
                   className={classes.length > 0 ? classes.join(' ') : undefined}
+                  tabIndex={playableDiags.length > 0 ? 0 : undefined}
+                  aria-expanded={playableDiags.length > 0 ? 'false' : undefined}
                   data-diag-ids={playableDiags.length > 0
                     ? playableDiags.map(d => String(d.id)).join(',')
                     : undefined}
@@ -1256,7 +1278,7 @@ function renderHistorySection(
                     {isFullyActive
                       ? <code><strong>{v.version}</strong></code>
                       : <code>{v.version}</code>}
-                    {renderInfoSupportDot(v.smokeSupportsInfo)}
+                    {util.renderInfoDot(v.smokeSupportsInfo)}
                   </td>
                   <td className='wrap'><tt>{laddersContent}</tt></td>
                   <td className='wrap'>
@@ -1950,13 +1972,11 @@ export function register(app: polka.Polka, options: Options) {
     const qualifiedLadders = db.getAgentLadders(agent.id);
     const qualifiedSlots = new Set(qualifiedLadders);
     const tournamentStatuses = db.computeAgentTournamentStatuses(agent.id, now);
-    const currentLadders = db.getCurrentLadders();
-    const needsTeamsLadders = currentLadders.filter(
-      l => (l.status === 'upcoming' || l.status === 'active') &&
-        qualifiedSlots.has(l.slot) &&
-        l.team === 'pools' &&
-        !db.hasActiveLadderTeams(l.id, agent.id)
+    const allLadders = db.getLadders();
+    const currentLadders = allLadders.filter(
+      l => l.status === 'upcoming' || l.status === 'active'
     );
+    const needsTeamsLadders: db.LadderRow[] = [];
     const savedTeamsByLadder = new Map<string, number>();
     const savedTeamsJson: Record<string, {
       savedCount: number;
@@ -1966,8 +1986,16 @@ export function register(app: polka.Polka, options: Options) {
       locked: boolean;
     }> = {};
     for (const l of currentLadders) {
-      if (l.team !== 'pools' || !l.teams) continue;
+      if (l.team !== 'pools') continue;
       const locked = db.hasActiveLadderTeams(l.id, agent.id);
+      if (
+        (l.status === 'upcoming' || l.status === 'active') &&
+        qualifiedSlots.has(l.slot) &&
+        !locked
+      ) {
+        needsTeamsLadders.push(l);
+      }
+      if (!l.teams) continue;
       const savedCount = locked
         ? l.teams
         : db.getTeamsForAgentLadder(l.id, agent.id, 'saved').length;
@@ -2092,7 +2120,7 @@ export function register(app: polka.Polka, options: Options) {
       savedTeamsByLadder,
       activeEntries,
       versions,
-      allLadders: db.getLadders(),
+      allLadders,
       liveTournament,
       liveDiagnostic,
       now,
