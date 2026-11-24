@@ -800,4 +800,59 @@ describe('ConcurrentTournamentGame', () => {
       fs.rmSync(dir, {recursive: true, force: true});
     }
   });
+
+  test('ConcurrentGame stops cleanly with diagnostic-cap on outer wall cap', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-tourney-wallcap-'));
+    try {
+      const slowScript = path.join(dir, 'slow-agent.js');
+      fs.writeFileSync(
+        slowScript,
+        [
+          'const readline = require("readline");',
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req && req.wait) return;',
+          '  setTimeout(() => process.stdout.write("default\\n"), 80);',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+      const pair = await sim.sampleRandomPair('gen9randombattle', '1,2,3,4', '5,6,7,8');
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9randombattle',
+        seed: '1,2,3,4',
+        bestOf: 1,
+        maxWallMillis: 120,
+        p1: {
+          spec: {
+            agentId: 'slow-p1',
+            displayName: 'Slow P1',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: process.execPath,
+            localArgs: [slowScript],
+          },
+          teamPacked: pair.t1Packed,
+        },
+        p2: {
+          spec: {
+            agentId: 'slow-p2',
+            displayName: 'Slow P2',
+            vmHost: '127.0.0.1',
+            controlSocket: '',
+            localCommand: process.execPath,
+            localArgs: [slowScript],
+          },
+          teamPacked: pair.t2Packed,
+        },
+      }).run();
+      expect(res.endReason).toBe('diagnostic-cap');
+      expect(res.outcome).toBe('T');
+    } finally {
+      fs.rmSync(dir, {recursive: true, force: true});
+    }
+  });
 });

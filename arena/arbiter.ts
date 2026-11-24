@@ -147,7 +147,7 @@ export class TimeSlicedArenaGame {
   private readonly infoCoalescer: engine.InfoCoalescer;
 
   private battle: sim.BattleHandle | undefined = undefined;
-  private battleStartedAtMillis: number | undefined = undefined;
+  private battleStartedAtNs: bigint | undefined = undefined;
 
   private p1: SandboxedPlayer | undefined = undefined;
   private p2: SandboxedPlayer | undefined = undefined;
@@ -538,10 +538,11 @@ export class TimeSlicedArenaGame {
   }
 
   private remainingWallCapMillis(): number | undefined {
-    if (this.maxWallMillis === undefined || this.battleStartedAtMillis === undefined) {
+    if (this.maxWallMillis === undefined || this.battleStartedAtNs === undefined) {
       return undefined;
     }
-    return Math.max(0, this.maxWallMillis - (Date.now() - this.battleStartedAtMillis));
+    const elapsedMillis = Number(process.hrtime.bigint() - this.battleStartedAtNs) / 1e6;
+    return Math.max(0, this.maxWallMillis - elapsedMillis);
   }
 
   private stopForDiagnosticCap() {
@@ -711,6 +712,9 @@ export class TimeSlicedArenaGame {
             this.stopForDiagnosticCap();
             return false;
           }
+          totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
+          remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
+          if (remainingBudgetMillis > 0) continue;
         }
         totalElapsedThisDecisionMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
         remainingBudgetMillis = totalBudgetMillis - totalElapsedThisDecisionMillis;
@@ -844,7 +848,7 @@ export class TimeSlicedArenaGame {
         },
       });
 
-      this.battleStartedAtMillis = Date.now();
+      this.battleStartedAtNs = process.hrtime.bigint();
       await engine.startBattleProtocol(battle, {
         format: this.format,
         seed: this.seed,
