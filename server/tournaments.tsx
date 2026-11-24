@@ -1825,6 +1825,14 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     let standings = Array.isArray(pageInit.standings) ? pageInit.standings : [];
     let crosstable = Array.isArray(pageInit.crosstable) ? pageInit.crosstable : [];
     let broadcast = pageInit.broadcast;
+    const parseTableHash = () => {
+      const m = /^#table=(\\d+)$/i.exec(window.location.hash || '');
+      if (!m) return undefined;
+      const num = Number(m[1]);
+      return Number.isInteger(num) && num >= 1 ? num : undefined;
+    };
+    let pendingHashTable = parseTableHash();
+    let explicitTableSelection = pendingHashTable !== undefined;
     let selectedTable = Number(pageInit.selectedTable) || 1;
     let viewerReady = false;
     let pendingPayload = initialViewer;
@@ -2121,7 +2129,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       return base;
     };
 
-    const showLiveTable = (tableNum, scroll) => {
+    const showLiveTable = (tableNum, scroll, updateHash) => {
       const tables = getTables();
       if (tables.length === 0 || !liveSec) return;
       const tb = getTable(tableNum) || tables[0];
@@ -2150,10 +2158,34 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (viewerReady) {
         postToFrame(frame, {type: 'load', ...pendingPayload});
       }
+      if (updateHash && window.history && typeof window.history.replaceState === 'function') {
+        const nextHash = '#table=' + tb.table;
+        if (window.location.hash !== nextHash) {
+          window.history.replaceState(null, '', nextHash);
+        }
+      }
       if (scroll) {
-        liveSec.scrollIntoView({behavior: 'smooth'});
+        liveSec.scrollIntoView({behavior: scroll === 'auto' ? 'auto' : 'smooth'});
       }
     };
+
+    const applyTableHash = scrollMode => {
+      const hashNum = parseTableHash();
+      if (hashNum === undefined) return;
+      explicitTableSelection = true;
+      if (getTable(hashNum)) {
+        pendingHashTable = undefined;
+        showLiveTable(hashNum, scrollMode, false);
+      } else {
+        pendingHashTable = hashNum;
+      }
+    };
+    if (pendingHashTable !== undefined) {
+      applyTableHash('auto');
+    }
+    window.addEventListener('hashchange', () => {
+      applyTableHash('smooth');
+    });
 
     const pageSize = 25;
     let standingsPage = 1;
@@ -2798,7 +2830,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         const radio = target ? target.closest('input[data-table-num]') : undefined;
         if (!radio) return;
         const num = Number(radio.getAttribute('data-table-num')) || 1;
-        showLiveTable(num, false);
+        explicitTableSelection = true;
+        pendingHashTable = undefined;
+        showLiveTable(num, false, true);
       });
     }
 
@@ -2858,7 +2892,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (liveBtn) {
         ev.preventDefault();
         const num = Number(liveBtn.getAttribute('data-live-table')) || 1;
-        showLiveTable(num, true);
+        explicitTableSelection = true;
+        pendingHashTable = undefined;
+        showLiveTable(num, true, true);
         return;
       }
 
@@ -2945,12 +2981,19 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           renderCrosstable();
 
           if (broadcast && getTables().length > 0) {
-            const cur = getTable(selectedTable);
-            const liveTbs = getLiveTables();
-            const targetNum = (cur && !cur.idle && cur.live !== false)
-              ? selectedTable
-              : (liveTbs[0] ? liveTbs[0].table : getTables()[0].table);
-            showLiveTable(targetNum, false);
+            if (pendingHashTable !== undefined && getTable(pendingHashTable)) {
+              const hashNum = pendingHashTable;
+              pendingHashTable = undefined;
+              showLiveTable(hashNum, 'auto', false);
+            } else {
+              const cur = getTable(selectedTable);
+              const liveTbs = getLiveTables();
+              const keepCur = cur && (explicitTableSelection || (!cur.idle && cur.live !== false));
+              const targetNum = keepCur
+                ? selectedTable
+                : (liveTbs[0] ? liveTbs[0].table : getTables()[0].table);
+              showLiveTable(targetNum, false, false);
+            }
           } else if (liveSec) {
             liveSec.classList.add('hide');
             renderClocks(undefined);
@@ -2970,12 +3013,19 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
-          const cur = getTable(selectedTable);
-          const liveTbs = getLiveTables();
-          const targetNum = (cur && !cur.idle && cur.live !== false)
-            ? selectedTable
-            : (liveTbs[0] ? liveTbs[0].table : (getTables()[0] ? getTables()[0].table : 1));
-          showLiveTable(targetNum, false);
+          if (pendingHashTable !== undefined && getTable(pendingHashTable)) {
+            const hashNum = pendingHashTable;
+            pendingHashTable = undefined;
+            showLiveTable(hashNum, 'auto', false);
+          } else {
+            const cur = getTable(selectedTable);
+            const liveTbs = getLiveTables();
+            const keepCur = cur && (explicitTableSelection || (!cur.idle && cur.live !== false));
+            const targetNum = keepCur
+              ? selectedTable
+              : (liveTbs[0] ? liveTbs[0].table : (getTables()[0] ? getTables()[0].table : 1));
+            showLiveTable(targetNum, false, false);
+          }
         } catch {}
       });
 
@@ -2994,13 +3044,24 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           syncLiveGameRows();
           renderStandings();
           renderCrosstable();
-          const cur = getTable(selectedTable);
-          const wasHidden = !liveSec || liveSec.classList.contains('hide');
-          const curInactive = !cur || cur.idle || cur.live === false;
-          if (loaded && (loaded.table === selectedTable || wasHidden || curInactive)) {
-            showLiveTable(loaded.table, false);
+          if (pendingHashTable !== undefined && getTable(pendingHashTable)) {
+            const hashNum = pendingHashTable;
+            pendingHashTable = undefined;
+            showLiveTable(hashNum, 'auto', false);
           } else {
-            renderTableNav();
+            const cur = getTable(selectedTable);
+            const wasHidden = !liveSec || liveSec.classList.contains('hide');
+            const curInactive = !cur || cur.idle || cur.live === false;
+            const canSwitchToLoaded =
+              loaded &&
+              (loaded.table === selectedTable ||
+                wasHidden ||
+                (curInactive && !explicitTableSelection));
+            if (canSwitchToLoaded) {
+              showLiveTable(loaded.table, false, false);
+            } else {
+              renderTableNav();
+            }
           }
         } catch {}
       });

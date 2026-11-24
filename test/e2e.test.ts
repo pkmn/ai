@@ -1284,6 +1284,7 @@ describe('mock scenarios & E2E lifecycle', () => {
           expected => document.getElementById('clock-name-p1')?.textContent === expected,
           eC.agentName
         );
+        expect(new URL(livePage.url()).hash).toBe('#table=2');
         expect(await livePage.locator('#clock-name-p2').textContent()).toBe(eD.agentName);
         expect(await livePage.locator('#clock-sub-p1').textContent()).toBe('thinking…');
         expect(await livePage.locator('#clock-sub-p2').textContent()).toBe('thinking…');
@@ -1294,6 +1295,43 @@ describe('mock scenarios & E2E lifecycle', () => {
         const c2After = await livePage.locator('#clock-p2').textContent();
         expect(c1After).toBe('02:11');
         expect(c2After).toBe('02:07');
+
+        // Direct `#table=2` deep link opens Table 2 immediately without clicking, and `hashchange`
+        // switches tables cleanly.
+        const deepCtx = await browser.newContext();
+        try {
+          await deepCtx.route('**/*', async route => {
+            const u = new URL(route.request().url());
+            if (u.origin !== viewBaseUrl) {
+              await route.fulfill({status: 204, body: ''});
+              return;
+            }
+            await route.continue();
+          });
+          const deepPage = await deepCtx.newPage();
+          await deepPage.goto(
+            `${viewBaseUrl}/arena/tournaments/2/#table=2`,
+            {waitUntil: 'domcontentloaded'}
+          );
+          await deepPage.waitForFunction(
+            expected => document.getElementById('clock-name-p1')?.textContent === expected,
+            eC.agentName,
+            {timeout: 5000}
+          );
+          expect(await deepPage.locator('#clock-name-p2').textContent()).toBe(eD.agentName);
+          expect(await deepPage.locator('input[data-table-num="2"]').isChecked()).toBe(true);
+          await deepPage.evaluate(() => {
+            window.location.hash = '#table=1';
+          });
+          await deepPage.waitForFunction(
+            expected => document.getElementById('clock-name-p1')?.textContent === expected,
+            eA.agentName,
+            {timeout: 5000}
+          );
+          expect(await deepPage.locator('input[data-table-num="1"]').isChecked()).toBe(true);
+        } finally {
+          await deepCtx.close();
+        }
 
         // P1 commits its decision mid-turn (empty lines) -> P1 is committed, while P2 keeps
         // its elapsed countdown without jumping back to its 128s start-of-turn bank!
