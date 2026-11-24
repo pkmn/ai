@@ -1074,4 +1074,25 @@ describe('TimeSlicedArenaGame', () => {
       fs.rmSync(dir, {recursive: true, force: true});
     }
   });
+
+  test('BoundedStderrBuffer seals head at multi-byte UTF-8 boundary', () => {
+    const buf = new engine.BoundedStderrBuffer({headBytes: 6, tailBytes: 10});
+    // 'abcd' (4 bytes) + 'é' (2 bytes) = 6, vs 'abcde' (5 bytes) + 'é' (2 bytes) = 7:
+    // head only takes 'abcde' (5 bytes) and must seal so later ASCII never leaks before marker.
+    buf.append('abcdeé');
+    buf.append('1234567890');
+    buf.append('Z');
+    const out = buf.format();
+    expect(out.startsWith('abcde\n... [')).toBe(true);
+    expect(out.endsWith('\n234567890Z')).toBe(true);
+    expect(buf.truncatedBytes).toBe(3);
+  });
+
+  test('InfoCoalescer.clearPending discards uncommitted turn telemetry', () => {
+    const coalescer = new engine.InfoCoalescer();
+    coalescer.ingest('p1', {win: 0.72, depth: 5});
+    coalescer.clearPending('p1');
+    expect(coalescer.commitTurn('p1', 1)).toBeUndefined();
+    expect(coalescer.getCommittedByTurn().size).toBe(0);
+  });
 });

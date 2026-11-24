@@ -912,6 +912,7 @@ export class ConcurrentGame {
             req.teamPreview
           );
           if (outcome === 'auto-choose') {
+            this.infoCoalescer.clearPending(player.slot);
             player.state.thinking = false;
             await this.battle!.write(`>${player.slot} default`);
             return;
@@ -1427,6 +1428,8 @@ export class ConcurrentGame {
         ? Math.max(1, Math.round(totalP2Millis / totalP2Decisions))
         : 1;
 
+      const p1Stderr = this.p1.io.stderrBuf.format();
+      const p2Stderr = this.p2.io.stderrBuf.format();
       return {
         winner: matchWinner,
         outcome: matchOutcome,
@@ -1444,7 +1447,7 @@ export class ConcurrentGame {
           meanTurnMillis: p1MeanTurnMillis,
           peakRam: p1PeakRam,
           errors: {...this.p1.errors},
-          ...(this.p1.io.stderrBuf.format() ? {stderr: this.p1.io.stderrBuf.format()} : {}),
+          ...(p1Stderr ? {stderr: p1Stderr} : {}),
         },
         p2: {
           teamPacked: p2Team,
@@ -1456,7 +1459,7 @@ export class ConcurrentGame {
           meanTurnMillis: p2MeanTurnMillis,
           peakRam: p2PeakRam,
           errors: {...this.p2.errors},
-          ...(this.p2.io.stderrBuf.format() ? {stderr: this.p2.io.stderrBuf.format()} : {}),
+          ...(p2Stderr ? {stderr: p2Stderr} : {}),
         },
         games,
       };

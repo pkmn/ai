@@ -47,6 +47,7 @@ export interface TurnHeartbeatInfo {
   turnStartedAt: number;
   turnBudgetSeconds: number;
   incrementSeconds: number;
+  midTurnInfo?: boolean;
   omniscientLog: string;
   p1: TurnSlotInfo;
   p2: TurnSlotInfo;
@@ -158,6 +159,7 @@ export class TimeSlicedArenaGame {
     turnStartedAt: number;
     turnBudgetSeconds: number;
     incrementSeconds: number;
+    decisionStartNs?: bigint;
   } | undefined = undefined;
   private requestCount = 0;
   private lastWaveId = 0;
@@ -209,6 +211,7 @@ export class TimeSlicedArenaGame {
           turnStartedAt: this.activeTurnState.turnStartedAt,
           turnBudgetSeconds: this.activeTurnState.turnBudgetSeconds,
           incrementSeconds: this.activeTurnState.incrementSeconds,
+          midTurnInfo: true,
           omniscientLog: this.getOmniscientLog(),
           p1: this.buildTurnSlotInfo(this.p1, 0),
           p2: this.buildTurnSlotInfo(this.p2, 1),
@@ -620,6 +623,9 @@ export class TimeSlicedArenaGame {
       }
       return false;
     } finally {
+      if (this.activeTurnState) {
+        this.activeTurnState.decisionStartNs = undefined;
+      }
       if (!slotPaused) {
         this.pauseSlot(player);
       }
@@ -690,6 +696,7 @@ export class TimeSlicedArenaGame {
     this.resumeSlot(player);
     let slotPaused = false;
     const decisionStartNs = process.hrtime.bigint();
+    this.activeTurnState.decisionStartNs = decisionStartNs;
 
     try {
       while (!this.ended) {
@@ -728,6 +735,7 @@ export class TimeSlicedArenaGame {
             req.teamPreview
           );
           if (outcome === 'auto-choose') {
+            this.infoCoalescer.clearPending(player.slot);
             this.pauseSlot(player);
             slotPaused = true;
             if (this.ended) return false;
@@ -768,6 +776,9 @@ export class TimeSlicedArenaGame {
       }
       return false;
     } finally {
+      if (this.activeTurnState) {
+        this.activeTurnState.decisionStartNs = undefined;
+      }
       if (!slotPaused) {
         this.pauseSlot(player);
       }
@@ -971,10 +982,17 @@ export class TimeSlicedArenaGame {
     player: SandboxedPlayer
   ): {cpuMillis?: number; cpuCores?: number} {
     const cpuMillis = this.readCpuMillis(player);
-    const activeWallMillis =
+    let activeWallMillis =
       player.telemetry.initMillis +
       player.telemetry.totalTeamPreviewMillis +
       player.telemetry.totalTurnDecisionMillis;
+    if (
+      this.activeTurnState?.activeSlot === player.slot &&
+      this.activeTurnState.decisionStartNs !== undefined
+    ) {
+      const elapsedNs = process.hrtime.bigint() - this.activeTurnState.decisionStartNs;
+      activeWallMillis += Number(elapsedNs) / 1e6;
+    }
     const cpuCores = cpuMillis !== undefined && activeWallMillis > 0
       ? Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10)
       : undefined;
@@ -1018,6 +1036,7 @@ export class TimeSlicedArenaGame {
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
     const {cpuMillis, cpuCores} = this.computeCpuCores(player);
+    const stderr = player.io.stderrBuf.format();
     return {
       bankSeconds: Math.max(
         0,
@@ -1036,7 +1055,7 @@ export class TimeSlicedArenaGame {
       ...(info !== undefined ? {info} : {}),
       errors: {...player.errors},
       ...(player.lifecycle.exitCode !== undefined ? {exitCode: player.lifecycle.exitCode} : {}),
-      ...(player.io.stderrBuf.format() ? {stderr: player.io.stderrBuf.format()} : {}),
+      ...(stderr ? {stderr} : {}),
     };
   }
 }

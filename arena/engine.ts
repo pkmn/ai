@@ -76,14 +76,18 @@ export class BoundedStderrBuffer {
   private readonly maxHeadBytes: number;
   private readonly maxTailBytes: number;
   private headBuf: Buffer;
-  private tailBuf: Buffer;
+  private headFull: boolean;
+  private tailChunks: Buffer[];
+  private tailBytes: number;
   private droppedBytes: number;
 
   constructor(limits: StderrCaptureLimits = {headBytes: 0, tailBytes: STDERR_TAIL_BYTES}) {
     this.maxHeadBytes = Math.max(0, limits.headBytes);
     this.maxTailBytes = Math.max(0, limits.tailBytes);
     this.headBuf = Buffer.alloc(0);
-    this.tailBuf = Buffer.alloc(0);
+    this.headFull = this.maxHeadBytes === 0;
+    this.tailChunks = [];
+    this.tailBytes = 0;
     this.droppedBytes = 0;
   }
 
@@ -92,14 +96,24 @@ export class BoundedStderrBuffer {
     const sanitized = stripUnsafeControlChars(chunk);
     if (!sanitized) return;
     let remaining: Buffer = Buffer.from(sanitized, 'utf8');
-    if (this.headBuf.length < this.maxHeadBytes) {
+    if (!this.headFull) {
       const space = this.maxHeadBytes - this.headBuf.length;
       if (remaining.length <= space) {
-        this.headBuf = Buffer.concat([this.headBuf, remaining]);
+        this.headBuf = this.headBuf.length > 0
+          ? Buffer.concat([this.headBuf, remaining])
+          : remaining;
+        if (this.headBuf.length >= this.maxHeadBytes) this.headFull = true;
         return;
       }
       const prefix = sliceUtf8Prefix(remaining, space);
-      this.headBuf = Buffer.concat([this.headBuf, prefix]);
+      if (prefix.length > 0) {
+        this.headBuf = this.headBuf.length > 0
+          ? Buffer.concat([this.headBuf, prefix])
+          : Buffer.from(prefix);
+      }
+      // Seal head immediately so later small ASCII chunks never leak before the truncation marker
+      // when a multi-byte UTF-8 sequence left 1–3 unused bytes at the head boundary.
+      this.headFull = true;
       remaining = remaining.subarray(prefix.length);
     }
     if (this.maxTailBytes === 0) {
@@ -108,28 +122,43 @@ export class BoundedStderrBuffer {
     }
     if (remaining.length >= this.maxTailBytes) {
       const kept = sliceUtf8Suffix(remaining, this.maxTailBytes);
-      this.droppedBytes += this.tailBuf.length + (remaining.length - kept.length);
-      this.tailBuf = Buffer.from(kept);
+      this.droppedBytes += this.tailBytes + (remaining.length - kept.length);
+      this.tailChunks = kept.length > 0 ? [Buffer.from(kept)] : [];
+      this.tailBytes = kept.length;
       return;
     }
-    const combined = this.tailBuf.length > 0 ? Buffer.concat([this.tailBuf, remaining]) : remaining;
-    if (combined.length <= this.maxTailBytes) {
-      this.tailBuf = combined;
+    this.tailChunks.push(Buffer.from(remaining));
+    this.tailBytes += remaining.length;
+    if (this.tailBytes > this.maxTailBytes * 2 || this.tailChunks.length > 64) {
+      this.compactTail();
+    }
+  }
+
+  private compactTail(): void {
+    if (this.tailChunks.length === 0) return;
+    if (this.tailBytes <= this.maxTailBytes) {
+      if (this.tailChunks.length > 1) {
+        this.tailChunks = [Buffer.concat(this.tailChunks, this.tailBytes)];
+      }
       return;
     }
+    const combined = Buffer.concat(this.tailChunks, this.tailBytes);
     const kept = sliceUtf8Suffix(combined, this.maxTailBytes);
     this.droppedBytes += combined.length - kept.length;
-    this.tailBuf = Buffer.from(kept);
+    this.tailChunks = kept.length > 0 ? [Buffer.from(kept)] : [];
+    this.tailBytes = kept.length;
   }
 
   get truncatedBytes(): number {
+    this.compactTail();
     return this.droppedBytes;
   }
 
   format(): string {
-    if (this.headBuf.length === 0 && this.tailBuf.length === 0) return '';
+    this.compactTail();
+    if (this.headBuf.length === 0 && this.tailBytes === 0) return '';
     const head = this.headBuf.toString('utf8');
-    const tail = this.tailBuf.toString('utf8');
+    const tail = this.tailChunks.length > 0 ? this.tailChunks[0].toString('utf8') : '';
     if (this.droppedBytes === 0) return head + tail;
     if (this.maxHeadBytes === 0) return tail;
     const prefix = head.endsWith('\n') || !head ? head : `${head}\n`;
@@ -580,6 +609,12 @@ export class InfoCoalescer {
     }
     entry[slot] = finalInfo;
     return finalInfo;
+  }
+
+  clearPending(slot: PlayerSlot): void {
+    this.clearTimer(slot);
+    this.ingestsThisTurn[slot] = 0;
+    this.pending[slot] = undefined;
   }
 
   getLive(slot: PlayerSlot): protocol.PublicAgentInfo | undefined {

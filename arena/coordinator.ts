@@ -153,6 +153,7 @@ interface MirrorHeartbeatFrame {
   turnStartedAt: number;
   turnBudgetSeconds: number;
   incrementSeconds: number;
+  midTurnInfo?: boolean;
   game1Summary?: arena.LiveGameSummaryInput;
   p1: MirrorHeartbeatSide;
   p2: MirrorHeartbeatSide;
@@ -696,7 +697,10 @@ export class Coordinator {
             devMode: this.devMode,
             onTurn: info => {
               if (!this.client.sendDiagnosticLive) return;
-              const lines = info.omniscientLog
+              const p1Label = `${sub.agentName} (P1)`;
+              const p2Label = `${sub.agentName} (P2)`;
+              const lines = arbiter
+                .rewriteBlindPlayerNames(info.omniscientLog, p1Label, p2Label)
                 .split('\n')
                 .filter(l => l.length > 0);
               return this.client.sendDiagnosticLive({
@@ -714,7 +718,7 @@ export class Coordinator {
                 turnBudgetSeconds: info.turnBudgetSeconds,
                 incrementSeconds: info.incrementSeconds,
                 p1: {
-                  name: `${sub.agentName} (P1)`,
+                  name: p1Label,
                   version: sub.version,
                   bankSeconds: info.p1.bankSeconds,
                   thinking: info.activeSlot === 'p1',
@@ -722,7 +726,7 @@ export class Coordinator {
                   ...(info.p1.info !== undefined ? {info: info.p1.info} : {}),
                 },
                 p2: {
-                  name: `${sub.agentName} (P2)`,
+                  name: p2Label,
                   version: sub.version,
                   bankSeconds: info.p2.bankSeconds,
                   thinking: info.activeSlot === 'p2',
@@ -736,17 +740,22 @@ export class Coordinator {
           });
           const res = await game.run();
           const gameDurationMillis = Math.max(1, Date.now() - gameStartMillis);
+          const diagLog = arbiter.rewriteBlindPlayerNames(
+            res.omniscientLog,
+            `${sub.agentName} (P1)`,
+            `${sub.agentName} (P2)`
+          );
           const supportsInfo =
             res.p1.info !== undefined ||
             res.p2.info !== undefined ||
-            battleLogHasAiTelemetry(res.omniscientLog);
+            battleLogHasAiTelemetry(diagLog);
           diagnostics.push({
             ladderId: item.ladderId,
             format: item.format,
             turns: res.turns,
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
-            battleLog: engine.truncateDiagnosticLog(res.omniscientLog),
+            battleLog: engine.truncateDiagnosticLog(diagLog),
             supportsInfo,
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
@@ -1256,7 +1265,9 @@ export class Coordinator {
     frame: MirrorHeartbeatFrame
   ): Promise<void> {
     this.heartbeatSeq++;
-    const sysInfo = await this.getSystemInfo?.();
+    // Never spawn host probe subprocesses during mid-turn `/info` broadcasts while an agent
+    // is actively thinking on the clock.
+    const sysInfo = frame.midTurnInfo ? undefined : await this.getSystemInfo?.();
     await this.client.sendHeartbeat({
       heartbeatSeq: this.heartbeatSeq,
       matchId: match.id,
@@ -1388,6 +1399,7 @@ export class Coordinator {
           turnStartedAt: info.turnStartedAt,
           turnBudgetSeconds: info.turnBudgetSeconds,
           incrementSeconds: info.incrementSeconds,
+          ...(info.midTurnInfo ? {midTurnInfo: true} : {}),
           game1Summary,
           p1: {
             bankSeconds: info.p2.bankSeconds,
@@ -1876,6 +1888,7 @@ export class Coordinator {
             turnStartedAt: info.turnStartedAt,
             turnBudgetSeconds: info.turnBudgetSeconds,
             incrementSeconds: info.incrementSeconds,
+            ...(info.midTurnInfo ? {midTurnInfo: true} : {}),
             p1: {
               bankSeconds: info.p1.bankSeconds,
               initMillis: info.p1.initMillis,
