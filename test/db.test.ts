@@ -4752,4 +4752,27 @@ describe('discord watches', () => {
       db.close();
     }
   });
+
+  test('getLadderAdminSummaries seeks idx_matches_ladder_completed for 24h counts', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      const plan = db.db.prepare(`
+        EXPLAIN QUERY PLAN
+        SELECT
+          l.id AS ladder_id,
+          (
+            SELECT COUNT(*)
+            FROM matches m
+            WHERE m.ladder_id = l.id AND m.completed_at >= ?
+          ) AS matches_24h
+        FROM ladders l
+        WHERE l.status != 'archived'
+      `).all(1_699_913_600) as Array<{detail: string}>;
+      const details = plan.map(r => r.detail).join('\n');
+      expect(details).toContain('SEARCH m USING COVERING INDEX idx_matches_ladder_completed');
+    } finally {
+      db.close();
+    }
+  });
 });

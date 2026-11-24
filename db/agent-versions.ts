@@ -1573,7 +1573,6 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
       av.*,
       a.slug AS agent_slug,
       a.name AS agent_name,
-      (SELECT COUNT(*) FROM smoke_diagnostics sd WHERE sd.version_id = av.id) AS diag_count,
       (SELECT MAX(sd.supports_info) FROM smoke_diagnostics sd WHERE sd.version_id = av.id)
         AS max_supports_info
     FROM agent_versions av
@@ -1585,7 +1584,6 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     RawAgentVersionRow & {
       agent_slug: string;
       agent_name: string;
-      diag_count: number;
       max_supports_info: number | null;
     }
   >;
@@ -1603,7 +1601,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     smokeTeamPreviewMillis: row.smoke_team_preview_millis ?? undefined,
     smokeTurnMillis: row.smoke_turn_millis ?? undefined,
     smokePeakRam: row.smoke_peak_ram ?? undefined,
-    ...(row.diag_count > 0 ? {smokeSupportsInfo: row.max_supports_info === 1} : {}),
+    ...(row.max_supports_info !== null ? {smokeSupportsInfo: row.max_supports_info === 1} : {}),
     ladders: JSON.parse(row.ladders_json) as string[],
     tournaments: JSON.parse(row.tournaments_json) as string[],
     submittedAt: row.submitted_at,

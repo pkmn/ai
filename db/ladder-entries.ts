@@ -227,15 +227,11 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
       le.tl,
       le.ll,
       le.settled_at,
-      CASE
-        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
-          THEN (
-            SELECT MAX(sd.supports_info)
-            FROM smoke_diagnostics sd
-            WHERE sd.version_id = le.version_id
-          )
-        ELSE NULL
-      END AS smoke_supports_info
+      (
+        SELECT MAX(sd.supports_info)
+        FROM smoke_diagnostics sd
+        WHERE sd.version_id = le.version_id
+      ) AS smoke_supports_info
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
@@ -391,15 +387,11 @@ export function getAgentLadderProfileEntries(
       le.invalid_other,
       le.unavailable_choices,
       le.settled_at,
-      CASE
-        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
-          THEN (
-            SELECT MAX(sd.supports_info)
-            FROM smoke_diagnostics sd
-            WHERE sd.version_id = le.version_id
-          )
-        ELSE NULL
-      END AS supports_info
+      (
+        SELECT MAX(sd.supports_info)
+        FROM smoke_diagnostics sd
+        WHERE sd.version_id = le.version_id
+      ) AS supports_info
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     WHERE av.agent_id = ?
@@ -1599,15 +1591,11 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       l.status AS ladder_status,
       le.version_id,
       av.version,
-      CASE
-        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
-          THEN (
-            SELECT MAX(sd.supports_info)
-            FROM smoke_diagnostics sd
-            WHERE sd.version_id = le.version_id
-          )
-        ELSE NULL
-      END AS smoke_supports_info,
+      (
+        SELECT MAX(sd.supports_info)
+        FROM smoke_diagnostics sd
+        WHERE sd.version_id = le.version_id
+      ) AS smoke_supports_info,
       le.role,
       le.is_anchor,
       le.elo,
@@ -1773,11 +1761,18 @@ export function getLadderAdminSummaries(
     totalMatchRows.map(r => [r.ladder_id, r.total_matches])
   );
 
+  // Drive from active ladders so SQLite seeks `idx_matches_ladder_completed` per ladder instead
+  // of scanning every historical season's matches in `GROUP BY ladder_id`.
   const recentMatchRows = db.prepare(`
-    SELECT ladder_id, COUNT(*) AS matches_24h
-    FROM matches
-    WHERE completed_at >= ?
-    GROUP BY ladder_id
+    SELECT
+      l.id AS ladder_id,
+      (
+        SELECT COUNT(*)
+        FROM matches m
+        WHERE m.ladder_id = l.id AND m.completed_at >= ?
+      ) AS matches_24h
+    FROM ladders l
+    WHERE l.status != 'archived'
   `).all(cutoff24h) as Array<{ladder_id: string; matches_24h: number}>;
   const recentMatchesByLadder = new Map(
     recentMatchRows.map(r => [r.ladder_id, r.matches_24h])
