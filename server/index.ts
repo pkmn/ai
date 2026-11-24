@@ -249,11 +249,15 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   });
   wikiInstance.auth.register(app);
   let getArenaLastContactAt = (): number | undefined => undefined;
+  let getLiveMatch = (): arena.LiveMatch | undefined => undefined;
+  let getLiveTournamentGames = (): arena.LiveTournamentGame[] => [];
   const discordHandle = options.enableDiscord === false
     ? undefined
     : discord.register(app, {
       db,
       getArenaLastContactAt: () => getArenaLastContactAt(),
+      getLiveMatch: () => getLiveMatch(),
+      getLiveTournamentGames: () => getLiveTournamentGames(),
     });
   let notifyAdminHeartbeat = () => {};
   const arenaHandle = arena.register(app, {
@@ -264,6 +268,16 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     onHeartbeat: () => {
       notifyAdminHeartbeat();
     },
+    onLiveMatch: discordHandle
+      ? async match => {
+        await discordHandle.notifyLiveMatch(match);
+      }
+      : undefined,
+    onLiveTournamentGame: discordHandle
+      ? async game => {
+        await discordHandle.notifyLiveTournamentGame(game);
+      }
+      : undefined,
     onSubmissionStatus: discordHandle
       ? async result => {
         await discordHandle.notifySubmissionStatus(result);
@@ -289,6 +303,11 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   });
   account.register(app, {db, auth: wikiInstance.auth, arena: arenaHandle});
   getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
+  getLiveMatch = () => {
+    const state = arenaHandle.getState();
+    return state.stale ? undefined : state.live;
+  };
+  getLiveTournamentGames = () => arenaHandle.getActiveTournamentGames();
   const adminHandle = admin.register(app, {
     db,
     auth: wikiInstance.auth,

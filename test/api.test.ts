@@ -3520,4 +3520,158 @@ describe('createServerApp production HTTP hardening', () => {
         await srv.close();
       }
     });
+
+  test('fires onLiveMatch and onLiveTournamentGame once per match/game and exposes active games',
+    async () => {
+      const liveMatches: string[] = [];
+      const liveTourneyGames: arena.LiveTournamentGame[] = [];
+      db.upsertTournament({
+        id: 't-watch',
+        name: 'Watch Cup',
+        format: 'gen9championsvgc2026regmc',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 2,
+        hardware: 'L4',
+        status: 'running',
+        startsAt: 1_760_000_000,
+      });
+
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        arenaSecret: ARENA_SECRET,
+        publicDir: tmpDir,
+        now: () => 1_760_006_000,
+        onLiveMatch: match => {
+          liveMatches.push(match.matchId);
+        },
+        onLiveTournamentGame: game => {
+          liveTourneyGames.push(game);
+        },
+      });
+      const srv = await startTestServer(app);
+      try {
+        const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
+        const baseSlot = (slug: string, name: string) => ({
+          slug,
+          name,
+          version: '1.0',
+          bankSeconds: 150,
+          lastTurnMillis: 100,
+          meanTurnMillis: 100,
+          ram: 256,
+        });
+
+        // Match 1: Turn 1, Turn 2, Game 2 -> fires onLiveMatch once.
+        await client.sendHeartbeat({
+          heartbeatSeq: 1,
+          matchId: 'm-watch-1',
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          game: 1,
+          turn: 1,
+          turnStartedAt: 1_760_006_000,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 10,
+          p1: baseSlot('0-error', '0 ERROR'),
+          p2: baseSlot('foul-play', 'Foul Play'),
+        });
+        await client.sendHeartbeat({
+          heartbeatSeq: 2,
+          matchId: 'm-watch-1',
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          game: 2,
+          turn: 1,
+          turnStartedAt: 1_760_006_010,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 10,
+          p1: baseSlot('0-error', '0 ERROR'),
+          p2: baseSlot('foul-play', 'Foul Play'),
+        });
+        // Match 2 -> fires again.
+        await client.sendHeartbeat({
+          heartbeatSeq: 3,
+          matchId: 'm-watch-2',
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          game: 1,
+          turn: 1,
+          turnStartedAt: 1_760_006_020,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 10,
+          p1: baseSlot('0-error', '0 ERROR'),
+          p2: baseSlot('foul-play', 'Foul Play'),
+        });
+        expect(liveMatches).toEqual(['m-watch-1', 'm-watch-2']);
+
+        // Tournament broadcast: load g1, append g1, load g1 game 2 (same gameId) -> fires once.
+        const tPlayer = (slug: string, name: string) => ({
+          slug,
+          name,
+          version: '1.0',
+          bankSeconds: 150,
+          thinking: true,
+          incrementSeconds: 10,
+        });
+        await client.sendTournamentBroadcast('t-watch', {
+          table: 2,
+          mode: 'load',
+          label: 'Table 2',
+          gameId: 'tw-g1',
+          stage: 'Round Robin',
+          game: 1,
+          bestOf: 3,
+          p1: tPlayer('0-error', '0 ERROR'),
+          p2: tPlayer('foul-play', 'Foul Play'),
+          lines: ['|turn|1'],
+        });
+        await client.sendTournamentBroadcast('t-watch', {
+          table: 2,
+          mode: 'append',
+          lines: ['|turn|2'],
+        });
+        await client.sendTournamentBroadcast('t-watch', {
+          table: 2,
+          mode: 'load',
+          label: 'Table 2',
+          gameId: 'tw-g1',
+          stage: 'Round Robin',
+          game: 2,
+          bestOf: 3,
+          p1: tPlayer('0-error', '0 ERROR'),
+          p2: tPlayer('foul-play', 'Foul Play'),
+          lines: ['|turn|1'],
+        });
+        expect(liveTourneyGames).toHaveLength(1);
+        expect(liveTourneyGames[0]).toMatchObject({
+          tournamentId: 't-watch',
+          tournamentName: 'Watch Cup',
+          table: 2,
+          gameId: 'tw-g1',
+          stage: 'Round Robin',
+        });
+        expect(ctrl.getActiveTournamentGames()).toHaveLength(1);
+
+        // Next game on Table 2 fires again; going idle clears active games.
+        await client.sendTournamentBroadcast('t-watch', {
+          table: 2,
+          mode: 'load',
+          label: 'Table 2',
+          gameId: 'tw-g2',
+          stage: 'Superfinal',
+          p1: tPlayer('foul-play', 'Foul Play'),
+          p2: tPlayer('0-error', '0 ERROR'),
+          lines: ['|turn|1'],
+        });
+        expect(liveTourneyGames.map(g => g.gameId)).toEqual(['tw-g1', 'tw-g2']);
+
+        await client.sendTournamentBroadcast('t-watch', {table: 2, idle: true});
+        expect(ctrl.getActiveTournamentGames()).toEqual([]);
+      } finally {
+        ctrl.close();
+        await srv.close();
+      }
+    });
 });

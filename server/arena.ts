@@ -904,6 +904,17 @@ export interface StaffAlertPayload {
   resolved?: boolean;
 }
 
+export interface LiveTournamentGame {
+  tournamentId: string;
+  tournamentName: string;
+  table: number;
+  label: string;
+  gameId?: string;
+  stage?: db.TournamentGameStage;
+  p1: {slug: string; name: string; version?: string};
+  p2: {slug: string; name: string; version?: string};
+}
+
 export interface Options {
   db: db.Database;
   auth?: Auth;
@@ -917,6 +928,8 @@ export interface Options {
   onSubmissionStatus?: (result: db.ApplySubmissionStatusResult) => void | Promise<void>;
   onWatchdogTimeout?: (alert: WatchdogAlert) => void | Promise<void>;
   onStaffAlert?: (alert: StaffAlertPayload) => void | Promise<void>;
+  onLiveMatch?: (match: LiveMatch) => void | Promise<void>;
+  onLiveTournamentGame?: (game: LiveTournamentGame) => void | Promise<void>;
   onHeartbeat?: (info: {
     at: number;
     system?: system.ArenaSystemInfo;
@@ -971,6 +984,7 @@ export interface Handle {
   setLiveState: (state: {live?: LiveMatchInput; stale?: boolean; updatedAt?: number}) => void;
   setArenaSystem: (info?: system.ArenaSystemInfo, at?: number) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
+  getActiveTournamentGames: () => LiveTournamentGame[];
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
   getLiveDiagnostic: (agentId: number) => LiveDiagnostic | undefined;
   setLiveDiagnostic: (payload: DiagnosticLivePayload) => void;
@@ -1907,10 +1921,12 @@ export function register(app: polka.Polka, options: Options): Handle {
   let lastHeartbeatAt: number | undefined;
   let lastArenaSystem: system.ArenaSystemInfo | undefined;
   let lastMatchId: string | undefined;
+  let lastNotifiedMatchId: string | undefined;
   let watchdogTriggered = false;
   let watchdogTimer: ReturnType<typeof setTimeout> | undefined;
 
   const broadcastsByTournament = new Map<string, LiveBroadcast>();
+  const lastNotifiedGameByTable = new Map<string, string>();
   const battleStreamClients = new Set<http.ServerResponse>();
   const tournamentStreamClients = new Map<string, Set<http.ServerResponse>>();
   const liveDiagnosticsByAgent = new Map<number, LiveDiagnostic>();
@@ -2454,6 +2470,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         live: currentLive,
         runningTournament: getRunningTournamentInfo(),
       });
+      if (currentLive.matchId !== lastNotifiedMatchId) {
+        lastNotifiedMatchId = currentLive.matchId;
+        Promise.resolve(options.onLiveMatch?.(currentLive)).catch(err => {
+          console.error('Error in onLiveMatch callback:', err);
+        });
+      }
       options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
       sendJson(res, 200, {ok: true, updatedAt: nowSec});
     } catch (err) {
@@ -2580,6 +2602,9 @@ export function register(app: polka.Polka, options: Options): Handle {
           db.setTournamentStatus(tournament.id, 'completed', nowSec);
         }
         broadcastsByTournament.delete(tournament.id);
+        for (const key of lastNotifiedGameByTable.keys()) {
+          if (key.startsWith(`${tournament.id}:`)) lastNotifiedGameByTable.delete(key);
+        }
         pushTournamentEvent(tournament.id, 'broadcast-end', {
           tournamentId: tournament.id,
           updatedAt: nowSec,
@@ -2655,6 +2680,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         };
         if (idx >= 0) tables[idx] = idleTable;
         else tables.push(idleTable);
+        lastNotifiedGameByTable.delete(`${tournament.id}:${tableNum}`);
         const normalized = normalizeLiveBroadcast({...existing, updatedAt: nowSec, tables}, nowSec);
         broadcastsByTournament.set(tournament.id, normalized);
         pushTournamentEvent(tournament.id, 'table-idle', {
@@ -2756,6 +2782,39 @@ export function register(app: polka.Polka, options: Options): Handle {
           table: nextTable,
           broadcast: normalized,
         });
+        if (nextTable.live !== false && nextTable.p1?.slug && nextTable.p2?.slug) {
+          const tableKey = `${tournament.id}:${tableNum}`;
+          const gameKey = nextTable.gameId ?? [
+            nextTable.p1.slug,
+            nextTable.p2.slug,
+            nextTable.stage ?? '',
+            nextTable.cycle ?? '',
+            nextTable.matchupGame ?? '',
+          ].join(':');
+          if (lastNotifiedGameByTable.get(tableKey) !== gameKey) {
+            lastNotifiedGameByTable.set(tableKey, gameKey);
+            Promise.resolve(options.onLiveTournamentGame?.({
+              tournamentId: tournament.id,
+              tournamentName: tournament.name,
+              table: tableNum,
+              label: nextTable.label,
+              gameId: nextTable.gameId,
+              stage: nextTable.stage,
+              p1: {
+                slug: nextTable.p1.slug,
+                name: nextTable.p1.name,
+                version: nextTable.p1.version,
+              },
+              p2: {
+                slug: nextTable.p2.slug,
+                name: nextTable.p2.name,
+                version: nextTable.p2.version,
+              },
+            })).catch(err => {
+              console.error('Error in onLiveTournamentGame callback:', err);
+            });
+          }
+        }
       }
 
       sendJson(res, 200, {ok: true, updatedAt: nowSec});
@@ -3385,6 +3444,27 @@ export function register(app: polka.Polka, options: Options): Handle {
     getTournamentBroadcast: (tournamentId?: string) => {
       const id = tournamentId ?? db.getRunningTournament()?.id;
       return id ? broadcastsByTournament.get(id) : undefined;
+    },
+    getActiveTournamentGames: () => {
+      const out: LiveTournamentGame[] = [];
+      for (const [tournamentId, bcast] of broadcastsByTournament) {
+        const tournamentName =
+          db.getTournament(tournamentId)?.name ?? `Tournament #${tournamentId}`;
+        for (const tb of bcast.tables) {
+          if (tb.idle || tb.live === false || !tb.p1?.slug || !tb.p2?.slug) continue;
+          out.push({
+            tournamentId,
+            tournamentName,
+            table: tb.table,
+            label: tb.label,
+            gameId: tb.gameId,
+            stage: tb.stage,
+            p1: {slug: tb.p1.slug, name: tb.p1.name, version: tb.p1.version},
+            p2: {slug: tb.p2.slug, name: tb.p2.name, version: tb.p2.version},
+          });
+        }
+      }
+      return out;
     },
     setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => {
       const id = broadcast?.tournamentId ?? tournamentId ?? db.getRunningTournament()?.id;
