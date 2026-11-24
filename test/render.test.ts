@@ -14,6 +14,7 @@ import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import {syncStaticLiveBanner} from '../static/build';
+import * as util from '../static/util';
 import {Fragment, h as jsx, raw, root} from '../static/util';
 import {hashTeam} from '../teams';
 import {generateValidVgcTeams} from '../tools/mock';
@@ -4083,5 +4084,62 @@ describe('JSON route parity & retired pool archives', () => {
     expect(html).toContain("!line.startsWith('|ai|')");
     expect(html).toContain("msg.type === 'seek'");
     expect(html).toContain('turn: battle.turn');
+  });
+
+  test('Time component emits date-only UTC fallback with localized full-timestamp title', () => {
+    const epoch = Date.UTC(2026, 3, 1, 0, 30, 15) / 1000;
+    const html = String(util.Time({epoch, format: 'date'}));
+    expect(html).toContain(`data-epoch="${epoch}"`);
+    expect(html).toContain('data-fmt="date"');
+    expect(html).toContain('datetime="2026-04-01T00:30:15.000Z"');
+    expect(html).toContain('data-title-tmpl="{0}"');
+    expect(html).toContain(`data-title-epochs="${epoch}"`);
+    expect(html).toContain('title="2026-04-01 00:30:15 UTC"');
+    expect(html).toContain('>2026-04-01</time>');
+  });
+
+  test('Time component emits datetime UTC fallback without seconds', () => {
+    const epoch = Date.UTC(2026, 3, 1, 0, 30, 15) / 1000;
+    const html = String(util.Time({epoch, format: 'datetime'}));
+    expect(html).toContain(`data-epoch="${epoch}"`);
+    expect(html).toContain('data-fmt="datetime"');
+    expect(html).toContain('>2026-04-01 00:30 UTC</time>');
+  });
+
+  test('localizedTitle encodes mixed format tokens into data-title attributes', () => {
+    const start = Date.UTC(2026, 3, 2, 18, 0, 0) / 1000;
+    const close = Date.UTC(2026, 3, 2, 0, 0, 0) / 1000;
+    const attrs = util.localizedTitle([
+      {prefix: 'starts ', epoch: start, format: 'date'},
+      {prefix: 'closes ', epoch: close, format: 'datetime'},
+    ]);
+    expect(attrs).toEqual({
+      title: 'starts 2026-04-02 · closes 2026-04-02 00:00 UTC',
+      'data-title-tmpl': 'starts {0:date} · closes {1:datetime}',
+      'data-title-epochs': `${start},${close}`,
+    });
+  });
+
+  test('renderLocalizedText wraps inline UTC timestamps in Time elements', () => {
+    const close = Date.UTC(2026, 3, 2, 0, 0, 0) / 1000;
+    const html = String(jsx(Fragment, undefined, util.renderLocalizedText(
+      'Entries closed at 2026-04-02 00:00 UTC.'
+    )));
+    expect(html).toContain('Entries closed at <time ');
+    expect(html).toContain(`data-epoch="${close}"`);
+    expect(html).toContain('data-fmt="datetime"');
+    expect(html).toContain('>2026-04-02 00:00 UTC</time>.');
+  });
+
+  test('localizedTitleFromText converts inline UTC timestamps to title templates', () => {
+    const retry = Date.UTC(2026, 3, 2, 12, 30, 0) / 1000;
+    const attrs = util.localizedTitleFromText(
+      'Failed smoke test limit reached; retry after 2026-04-02 12:30 UTC.'
+    );
+    expect(attrs).toEqual({
+      title: 'Failed smoke test limit reached; retry after 2026-04-02 12:30 UTC.',
+      'data-title-tmpl': 'Failed smoke test limit reached; retry after {0:datetime}.',
+      'data-title-epochs': String(retry),
+    });
   });
 });

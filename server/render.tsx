@@ -602,8 +602,7 @@ export function buildBattleDetailClientJs(): string {
       return Math.floor(diff / 86400) + 'd ago';
     };
 
-    const utcStr = ts =>
-      new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    const localTimestamp = ts => pkmnTime.timestamp(ts);
 
     const resolveAgentHref = slug => {
       if (!slug) return '';
@@ -782,7 +781,9 @@ export function buildBattleDetailClientJs(): string {
 
       return '<div class="battle-detail"' + replayAttrs + '>' +
         '<div class="battle-detail-meta">' +
-          '<span class="muted">' + esc(utcStr(m.completedAt)) + '</span>' +
+          '<time class="muted" data-epoch="' + m.completedAt + '">' +
+            esc(localTimestamp(m.completedAt)) +
+          '</time>' +
           '<span><span class="muted">Seed:</span> <code>' + esc(m.seed) + '</code></span>' +
         '</div>' +
         '<div class="battle-detail-grid">' +
@@ -1477,7 +1478,8 @@ function buildBattlesScript(
         '<td>' + renderAgent(m.p1, r.p1Win) + '</td>' +
         '<td>' + renderAgent(m.p2, r.p2Win) + '</td>' +
         '<td class="center" title="' + esc(tip) + '">' + r.html + '</td>' +
-        '<td class="num muted" data-ts="' + m.completedAt + '">' +
+        '<td class="num muted" title="' + esc(localTimestamp(m.completedAt)) +
+        '" data-ts="' + m.completedAt + '">' +
         relTime(nowSec, m.completedAt) + '</td>';
 
       const detailTr = document.createElement('tr');
@@ -2915,7 +2917,13 @@ function renderLadderHtml(opts: {
                       {renderAgentLink(e.agentName, href, true)}{' '}
                       <code>{e.version}</code>
                     </td>
-                    <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
+                    <td className='num muted'>
+                      <util.Time
+                        epoch={e.submittedAt}
+                        format='date'
+                        title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -3339,7 +3347,11 @@ function renderArenaHubHtml(opts: {
       const lastTs = lastCompletedByLadder.get(l.id);
       if (lastTs !== undefined) {
         lastCell = (
-          <td className='num muted' data-ts={lastTs}>
+          <td
+            className='num muted'
+            data-ts={lastTs}
+            {...util.localizedTitle([{epoch: lastTs}])}
+          >
             {formatRelativeTime(nowSec, lastTs)}
           </td>
         );
@@ -3365,11 +3377,7 @@ function renderArenaHubHtml(opts: {
       const pastSummary = hubSummaries.get(past.id);
       const pastHref = `/arena/ladders/${encodeURIComponent(past.id)}/`;
       const pastFmtTitle = FORMAT_TITLES[past.format] ?? past.format;
-      const startDate = util.formatUtcDate(past.createdAt);
-      const endDate = past.archivedAt !== undefined
-        ? util.formatUtcDate(past.archivedAt)
-        : util.formatUtcDate(nowSec);
-      const dateRange = `${startDate} – ${endDate}`;
+      const endTs = past.archivedAt ?? nowSec;
       const pastW = pastSummary?.top1;
       const pastLeaderCell = pastW ? (
         <td>
@@ -3381,7 +3389,11 @@ function renderArenaHubHtml(opts: {
       );
       const pastLastTs = lastCompletedByLadder.get(past.id);
       const pastLastCell = pastLastTs !== undefined ? (
-        <td className='num muted' data-ts={pastLastTs}>
+        <td
+          className='num muted'
+          data-ts={pastLastTs}
+          {...util.localizedTitle([{epoch: pastLastTs}])}
+        >
           {formatRelativeTime(nowSec, pastLastTs)}
         </td>
       ) : (
@@ -3394,7 +3406,10 @@ function renderArenaHubHtml(opts: {
             <a href={pastHref} className='subtle' title={pastFmtTitle}>
               <strong><tt>{past.name}</tt></strong>
             </a>{' '}
-            <span className='muted'>({dateRange})</span>
+            <span className='muted'>
+              (<util.Time epoch={past.createdAt} format='date' />{' \u2013 '}
+              <util.Time epoch={endTs} format='date' />)
+            </span>
           </td>
           {pastLeaderCell}
           <td className='num'>{(pastSummary?.entrantCount ?? 0).toLocaleString('en-US')}</td>
@@ -3943,9 +3958,6 @@ export function battleInlineDetailHtml(
   const g2P1Label = p2IsUs ? '(P1)' : 'P1';
   const g2P2Label = p1IsUs ? '(P2)' : 'P2';
 
-  const completedIso = new Date(m.completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
-  const completedUtc = `${completedIso} UTC`;
-
   const [g1, g2] = m.games;
   const end1 = formatEndReasonNode(g1.endReason);
   const end2 = formatEndReasonNode(g2.endReason);
@@ -3966,7 +3978,7 @@ export function battleInlineDetailHtml(
       data-g2-log={g2.logHref}
     >
       <div className='battle-detail-meta'>
-        <span className='muted'>{completedUtc}</span>
+        <util.Time epoch={m.completedAt} className='muted' />
         <span>
           <span className='muted'>Seed:</span> <code>{m.seed}</code>
         </span>
@@ -4138,7 +4150,13 @@ function renderBattlesPage(opts: {
             <td>{renderAgentLink(m.p1.name, p1Href, r.p1Win)} <code>{m.p1.version}</code></td>
             <td>{renderAgentLink(m.p2.name, p2Href, r.p2Win)} <code>{m.p2.version}</code></td>
             <td className='center' title={tip}>{r.node}</td>
-            <td className='num muted' data-ts={m.completedAt}>{rel}</td>
+            <td
+              className='num muted'
+              data-ts={m.completedAt}
+              {...util.localizedTitle([{epoch: m.completedAt}])}
+            >
+              {rel}
+            </td>
           </tr>
           <tr className='battle-detail-row hide' data-detail-for={m.id}>
             <td colSpan={5}>{util.raw(detailHtml)}</td>

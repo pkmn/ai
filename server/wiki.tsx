@@ -1856,13 +1856,14 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
               </thead>
               <tbody>
                 {revisions.map((rev, idx) => {
-                  const date = util.formatUtcDate(rev.timestamp);
                   const revUrl = `/wiki/${encoded}/${rev.sha}`;
                   const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
                   const displayAuthor = wiki.formatAuthor(rev.author);
                   return (
                     <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
-                      <td className='wiki-meta'>{date}</td>
+                      <td className='wiki-meta'>
+                        <util.Time epoch={rev.timestamp} format='date' />
+                      </td>
                       <td>
                         {rev.deleted
                           ? <code>{rev.shortSha}</code>

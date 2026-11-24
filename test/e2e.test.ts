@@ -1453,6 +1453,92 @@ describe('mock scenarios & E2E lifecycle', () => {
         ).toBeLessThanOrEqual(0);
         expect(liveErrors).toEqual([]);
 
+        // Verify client-side local timezone conversion in a non-UTC browser (`America/New_York`)
+        // across SSR `<time data-epoch>`, `[data-title-tmpl]` tooltips, and dynamic client rows.
+        const midnightUtc = Date.UTC(2026, 3, 1, 0, 0, 0) / 1000;
+        const t3Start = Date.UTC(2026, 3, 2, 0, 0, 0) / 1000;
+        sseDb.upsertTournament({
+          id: '3',
+          name: 'Tournament #3: Scheduled Gen 3 OU',
+          format: 'gen3ou',
+          version: '0.11.0',
+          gamesPerMatchup: 4,
+          parallelTables: 2,
+          hardware: 'GCP L4 Spot',
+          status: 'scheduled',
+          startsAt: t3Start,
+        });
+
+        const nyCtx = await browser.newContext({
+          viewport: {width: 1280, height: 800},
+          timezoneId: 'America/New_York',
+          locale: 'en-US',
+        });
+        await nyCtx.route('**/*', async route => {
+          const u = new URL(route.request().url());
+          if (u.origin !== viewBaseUrl) {
+            await route.fulfill({status: 204, body: ''});
+            return;
+          }
+          await route.continue();
+        });
+        const nyPage = await nyCtx.newPage();
+        const nyErrors: string[] = [];
+        nyPage.on('console', msg => {
+          if (msg.type() === 'error') nyErrors.push(msg.text());
+        });
+        nyPage.on('pageerror', err => nyErrors.push(err.message));
+
+        await nyPage.goto(`${viewBaseUrl}/arena/tournaments/3/`, {waitUntil: 'domcontentloaded'});
+        const t3Meta = await nyPage.locator('p.meta').first().textContent();
+        expect(t3Meta).toContain('Starts 2026-04-01 20:00 EDT');
+        expect(t3Meta).toContain('Entries close 2026-03-31 20:00 EDT');
+        expect(t3Meta).not.toContain('UTC');
+
+        await nyPage.goto(`${viewBaseUrl}/arena/`, {waitUntil: 'domcontentloaded'});
+        const hubT3Date = nyPage.locator(`time[data-epoch="${t3Start}"]`).first();
+        expect(await hubT3Date.textContent()).toBe('2026-04-01');
+        expect(await hubT3Date.getAttribute('title')).toBe('Starts 2026-04-01 20:00:00 EDT');
+
+        await nyPage.goto(`${viewBaseUrl}/arena/battles/`, {waitUntil: 'domcontentloaded'});
+        await nyPage.locator('#battles-tbody tr#vgc-sse-live-001 td').first().click();
+        const detailTime = await nyPage.locator(
+          '#battles-tbody tr[data-detail-for="vgc-sse-live-001"] .battle-detail-meta time'
+        ).textContent();
+        expect(detailTime).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:EDT|EST)$/);
+        const rowTitle = await nyPage.locator(
+          '#battles-tbody tr#vgc-sse-live-001 td[data-ts]'
+        ).getAttribute('title');
+        expect(rowTitle).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:EDT|EST)$/);
+
+        const dynamicText = await nyPage.evaluate(
+          ep => {
+            const w = window as unknown as {
+              pkmnTime: {
+                date: (s: number) => string;
+                dateTime: (s: number) => string;
+                timestamp: (s: number) => string;
+                text: (s: string) => string;
+              };
+            };
+            return {
+              date: w.pkmnTime.date(ep),
+              dateTime: w.pkmnTime.dateTime(ep),
+              timestamp: w.pkmnTime.timestamp(ep),
+              text: w.pkmnTime.text('Entries closed at 2026-04-01 00:00 UTC.'),
+            };
+          },
+          midnightUtc
+        );
+        expect(dynamicText).toEqual({
+          date: '2026-03-31',
+          dateTime: '2026-03-31 20:00 EDT',
+          timestamp: '2026-03-31 20:00:00 EDT',
+          text: 'Entries closed at 2026-03-31 20:00 EDT.',
+        });
+        expect(nyErrors).toEqual([]);
+        await nyCtx.close();
+
         await liveCtx.close();
       } finally {
         await browser.close();

@@ -148,42 +148,6 @@ const ADMIN_SCRIPT = `
       return reason;
     };
 
-    const pad2 = (n) => String(n).padStart(2, '0');
-    const fmtLocalDateTime = (sec) => {
-      const d = new Date(sec * 1000);
-      let tz = '';
-      try {
-        const parts = new Intl.DateTimeFormat(undefined, {timeZoneName: 'short'}).formatToParts(d);
-        const tzPart = parts.find(p => p.type === 'timeZoneName');
-        if (tzPart) tz = tzPart.value;
-      } catch {}
-      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' +
-        pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds()) +
-        (tz ? ' ' + tz : '');
-    };
-    const fmtLocalDate = (sec) => {
-      const d = new Date(sec * 1000);
-      return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
-    };
-    const localizeTimestamps = (root) => {
-      const scope = root || document;
-      scope.querySelectorAll('time[data-epoch]').forEach(el => {
-        const sec = Number(el.dataset.epoch);
-        if (!Number.isFinite(sec)) return;
-        el.textContent = el.dataset.fmt === 'date' ? fmtLocalDate(sec) : fmtLocalDateTime(sec);
-      });
-      scope.querySelectorAll('[data-title-tmpl][data-title-epochs]').forEach(el => {
-        const tmpl = el.dataset.titleTmpl;
-        const epochs = el.dataset.titleEpochs.split(',').map(Number);
-        if (!tmpl) return;
-        el.title = tmpl.replace(/\\{(\\d+)\\}/g, (_, idx) => {
-          const sec = epochs[Number(idx)];
-          return Number.isFinite(sec) ? fmtLocalDateTime(sec) : '';
-        });
-      });
-    };
-    localizeTimestamps(document);
-
     const postJson = async (url, body) => {
       const res = await fetch(url, {
         method: 'POST',
@@ -223,8 +187,9 @@ const ADMIN_SCRIPT = `
               );
             }
             if (reasonEl) {
-              reasonEl.textContent = formatAdminReason(st.reason || '');
-              reasonEl.title = st.reason || '';
+              const reasonText = pkmnTime.text(st.reason || '');
+              reasonEl.textContent = formatAdminReason(reasonText);
+              reasonEl.title = reasonText;
               reasonEl.classList.toggle('hide', !st.reason);
             }
           }
@@ -759,44 +724,6 @@ function formatRate(bytesPerSec: number): string {
   return `${bytesPerSec} B/s`;
 }
 
-function formatUtcTimestamp(epochSeconds: number): string {
-  return `${new Date(epochSeconds * 1000).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
-}
-
-interface LocalizedTitleAttrs {
-  title: string;
-  'data-title-tmpl'?: string;
-  'data-title-epochs'?: string;
-}
-
-type TitlePart = string | {prefix?: string; epoch: number; suffix?: string};
-
-function buildLocalizedTitle(parts: TitlePart[]): LocalizedTitleAttrs | Record<string, never> {
-  if (parts.length === 0) return {};
-  const fallback: string[] = [];
-  const tmpl: string[] = [];
-  const epochs: number[] = [];
-  for (const part of parts) {
-    if (typeof part === 'string') {
-      fallback.push(part);
-      tmpl.push(part);
-    } else {
-      const idx = epochs.length;
-      epochs.push(part.epoch);
-      const pre = part.prefix ?? '';
-      const suf = part.suffix ?? '';
-      fallback.push(`${pre}${formatUtcTimestamp(part.epoch)}${suf}`);
-      tmpl.push(`${pre}{${idx}}${suf}`);
-    }
-  }
-  if (epochs.length === 0) return {title: fallback.join(' · ')};
-  return {
-    title: fallback.join(' · '),
-    'data-title-tmpl': tmpl.join(' · '),
-    'data-title-epochs': epochs.join(','),
-  };
-}
-
 function formatAdminReason(reason?: string): string {
   if (!reason) return '';
   let m = /^14-day cooldown active \((\d+d) remaining after .+\)\.$/.exec(reason);
@@ -935,9 +862,9 @@ function renderUpdatesRow(updates: system.UpdateStatus | undefined): util.Child 
   if (!updates) return <span className='muted'>unavailable</span>;
   const hasSec = (updates.security ?? 0) > 0;
   const countClass = hasSec ? 'no' : updates.pending > 0 ? 'warn' : 'yes';
-  const titleParts: TitlePart[] = [{prefix: 'Checked ', epoch: updates.checkedAt}];
+  const titleParts: util.LocalizedTitlePart[] = [{prefix: 'Checked ', epoch: updates.checkedAt}];
   if (updates.summary) titleParts.push(updates.summary);
-  const titleAttrs = buildLocalizedTitle(titleParts);
+  const titleAttrs = util.localizedTitle(titleParts);
   return (
     <>
       <span className={countClass} {...titleAttrs}>
@@ -960,7 +887,7 @@ function renderProbeBadge(
   if (!probe) return <span className='muted'>{fallback}</span>;
   if (probe.ok) {
     const slow = probe.rttMillis !== undefined && probe.rttMillis > warnRttMillis;
-    const titleAttrs = buildLocalizedTitle([{prefix: 'Checked ', epoch: probe.checkedAt}]);
+    const titleAttrs = util.localizedTitle([{prefix: 'Checked ', epoch: probe.checkedAt}]);
     return (
       <span className={slow ? 'warn' : 'yes'} {...titleAttrs}>
         {probe.target}
@@ -968,24 +895,26 @@ function renderProbeBadge(
       </span>
     );
   }
-  const titleParts: TitlePart[] = [];
+  const titleParts: util.LocalizedTitlePart[] = [];
   if (probe.error) titleParts.push(probe.error);
   titleParts.push({prefix: 'Checked ', epoch: probe.checkedAt});
   return (
-    <span className='no' {...buildLocalizedTitle(titleParts)}>
+    <span className='no' {...util.localizedTitle(titleParts)}>
       {probe.target} {probe.error ?? 'down'}
     </span>
   );
 }
 
-function buildBackupTooltip(b: system.BackupStatus): LocalizedTitleAttrs | Record<string, never> {
-  const parts: TitlePart[] = [];
+function buildBackupTooltip(
+  b: system.BackupStatus
+): util.LocalizedTitleAttrs | Record<string, never> {
+  const parts: util.LocalizedTitlePart[] = [];
   if (b.lastBackupAt !== undefined) parts.push({prefix: 'Backup: ', epoch: b.lastBackupAt});
   if (b.lastArchiveUploadAt !== undefined) {
     parts.push({prefix: 'GCS sync: ', epoch: b.lastArchiveUploadAt});
   }
   if (b.checkedAt !== undefined) parts.push({prefix: 'Checked: ', epoch: b.checkedAt});
-  return buildLocalizedTitle(parts);
+  return util.localizedTitle(parts);
 }
 
 function renderBackupDbPart(b: system.BackupStatus, now: number): util.Child {
@@ -1013,7 +942,7 @@ function renderHostMeta(info: {
   load: system.LoadMetrics;
   collectedAt: number;
 }): util.Child {
-  const sampleAttrs = buildLocalizedTitle([{prefix: 'Sampled ', epoch: info.collectedAt}]);
+  const sampleAttrs = util.localizedTitle([{prefix: 'Sampled ', epoch: info.collectedAt}]);
   return (
     <span className='sys-meta muted' {...sampleAttrs}>
       {info.gitCommit && (
@@ -1063,9 +992,9 @@ function renderSystemCards(
   extras: SystemCardExtras
 ): util.Html {
   const {vps, arena: arenaSys, lastHeartbeatAt} = sys;
-  const vpsSampleAttrs = buildLocalizedTitle([{prefix: 'Sampled ', epoch: vps.collectedAt}]);
+  const vpsSampleAttrs = util.localizedTitle([{prefix: 'Sampled ', epoch: vps.collectedAt}]);
   const arenaSampleAttrs = arenaSys
-    ? buildLocalizedTitle([{prefix: 'Sampled ', epoch: arenaSys.collectedAt}])
+    ? util.localizedTitle([{prefix: 'Sampled ', epoch: arenaSys.collectedAt}])
     : {};
 
   const vpsNetErrs = (vps.network.rxErrors ?? 0) + (vps.network.txErrors ?? 0);
@@ -1075,7 +1004,7 @@ function renderSystemCards(
       : vps.tlsCert.daysRemaining < TLS_WARN_DAYS ? 'warn' : 'muted')
     : 'muted';
   const tlsTitleAttrs = vps.tlsCert
-    ? buildLocalizedTitle([
+    ? util.localizedTitle([
       {prefix: 'Expires ', epoch: vps.tlsCert.expiresAt},
       ...(vps.tlsCert.checkedAt !== undefined
         ? [{prefix: 'Checked ', epoch: vps.tlsCert.checkedAt}]
@@ -1094,7 +1023,7 @@ function renderSystemCards(
   const rateLimitWarn = vps.traffic.rateLimited4291h >= RATE_LIMIT_WARN_COUNT;
   const dmWarn = extras.unsentDms > 0;
   const last5xxTitleAttrs = vps.traffic.last5xx
-    ? buildLocalizedTitle([
+    ? util.localizedTitle([
       `Last: ${vps.traffic.last5xx.status} ${vps.traffic.last5xx.path}`,
       {prefix: 'at ', epoch: vps.traffic.last5xx.at},
     ])
@@ -1102,7 +1031,7 @@ function renderSystemCards(
 
   const hbStale = lastHeartbeatAt === undefined || now - lastHeartbeatAt > HEARTBEAT_STALE_SECONDS;
   const hbTitleAttrs = lastHeartbeatAt !== undefined
-    ? buildLocalizedTitle([{prefix: 'Last heartbeat ', epoch: lastHeartbeatAt}])
+    ? util.localizedTitle([{prefix: 'Last heartbeat ', epoch: lastHeartbeatAt}])
     : {};
   const faultRatePct = vps.arenaFaults24h.matches > 0
     ? (vps.arenaFaults24h.faults / vps.arenaFaults24h.matches) * 100
@@ -1316,7 +1245,7 @@ function renderSystemCards(
                     <span
                       className={arenaSys.podmanState === 'running' ? 'yes' : 'warn'}
                       {...(arenaSys.podmanCheckedAt !== undefined
-                        ? buildLocalizedTitle([
+                        ? util.localizedTitle([
                           {prefix: 'Checked ', epoch: arenaSys.podmanCheckedAt},
                         ])
                         : {})}
@@ -1783,13 +1712,11 @@ function renderProjectDetailPanel(
                   return (
                     <tr>
                       <td className='muted'>
-                        <time
-                          data-epoch={String(t.startsAt)}
-                          data-fmt='date'
-                          {...buildLocalizedTitle([{prefix: 'Starts ', epoch: t.startsAt}])}
-                        >
-                          {util.formatUtcDate(t.startsAt)}
-                        </time>
+                        <util.Time
+                          epoch={t.startsAt}
+                          format='date'
+                          title={[{prefix: 'Starts ', epoch: t.startsAt}]}
+                        />
                       </td>
                       <td>
                         <a
@@ -1934,7 +1861,7 @@ function renderProjectDetailPanel(
                     stateEl = <span className='no'>Quarantined</span>;
                   } else {
                     const activatedAttrs = v.activatedAt !== undefined
-                      ? buildLocalizedTitle([{prefix: 'Activated ', epoch: v.activatedAt}])
+                      ? util.localizedTitle([{prefix: 'Activated ', epoch: v.activatedAt}])
                       : {};
                     const label = v.activeLadderNames.length > 0
                       ? `Active (${v.activeLadderNames.join(', ')})`
@@ -1972,13 +1899,11 @@ function renderProjectDetailPanel(
                       <td className='wrap'>{smokeEl}</td>
                       <td>{stateEl}</td>
                       <td className='num muted'>
-                        <time
-                          data-epoch={String(v.submittedAt)}
-                          data-fmt='date'
-                          {...buildLocalizedTitle([{prefix: 'Submitted ', epoch: v.submittedAt}])}
-                        >
-                          {util.formatUtcDate(v.submittedAt)}
-                        </time>
+                        <util.Time
+                          epoch={v.submittedAt}
+                          format='date'
+                          title={[{prefix: 'Submitted ', epoch: v.submittedAt}]}
+                        />
                       </td>
                       <td>
                         <span className='action-group'>
@@ -2191,9 +2116,11 @@ export function renderAdminPage(opts: {
                                   ? 'muted status-reason'
                                   : 'muted status-reason hide'
                               }
-                              title={submissionStatus.reason ?? undefined}
+                              {...(submissionStatus.reason
+                                ? util.localizedTitleFromText(submissionStatus.reason)
+                                : {})}
                             >
-                              {conciseReason}
+                              {util.renderLocalizedText(conciseReason)}
                             </span>
                             {item.pools.map(p => (
                               <span className='muted status-reason'>
@@ -2254,7 +2181,7 @@ export function renderAdminPage(opts: {
                                   return (
                                     <span
                                       className='chip'
-                                      {...buildLocalizedTitle([
+                                      {...util.localizedTitle([
                                         `${tName} (${t.version})`,
                                         {epoch: t.startsAt},
                                       ])}

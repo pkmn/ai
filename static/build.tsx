@@ -118,6 +118,55 @@ export const SET_THEME = [
   '})();',
 ].join('');
 
+// Converts SSR UTC `<time data-epoch>` elements and `[data-title-tmpl][data-title-epochs]`
+// tooltips into the viewer's local timezone immediately after `<body>`, and exposes `pkmnTime`
+// for dynamic client-rendered rows and API messages. Written in ES5 for `html-minifier`/UglifyJS.
+export const LOCALIZE_TIME = [
+  'var pkmnTime=(function(){',
+  "var pad=function(n){return n<10?'0'+n:String(n);};",
+  "var ymd=function(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());};",
+  'var tzOf=function(d){try{',
+  "var ps=new Intl.DateTimeFormat(undefined,{timeZoneName:'short'}).formatToParts(d);",
+  "for(var i=0;i<ps.length;i++)if(ps[i].type==='timeZoneName')return ps[i].value;",
+  "}catch(e){}return '';};",
+  'var date=function(s){return ymd(new Date(s*1000));};',
+  'var dateTime=function(s){var d=new Date(s*1000);var z=tzOf(d);',
+  "return ymd(d)+' '+pad(d.getHours())+':'+pad(d.getMinutes())+(z?' '+z:'');};",
+  'var timestamp=function(s){var d=new Date(s*1000);var z=tzOf(d);',
+  "return ymd(d)+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())",
+  "+(z?' '+z:'');};",
+  'var fmtBy=function(s,f){',
+  "return f==='date'?date(s):f==='datetime'?dateTime(s):timestamp(s);};",
+  'var text=function(str){if(!str)return str;',
+  'return String(str).replace(',
+  '/\\b(\\d{4})-(\\d{2})-(\\d{2}) (\\d{2}):(\\d{2})(?::(\\d{2}))? UTC\\b/g,',
+  'function(_,y,mo,da,h,mi,sc){',
+  'var s=Math.floor(Date.UTC(',
+  'Number(y),Number(mo)-1,Number(da),Number(h),Number(mi),sc?Number(sc):0)/1000);',
+  'return sc?timestamp(s):dateTime(s);});};',
+  "var applyTime=function(el){var raw=el.getAttribute('data-epoch');",
+  'if(!raw)return;var s=Number(raw);',
+  "if(isFinite(s))el.textContent=fmtBy(s,el.getAttribute('data-fmt'));};",
+  'var applyTitle=function(el){',
+  "var tmpl=el.getAttribute('data-title-tmpl');",
+  "var raw=el.getAttribute('data-title-epochs');",
+  'if(!tmpl||!raw)return;',
+  "var eps=raw.split(',');",
+  'el.title=tmpl.replace(/\\{(\\d+)(?::(date|datetime))?\\}/g,function(_,i,f){',
+  "var r=eps[Number(i)];var s=r?Number(r):NaN;return isFinite(s)?fmtBy(s,f):'';});};",
+  'var localize=function(root){var sc=root||document;',
+  "if(sc!==document&&sc.getAttribute){if(sc.tagName==='TIME'&&sc.hasAttribute('data-epoch'))",
+  'applyTime(sc);',
+  "if(sc.hasAttribute('data-title-tmpl'))applyTitle(sc);}",
+  "var ts=sc.querySelectorAll('time[data-epoch]');for(var i=0;i<ts.length;i++)applyTime(ts[i]);",
+  "var tt=sc.querySelectorAll('[data-title-tmpl][data-title-epochs]');",
+  'for(var j=0;j<tt.length;j++)applyTitle(tt[j]);};',
+  'return {date:date,dateTime:dateTime,timestamp:timestamp,text:text,localize:localize};',
+  '})();',
+  'window.pkmnTime=pkmnTime;',
+  'pkmnTime.localize(document);',
+].join('');
+
 export const TOP_CONTROLS = String(
   <div id='top-controls'>
     <button
@@ -308,7 +357,8 @@ export class Renderer extends site.page.Renderer {
   // CleanCSS) synchronously on every call, which is fine for build-time static output
   // (`minify = true`) but blocks the event loop for >1s per cache miss on large dynamic SSR pages.
   override render(page: Page, replace?: (s: string) => string) {
-    const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
+    const baseScript = `${SET_THEME}\n${LOCALIZE_TIME}`;
+    const script = page.script ? `${baseScript}\n${page.script}` : baseScript;
     const banner = this.liveBannerProvider?.() ?? '';
     const rawHeader = page.header !== undefined ? String(page.header) : undefined;
     const withBanner = banner && !rawHeader?.includes('id="topbar"')

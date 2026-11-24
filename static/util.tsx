@@ -249,6 +249,134 @@ export function formatUtcDateTime(epochSeconds: number): string {
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)} UTC`;
 }
 
+export function formatUtcTimestamp(epochSeconds: number): string {
+  const iso = new Date(epochSeconds * 1000).toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)} UTC`;
+}
+
+export type TimeFormat = 'date' | 'datetime' | 'timestamp';
+
+export function formatUtc(epochSeconds: number, format: TimeFormat = 'timestamp'): string {
+  if (format === 'date') return formatUtcDate(epochSeconds);
+  if (format === 'datetime') return formatUtcDateTime(epochSeconds);
+  return formatUtcTimestamp(epochSeconds);
+}
+
+export interface LocalizedTitleAttrs {
+  title: string;
+  'data-title-tmpl'?: string;
+  'data-title-epochs'?: string;
+}
+
+export type LocalizedTitlePart =
+  string |
+  {prefix?: string; epoch: number; suffix?: string; format?: TimeFormat};
+
+export function localizedTitle(
+  parts: readonly LocalizedTitlePart[],
+  separator = ' · '
+): LocalizedTitleAttrs | Record<string, never> {
+  if (parts.length === 0) return {};
+  const fallback: string[] = [];
+  const tmpl: string[] = [];
+  const epochs: number[] = [];
+  for (const part of parts) {
+    if (typeof part === 'string') {
+      fallback.push(part);
+      tmpl.push(part);
+    } else {
+      const idx = epochs.length;
+      const fmt = part.format ?? 'timestamp';
+      epochs.push(part.epoch);
+      const pre = part.prefix ?? '';
+      const suf = part.suffix ?? '';
+      const token = fmt === 'timestamp' ? `{${idx}}` : `{${idx}:${fmt}}`;
+      fallback.push(`${pre}${formatUtc(part.epoch, fmt)}${suf}`);
+      tmpl.push(`${pre}${token}${suf}`);
+    }
+  }
+  if (epochs.length === 0) return {title: fallback.join(separator)};
+  return {
+    title: fallback.join(separator),
+    'data-title-tmpl': tmpl.join(separator),
+    'data-title-epochs': epochs.join(','),
+  };
+}
+
+export interface TimeProps {
+  epoch: number;
+  format?: TimeFormat;
+  className?: string;
+  title?: readonly LocalizedTitlePart[];
+}
+
+export const Time = (opts: TimeProps) => {
+  const fmt = opts.format ?? 'timestamp';
+  const titleParts = opts.title ?? (fmt === 'date' ? [{epoch: opts.epoch}] : undefined);
+  const titleAttrs = titleParts ? localizedTitle(titleParts) : {};
+  return (
+    <time
+      datetime={new Date(opts.epoch * 1000).toISOString()}
+      data-epoch={String(opts.epoch)}
+      data-fmt={fmt === 'timestamp' ? undefined : fmt}
+      className={opts.className}
+      {...titleAttrs}
+    >
+      {formatUtc(opts.epoch, fmt)}
+    </time>
+  );
+};
+
+const UTC_TEXT_RE = /\b(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))? UTC\b/g;
+
+function parseUtcTextMatch(m: RegExpExecArray): {epoch: number; format: 'datetime' | 'timestamp'} {
+  const epoch = Math.floor(Date.UTC(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    m[6] ? Number(m[6]) : 0
+  ) / 1000);
+  return {epoch, format: m[6] ? 'timestamp' : 'datetime'};
+}
+
+// Splits plain prose containing server-formatted `YYYY-MM-DD HH:MM[:SS] UTC` timestamps into text
+// segments and `<Time>` elements so client-side localization converts them to the viewer's zone.
+export function renderLocalizedText(text: string): Child {
+  UTC_TEXT_RE.lastIndex = 0;
+  let m = UTC_TEXT_RE.exec(text);
+  if (!m) return text;
+  const out: Child[] = [];
+  let cursor = 0;
+  while (m) {
+    if (m.index > cursor) out.push(text.slice(cursor, m.index));
+    const parsed = parseUtcTextMatch(m);
+    out.push(<Time epoch={parsed.epoch} format={parsed.format} />);
+    cursor = m.index + m[0].length;
+    m = UTC_TEXT_RE.exec(text);
+  }
+  if (cursor < text.length) out.push(text.slice(cursor));
+  return out;
+}
+
+export function localizedTitleFromText(text: string): LocalizedTitleAttrs {
+  UTC_TEXT_RE.lastIndex = 0;
+  let m = UTC_TEXT_RE.exec(text);
+  if (!m) return {title: text};
+  const parts: LocalizedTitlePart[] = [];
+  let cursor = 0;
+  while (m) {
+    const prefix = text.slice(cursor, m.index);
+    const parsed = parseUtcTextMatch(m);
+    parts.push({prefix, epoch: parsed.epoch, format: parsed.format});
+    cursor = m.index + m[0].length;
+    m = UTC_TEXT_RE.exec(text);
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return localizedTitle(parts, '') as LocalizedTitleAttrs;
+}
+
 const CONNECTIVITY_CODES = new Set([
   'EAI_AGAIN',
   'ECONNREFUSED',

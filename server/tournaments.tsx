@@ -956,7 +956,13 @@ function renderTournamentStandingsNode(opts: {
                       {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
                       <code>{e.version}</code>
                     </td>
-                    <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
+                    <td className='num muted'>
+                      <util.Time
+                        epoch={e.submittedAt}
+                        format='date'
+                        title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                      />
+                    </td>
                   </tr>
                 );
               })}
@@ -1238,8 +1244,6 @@ function renderTournamentGameDetailNode(
   gameLogUrls: ReadonlyArray<string | undefined>
 ): util.Html {
   const completedAt = g.completedAt ?? 0;
-  const completedIso = new Date(completedAt * 1000).toISOString().replace('T', ' ').slice(0, 19);
-  const completedUtc = `${completedIso} UTC`;
   const isMulti = bestOf > 1 || g.games.length > 1;
   const hasReplay = gameLogUrls.some(Boolean);
   const logAttrs: Record<string, string | undefined> = {};
@@ -1261,7 +1265,7 @@ function renderTournamentGameDetailNode(
       data-single-game={hasReplay && !isMulti ? '1' : undefined}
     >
       <div className='battle-detail-meta'>
-        <span className='muted'>{completedUtc}</span>
+        <util.Time epoch={completedAt} className='muted' />
         <span>
           {g.preemptions > 0 ? (
             <>
@@ -1367,11 +1371,6 @@ function renderTournamentGamesNode(opts: {
     const p1Href = render.resolveAgentHref(links, g.p1.slug, g.p1.name);
     const p2Href = render.resolveAgentHref(links, g.p2.slug, g.p2.name);
     const completedAt = g.completedAt ?? 0;
-    const completedIso = new Date(completedAt * 1000)
-      .toISOString()
-      .replace('T', ' ')
-      .slice(0, 19);
-    const completedUtc = `${completedIso} UTC`;
     const rel = render.formatRelativeTime(nowSec, completedAt);
     const rowCls = liveTables.length + idx >= util.TABLE_PAGE_SIZE
       ? 'battle-row hide'
@@ -1394,7 +1393,13 @@ function renderTournamentGamesNode(opts: {
           <td>{util.raw(render.formatAgentLink(g.p2.name, p2Href, p2Won))}</td>
           <td>{renderPartyMinisprites(g.p2.team) ?? '\u00a0'}</td>
           <td className='center'>{resNode}</td>
-          <td className='num muted' title={completedUtc} data-ts={g.completedAt}>{rel}</td>
+          <td
+            className='num muted'
+            data-ts={g.completedAt}
+            {...util.localizedTitle([{epoch: completedAt}])}
+          >
+            {rel}
+          </td>
         </tr>
         <tr className='battle-detail-row hide' data-detail-for={g.id}>
           <td colSpan={7}>
@@ -1649,7 +1654,13 @@ export function renderArenaTournamentsSummaryHtml(opts: {
                   <a href={tourHref} className='live-pill'>{'\u25cf'} LIVE</a>
                 </td>
               ) : (
-                <td>{util.formatUtcDate(t.startsAt)}</td>
+                <td>
+                  <util.Time
+                    epoch={t.startsAt}
+                    format='date'
+                    title={[{prefix: 'Starts ', epoch: t.startsAt}]}
+                  />
+                </td>
               );
               const displayName = formatTournamentName(t.name);
 
@@ -2169,9 +2180,10 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       savedPage1CompletedHtml = initParts.join('');
     }
 
-    const formatUtcDateStr = ts => {
+    const formatLocalDateHtml = ts => {
       if (typeof ts !== 'number' || !Number.isFinite(ts) || ts <= 0) return '—';
-      return new Date(ts * 1000).toISOString().slice(0, 10);
+      return '<time data-epoch="' + ts + '" data-fmt="date" title="' +
+        esc('Submitted ' + localTimestamp(ts)) + '">' + esc(pkmnTime.date(ts)) + '</time>';
     };
     const entrantSubmittedByVer = new Map();
     if (Array.isArray(pageInit.entrants)) {
@@ -2217,7 +2229,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             '<td><strong>' + (idx + 1) + '</strong></td>' +
             '<td>' + formatAgentLink(e.name, e.slug, true) +
             ' <code>' + esc(e.version) + '</code></td>' +
-            '<td class="num muted">' + esc(formatUtcDateStr(subTs)) + '</td>' +
+            '<td class="num muted">' + formatLocalDateHtml(subTs) + '</td>' +
             '</tr>';
         }).join('');
         bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
@@ -2450,7 +2462,9 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
 
       return '<div class="battle-detail"' + replayAttrs + '>' +
         '<div class="battle-detail-meta">' +
-          '<span class="muted">' + esc(utcStr(g.completedAt)) + '</span>' +
+          '<time class="muted" data-epoch="' + g.completedAt + '">' +
+            esc(localTimestamp(g.completedAt)) +
+          '</time>' +
           '<span>' + preemptPrefix +
             '<span class="muted">' + (isMulti ? 'Seeds:' : 'Seed:') + '</span> ' + seedsHtml +
           '</span>' +
@@ -2504,7 +2518,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const p2NameHtml = formatAgentLink(g.p2.name, g.p2.slug, p2Won);
       const p2SpritesHtml = renderPartyMinisprites(g.p2.team) || '&nbsp;';
 
-      const tsTitle = utcStr(g.completedAt);
+      const tsTitle = localTimestamp(g.completedAt);
       const rel = relTime(nowSec, g.completedAt);
 
       const tr = document.createElement('tr');
@@ -3203,12 +3217,30 @@ export function renderTournamentPage(opts: {
     : '';
 
   const closesAt = db.getTournamentClosesAt(t.startsAt);
-  const scheduleLine = t.status === 'scheduled'
-    ? `Starts ${util.formatUtcDateTime(t.startsAt)} · ` +
-      `Entries close ${util.formatUtcDateTime(closesAt)}`
-    : t.completedAt
-      ? `Started ${util.formatUtcDate(t.startsAt)} · Completed ${util.formatUtcDate(t.completedAt)}`
-      : `Started ${util.formatUtcDateTime(t.startsAt)}`;
+  const scheduleLine: util.Child = t.status === 'scheduled' ? (
+    <>
+      Starts <util.Time epoch={t.startsAt} format='datetime' /> · Entries close{' '}
+      <util.Time epoch={closesAt} format='datetime' />
+    </>
+  ) : t.completedAt ? (
+    <>
+      Started{' '}
+      <util.Time
+        epoch={t.startsAt}
+        format='date'
+        title={[{prefix: 'Started ', epoch: t.startsAt}]}
+      /> · Completed{' '}
+      <util.Time
+        epoch={t.completedAt}
+        format='date'
+        title={[{prefix: 'Completed ', epoch: t.completedAt}]}
+      />
+    </>
+  ) : (
+    <>
+      Started <util.Time epoch={t.startsAt} format='datetime' />
+    </>
+  );
 
   const standingsNode = renderTournamentStandingsNode({
     tournament: t,

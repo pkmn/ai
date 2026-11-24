@@ -381,7 +381,9 @@ const ACCOUNT_SCRIPT = `
               }
             } else {
               statusEl.className = 'no';
-              statusEl.textContent = data.error || ('Submission failed (' + res.status + ')');
+              statusEl.textContent = data.error
+                ? pkmnTime.text(data.error)
+                : ('Submission failed (' + res.status + ')');
             }
             submitting = false;
             syncSubmitBtn();
@@ -604,7 +606,9 @@ const ACCOUNT_SCRIPT = `
           if (!res.ok) {
             if (feedback) {
               feedback.className = 'staged-feedback no';
-              feedback.textContent = data.error || ('Action failed (' + res.status + ')');
+              feedback.textContent = data.error
+                ? pkmnTime.text(data.error)
+                : ('Action failed (' + res.status + ')');
             }
             buttons.forEach(b => { b.disabled = false; });
             return;
@@ -1031,16 +1035,21 @@ function renderStagedSection(opts: {
           ...(v.tournamentNames ?? []),
         ];
         const statsText = formatSmokeStatsText(v);
-        let activateDisabledReason: string | undefined;
+        let activateDisabledAttrs: util.LocalizedTitleAttrs | Record<string, never> = {};
         if (v.ladders.length > 0 && !v.ladders.some(id => opts.openLadderIds.has(id))) {
-          activateDisabledReason = 'All target ladders for this version have closed.';
+          activateDisabledAttrs = {title: 'All target ladders for this version have closed.'};
         } else if (v.tournaments.length > 0) {
           for (const tid of v.tournaments) {
             const ts = opts.tournamentById.get(tid);
             if (!ts || opts.now >= ts.closesAt) {
-              activateDisabledReason = ts
-                ? `Entries for ${ts.name} closed at ${util.formatUtcDateTime(ts.closesAt)}.`
-                : 'Target tournament is no longer open for entries.';
+              activateDisabledAttrs = ts
+                ? util.localizedTitle([{
+                  prefix: `Entries for ${ts.name} closed at `,
+                  epoch: ts.closesAt,
+                  suffix: '.',
+                  format: 'datetime',
+                }])
+                : {title: 'Target tournament is no longer open for entries.'};
               break;
             }
           }
@@ -1060,8 +1069,8 @@ function renderStagedSection(opts: {
                   className='btn staged-action-btn'
                   data-version-id={v.id}
                   data-action='activate'
-                  disabled={Boolean(activateDisabledReason)}
-                  title={activateDisabledReason}
+                  disabled={Boolean(activateDisabledAttrs.title)}
+                  {...activateDisabledAttrs}
                 >
                   Activate
                 </button>
@@ -1250,7 +1259,13 @@ function renderHistorySection(
                   </td>
                   <td className='wrap'>{smokeCell}</td>
                   <td>{stateCell}</td>
-                  <td className='num muted'>{util.formatUtcDate(v.submittedAt)}</td>
+                  <td className='num muted'>
+                    <util.Time
+                      epoch={v.submittedAt}
+                      format='date'
+                      title={[{prefix: 'Submitted ', epoch: v.submittedAt}]}
+                    />
+                  </td>
                 </tr>
               );
             })}
@@ -1384,12 +1399,14 @@ export function renderAccountPage(opts: {
 
   let statusNotice: util.Html = <div id='sub-status' className='hide' />;
   if (!canSubmitAny && status.reason) {
-    statusNotice = <div id='sub-status' className='muted'>{status.reason}</div>;
+    statusNotice = (
+      <div id='sub-status' className='muted'>{util.renderLocalizedText(status.reason)}</div>
+    );
   } else if (!status.canSubmit && canSubmitTourney && status.reason) {
     statusNotice = (
       <div id='sub-status' className='muted'>
-        Ladders: {status.reason} Tournament registration remains open above (1 OCI entry per
-        project).
+        Ladders: {util.renderLocalizedText(status.reason)} Tournament registration remains open
+        above (1 OCI entry per project).
       </div>
     );
   }
@@ -1422,7 +1439,9 @@ export function renderAccountPage(opts: {
         <span className='muted'>·</span>
         <span>
           <span className='muted'>Status:</span>{' '}
-          <span className={statusClass} title={statusTitle}>{status.label}</span>
+          <span className={statusClass} {...util.localizedTitleFromText(statusTitle)}>
+            {status.label}
+          </span>
         </span>
         <span className='muted'>·</span>
         <form method='POST' action='/auth/logout?return_to=%2Farena%2F' className='inline-form'>
@@ -1512,13 +1531,18 @@ export function renderAccountPage(opts: {
                 {tournamentStatuses.length > 0 && (
                   <div className='check-group'>
                     {tournamentStatuses.map(t => {
-                      const scheduleHint =
-                        `starts ${util.formatUtcDate(t.startsAt)} · ` +
-                        `entries close ${util.formatUtcDateTime(t.closesAt)}`;
                       if (t.canSubmit) {
                         const checked = !status.canSubmit && tournamentStatuses.length === 1;
+                        const scheduleTitle = util.localizedTitle([
+                          {
+                            prefix: 'OCI image required (linux/amd64); starts ',
+                            epoch: t.startsAt,
+                            format: 'date',
+                          },
+                          {prefix: 'entries close ', epoch: t.closesAt, format: 'datetime'},
+                        ]);
                         return (
-                          <label title={`OCI image required (linux/amd64); ${scheduleHint}`}>
+                          <label {...scheduleTitle}>
                             <input
                               type='checkbox'
                               name='tournaments'
@@ -1527,7 +1551,7 @@ export function renderAccountPage(opts: {
                             />{' '}
                             {t.name}{' '}
                             <span className='muted'>
-                              (OCI · closes {util.formatUtcDateTime(t.closesAt)})
+                              (OCI · closes <util.Time epoch={t.closesAt} format='datetime' />)
                             </span>
                           </label>
                         );
@@ -1538,19 +1562,24 @@ export function renderAccountPage(opts: {
                             (t.queueAhead === 0 ? 'next in queue' : `${t.queueAhead} ahead`)
                           : `pending: ${t.pendingVersion}`
                         : undefined;
-                      const badge = t.enteredVersion
+                      const badge: util.Child = t.enteredVersion
                         ? `entered: ${t.enteredVersion}`
                         : pendingBadge ?? (
                           t.stagedVersion
                             ? `staged: ${t.stagedVersion}`
                             : t.nextEligibleAt !== undefined
-                              ? `retry after ${util.formatUtcDateTime(t.nextEligibleAt)}`
+                              ? <>
+                                retry after <util.Time epoch={t.nextEligibleAt} format='datetime' />
+                              </>
                               : now >= t.closesAt
                                 ? 'entries closed'
                                 : 'closed'
                         );
                       return (
-                        <label className='upcoming' title={t.reason}>
+                        <label
+                          className='upcoming'
+                          {...(t.reason ? util.localizedTitleFromText(t.reason) : {})}
+                        >
                           <input
                             type='checkbox'
                             name='tournaments'
@@ -1596,7 +1625,10 @@ export function renderAccountPage(opts: {
                       }
                       const hintText = statusParts.length ? ` (${statusParts.join(' · ')})` : '';
                       return (
-                        <label className={labelClass} title={labelTitle}>
+                        <label
+                          className={labelClass}
+                          {...(labelTitle ? util.localizedTitleFromText(labelTitle) : {})}
+                        >
                           <input
                             type='checkbox'
                             name='ladders'
@@ -1628,7 +1660,9 @@ export function renderAccountPage(opts: {
                     type='submit'
                     className='btn'
                     disabled={true}
-                    title={!canSubmitAny && status.reason ? status.reason : undefined}
+                    {...(!canSubmitAny && status.reason
+                      ? util.localizedTitleFromText(status.reason)
+                      : {})}
                   >
                     Submit
                   </button>

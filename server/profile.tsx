@@ -32,10 +32,6 @@ interface LadderProfileClientData {
   reign: Record<string, string>;
 }
 
-function formatIsoDateTimeUtc(sec: number): string {
-  return `${new Date(sec * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC`;
-}
-
 function formatDurationCell(seconds: number, boldDays = false): util.Html {
   if (seconds <= 0) {
     return <span className='muted'>—</span>;
@@ -141,8 +137,22 @@ function buildVersionDynamicStats(
     entry.role !== 'retired' && (entry.matches < 10 || entry.se > 60);
   let rank: string;
   if (entry.role === 'retired') {
-    const retDate = entry.retiredAt ? ` ${util.formatUtcDate(entry.retiredAt)}` : '';
-    rank = String(<span className='muted'>— (retired{retDate})</span>);
+    rank = String(
+      <span className='muted'>
+        — (retired
+        {entry.retiredAt ? (
+          <>
+            {' '}
+            <util.Time
+              epoch={entry.retiredAt}
+              format='date'
+              title={[{prefix: 'Retired ', epoch: entry.retiredAt}]}
+            />
+          </>
+        ) : undefined}
+        )
+      </span>
+    );
   } else if (entry.rankCurrent !== undefined && !isProvisional) {
     const nextRank = entry.rankCurrent + 1;
     const los = adjacentLos.get(entry.versionId);
@@ -657,7 +667,13 @@ function renderVersionsPane(opts: {
                   {hasCpu && (
                     <td className={e.cpuMatches > 0 ? 'num' : 'num muted'}>{cpuText}</td>
                   )}
-                  <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
+                  <td className='num muted'>
+                    <util.Time
+                      epoch={e.submittedAt}
+                      format='date'
+                      title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                    />
+                  </td>
                 </tr>,
                 <tr className='battle-detail-row hide'>
                   <td colSpan={colCount}>
@@ -1012,7 +1028,6 @@ function renderRecentMatchesPane(opts: {
                 }
 
                 const oppHref = agentLinks[oppSide.slug];
-                const tsTitle = formatIsoDateTimeUtc(m.completedAt);
                 const rel = render.formatRelativeTime(nowSec, m.completedAt);
                 const detailHtml = render.battleInlineDetailHtml(m, agentSlug);
                 const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
@@ -1036,7 +1051,11 @@ function renderRecentMatchesPane(opts: {
                         <code>{oppSide.version}</code>
                       </td>
                       <td className='center'>{resNode}</td>
-                      <td className='num muted' title={tsTitle} data-ts={m.completedAt}>
+                      <td
+                        className='num muted'
+                        data-ts={m.completedAt}
+                        {...util.localizedTitle([{epoch: m.completedAt}])}
+                      >
                         {rel}
                       </td>
                     </tr>
@@ -1239,7 +1258,7 @@ function buildProfileScript(
         resHtml = 'T <span class="muted">(' + esc(ourCat) + ')</span>';
       }
 
-      const tsTitle = utcStr(m.completedAt);
+      const tsTitle = localTimestamp(m.completedAt);
       const rel = relTime(nowSec, m.completedAt);
 
       const tr = document.createElement('tr');
@@ -1499,7 +1518,9 @@ function buildProfileScript(
       if (!ladData) return;
       const s = ladData.vstats[curVer] || ladData.vstats.all;
       if (s) {
-        document.getElementById('stat-rank').innerHTML = s.rank;
+        const rankEl = document.getElementById('stat-rank');
+        rankEl.innerHTML = s.rank;
+        pkmnTime.localize(rankEl);
         document.getElementById('stat-elo').innerHTML = s.elo;
         document.getElementById('stat-gxe').innerHTML = s.gxe;
         document.getElementById('stat-peak').innerHTML = s.peak;
@@ -1544,14 +1565,21 @@ function buildProfileScript(
       }
       profileData[ladKey] = payload.clientData;
       const vPane = appendPaneHtml(versionsSec, payload.versionsPaneHtml);
-      if (vPane) wireVersionsOrMatchupsPane(vPane);
+      if (vPane) {
+        pkmnTime.localize(vPane);
+        wireVersionsOrMatchupsPane(vPane);
+      }
       const hPane = appendPaneHtml(matchupsSec, payload.matchupsPaneHtml);
       if (hPane) {
+        pkmnTime.localize(hPane);
         wireVersionsOrMatchupsPane(hPane);
         hPane.querySelectorAll('.h2h-table').forEach(wireH2hTable);
       }
       const mPane = appendPaneHtml(matchesSec, payload.matchesPaneHtml);
-      if (mPane) wireMatchesPane(mPane);
+      if (mPane) {
+        pkmnTime.localize(mPane);
+        wireMatchesPane(mPane);
+      }
     };
 
     const showLadder = ladKey => {
