@@ -302,6 +302,7 @@ function buildWikiMockChartPng(): Buffer {
 }
 
 let cachedWikiMockChartPng: Buffer | undefined;
+const MOCK_AVATAR_URL = new URL('https://github.com/scheibo.png?size=64');
 
 async function setupDiscordWikiPage(fixture: Fixture): Promise<() => void> {
   await fixture.wikiInstance.savePage(
@@ -335,6 +336,43 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'static',
       title: 'Home',
       path: '/',
+    },
+    {
+      name: 'home-signed-out',
+      section: 'static',
+      title: 'Home (Signed Out)',
+      path: '/',
+      githubUser: 'anonymous',
+    },
+    {
+      name: 'home-theme-light',
+      section: 'static',
+      title: 'Home (Light Override)',
+      path: '/',
+      act: async page => {
+        for (let i = 0; i < 3; i++) {
+          const mode = await page.evaluate(
+            () => document.documentElement.getAttribute('data-theme-mode')
+          );
+          if (mode === 'light') break;
+          await page.locator('#theme-toggle').click();
+        }
+      },
+    },
+    {
+      name: 'home-theme-dark',
+      section: 'static',
+      title: 'Home (Dark Override)',
+      path: '/',
+      act: async page => {
+        for (let i = 0; i < 3; i++) {
+          const mode = await page.evaluate(
+            () => document.documentElement.getAttribute('data-theme-mode')
+          );
+          if (mode === 'dark') break;
+          await page.locator('#theme-toggle').click();
+        }
+      },
     },
     {
       name: 'home-live-banner',
@@ -2348,7 +2386,7 @@ async function decodePngAsync(buf: Buffer): Promise<PngImage> {
   return unfilterPng(parsed, await inflateAsync(parsed.idat));
 }
 
-const EXTERNAL_HOSTS = new Set(['www.smogon.com', 'play.pokemonshowdown.com']);
+const EXTERNAL_HOSTS = new Set(['www.smogon.com', 'play.pokemonshowdown.com', 'github.com']);
 const EXTERNAL_FETCH_TIMEOUT_MILLIS = 3_000;
 const GIF87A_SIG = Buffer.from('GIF87a', 'ascii');
 const GIF89A_SIG = Buffer.from('GIF89a', 'ascii');
@@ -3701,6 +3739,21 @@ async function serveExternal(route: Route, forceOffline: boolean): Promise<void>
     });
     return;
   }
+  if (
+    !forceOffline &&
+    (url.hostname === 'avatars.githubusercontent.com' || url.hostname === 'cdn.discordapp.com')
+  ) {
+    const asset = await fetchExternalAsset(MOCK_AVATAR_URL);
+    if (asset) {
+      await route.fulfill({
+        status: 200,
+        contentType: asset.contentType,
+        headers: {'access-control-allow-origin': '*'},
+        body: asset.body,
+      });
+      return;
+    }
+  }
   if (!forceOffline && EXTERNAL_HOSTS.has(url.hostname)) {
     const asset = await fetchExternalAsset(url);
     if (asset) {
@@ -3753,7 +3806,7 @@ async function createSlotWorkers(
       const browser = browsers[idx % browsers.length];
       let currentDevice: ViewportId = device;
       let currentTheme: Theme = theme;
-      let currentToken = '';
+      let currentToken: string | undefined;
       let currentOffline = false;
       const pendingRequests = new Set<Request>();
       let quietTimer: ReturnType<typeof setTimeout> | undefined;
@@ -3832,9 +3885,13 @@ async function createSlotWorkers(
             currentTheme = nextTheme;
           }
           if (nextToken !== currentToken) {
-            await context.addCookies([
-              {name: auth.SESSION_COOKIE, value: nextToken, url: fixture.origin},
-            ]);
+            if (nextToken) {
+              await context.addCookies([
+                {name: auth.SESSION_COOKIE, value: nextToken, url: fixture.origin},
+              ]);
+            } else {
+              await context.clearCookies();
+            }
             currentToken = nextToken;
           }
         },
@@ -3994,7 +4051,9 @@ async function shootWithWorker(
   file: string,
   fixture: Fixture
 ): Promise<{problems: string[]; viewerRects: Rect[]}> {
-  const token = fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo;
+  const token = scenario.githubUser === 'anonymous'
+    ? ''
+    : (fixture.cookies[scenario.githubUser ?? 'scheibo'] ?? fixture.cookies.scheibo);
   await worker.configure(device, theme, token, Boolean(scenario.offline));
   worker.problems.length = 0;
 
@@ -4003,6 +4062,9 @@ async function shootWithWorker(
   }
 
   const {page} = worker;
+  if (page.url().startsWith(fixture.origin)) {
+    await page.evaluate("try { localStorage.removeItem('theme'); } catch {}");
+  }
   worker.resetPendingRequests();
   const navRes = await page.goto(scenario.path);
   await worker.waitForNetworkQuiet();

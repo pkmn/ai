@@ -2868,6 +2868,9 @@ describe('JSON route parity & retired pool archives', () => {
     const filtered = shots.filterScenarios(scenarios, ['HOME', 'account-teams-complete']);
     expect(filtered.map(s => s.name)).toEqual([
       'home',
+      'home-signed-out',
+      'home-theme-light',
+      'home-theme-dark',
       'home-live-banner',
       'account-teams-complete',
     ]);

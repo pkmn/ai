@@ -887,6 +887,7 @@ describe('mock scenarios & E2E lifecycle', () => {
 
       tournaments.renderBattleViewerPage(viewPublicDir);
       const viewApp = polka();
+      new auth.Auth({db: sseDb, config: E2E_AUTH}).register(viewApp);
       const viewArena = arena.register(viewApp, {
         db: sseDb,
         arenaSecret: E2E_ARENA_SECRET,
@@ -969,6 +970,74 @@ describe('mock scenarios & E2E lifecycle', () => {
 
         // Part A: `/arena/battles/` live SSE updates without refreshing
         await livePage.goto(`${viewBaseUrl}/arena/battles/`, {waitUntil: 'domcontentloaded'});
+
+        // Verify top-right controls & manual theme switcher (`system -> light -> dark -> system`)
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+          hasControls: Boolean(
+            document.getElementById('theme-toggle') && document.getElementById('account-link')
+          ),
+        }))).toEqual({theme: 'dark', mode: 'system', saved: null, hasControls: true});
+
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'light', mode: 'light', saved: 'light'});
+
+        await livePage.reload({waitUntil: 'domcontentloaded'});
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'light', mode: 'light', saved: 'light'});
+
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'dark', mode: 'dark', saved: 'dark'});
+
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'dark', mode: 'system', saved: null});
+
+        // Under light OS, clicking starts opposite (`system -> dark -> light -> system`)
+        await livePage.emulateMedia({colorScheme: 'light'});
+        await livePage.waitForFunction(
+          () => document.documentElement.getAttribute('data-theme') === 'light'
+        );
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+        }))).toEqual({theme: 'light', mode: 'system'});
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'dark', mode: 'dark', saved: 'dark'});
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'light', mode: 'light', saved: 'light'});
+        await livePage.locator('#theme-toggle').click();
+        expect(await livePage.evaluate(() => ({
+          theme: document.documentElement.getAttribute('data-theme'),
+          mode: document.documentElement.getAttribute('data-theme-mode'),
+          saved: localStorage.getItem('theme'),
+        }))).toEqual({theme: 'light', mode: 'system', saved: null});
+        await livePage.emulateMedia({colorScheme: 'dark'});
+
         await livePage.locator('label[for="bf-vgc"]').click();
         await livePage.waitForFunction(
           () => (document.getElementById('bf-vgc') as HTMLInputElement | undefined)?.checked
