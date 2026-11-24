@@ -725,7 +725,9 @@ function renderClockSide(
       : `${bankTip} (${incLabel})`;
   return (
     <div className='clock-side' id={`clock-side-${slot}`}>
-      <span><tt>{slot}</tt> <strong id={`clock-name-${slot}`}>{clock.name}</strong></span>
+      <span>
+        <tt>{slot.toUpperCase()}</tt> <strong id={`clock-name-${slot}`}>{clock.name}</strong>
+      </span>
       <span className={pillCls} id={`clock-pill-${slot}`} title={tip}>
         <span className={timeCls} id={`clock-${slot}`}>{formatClockMmSs(clock.bankSeconds)}</span>
         <span className='clock-sub' id={`clock-sub-${slot}`}>{subText}</span>
@@ -2025,7 +2027,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             's bank (choice committed, waiting for opponent)')
           : (rem + 's remaining in ' + startingBankSeconds + 's bank (' + incLabel + ')');
       return '<div class="clock-side" id="clock-side-' + slot + '">' +
-        '<span><tt>' + slot + '</tt> <strong id="clock-name-' + slot + '">' +
+        '<span><tt>' + slot.toUpperCase() + '</tt> <strong id="clock-name-' + slot + '">' +
         esc(clock.name) + '</strong></span>' +
         '<span class="' + pillCls + '" id="clock-pill-' + slot + '" title="' + esc(tip) + '">' +
         '<span class="' + timeCls + '" id="clock-' + slot + '">' +

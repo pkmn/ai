@@ -170,8 +170,8 @@ export function renderAiWinBarHtml(
   const p2ViewOfP1 = p2WinRaw !== undefined ? 1 - p2WinRaw : undefined;
   const fillPct = Math.max(3, Math.min(97, p1Win * 100));
   const tipParts: string[] = [];
-  if (p1WinRaw !== undefined) tipParts.push(`${p1Name} (p1): ${formatWinPct(p1WinRaw)}`);
-  if (p2WinRaw !== undefined) tipParts.push(`${p2Name} (p2): ${formatWinPct(p2WinRaw)}`);
+  if (p1WinRaw !== undefined) tipParts.push(`${p1Name} (P1): ${formatWinPct(p1WinRaw)}`);
+  if (p2WinRaw !== undefined) tipParts.push(`${p2Name} (P2): ${formatWinPct(p2WinRaw)}`);
   const markHtml = p1WinRaw !== undefined && p2ViewOfP1 !== undefined
     ? `<div class="ai-winbar-mark" style="left:calc(${(p2ViewOfP1 * 100).toFixed(1)}% - 1.5px)" ` +
       `title="${util.escapeHtml(p2Name)} estimate of ${util.escapeHtml(p1Name)} win%: ` +
@@ -236,12 +236,12 @@ export function renderAiWinChartHtml(
   const legendParts: string[] = [];
   if (hasP1) {
     legendParts.push(
-      '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>p1 win%</span>'
+      '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>P1 win%</span>'
     );
   }
   if (hasP2) {
     legendParts.push(
-      '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−p2 win%</span>'
+      '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−P2 win%</span>'
     );
   }
   const heading = 'Win probability';
@@ -253,8 +253,8 @@ export function renderAiWinChartHtml(
       const pt = points[i];
       const rx = Math.max(padL, xFor(i) - step / 2);
       const tipParts = [`Turn ${pt.turn}`];
-      if (pt.p1 !== undefined) tipParts.push(`p1 ${formatWinPct(pt.p1)}`);
-      if (pt.p2 !== undefined) tipParts.push(`p2 ${formatWinPct(pt.p2)}`);
+      if (pt.p1 !== undefined) tipParts.push(`P1 ${formatWinPct(pt.p1)}`);
+      if (pt.p2 !== undefined) tipParts.push(`P2 ${formatWinPct(pt.p2)}`);
       hits += `<rect class="ai-chart-hit" x="${rx.toFixed(1)}" y="${padT}" ` +
         `width="${step.toFixed(1)}" height="${plotH}" fill="transparent" ` +
         `data-seek-turn="${pt.turn}"><title>${tipParts.join(' · ')}</title></rect>`;
@@ -332,9 +332,9 @@ export function renderAiPanelHtml(
   if (!hasInfo && !hasChart) return '';
   const stripHtml = showStrip && hasInfo
     ? '<div class="ai-strip">' +
-        '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
+        '<div class="ai-strip-side"><span class="ai-slot-tag">P1</span>' +
           `${renderAiStatsHtml('p1', p1Info)}</div>` +
-        '<div class="ai-strip-side"><span class="ai-slot-tag">p2</span>' +
+        '<div class="ai-strip-side"><span class="ai-slot-tag">P2</span>' +
           `${renderAiStatsHtml('p2', p2Info)}</div>` +
       '</div>'
     : '';
@@ -399,8 +399,8 @@ export function buildAiPanelClientJs(): string {
       const p2ViewOfP1 = hasP2 ? (1 - p2Info.win) : undefined;
       const fillPct = Math.max(3, Math.min(97, p1Win * 100));
       const tipParts = [];
-      if (hasP1) tipParts.push(p1Name + ' (p1): ' + formatWinPct(p1Info.win));
-      if (hasP2) tipParts.push(p2Name + ' (p2): ' + formatWinPct(p2Info.win));
+      if (hasP1) tipParts.push(p1Name + ' (P1): ' + formatWinPct(p1Info.win));
+      if (hasP2) tipParts.push(p2Name + ' (P2): ' + formatWinPct(p2Info.win));
       const markHtml = (hasP1 && hasP2 && p2ViewOfP1 !== undefined)
         ? '<div class="ai-winbar-mark" style="left:calc(' + (p2ViewOfP1 * 100).toFixed(1) +
           '% - 1.5px)" title="' + escAi(p2Name) + ' estimate of ' + escAi(p1Name) + ' win%: ' +
@@ -453,12 +453,12 @@ export function buildAiPanelClientJs(): string {
       const legendParts = [];
       if (hasP1) {
         legendParts.push(
-          '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>p1 win%</span>'
+          '<span class="ai-legend-item"><span class="ai-swatch-p1"></span>P1 win%</span>'
         );
       }
       if (hasP2) {
         legendParts.push(
-          '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−p2 win%</span>'
+          '<span class="ai-legend-item"><span class="ai-swatch-p2"></span>1−P2 win%</span>'
         );
       }
       const interactive = Boolean(opts && opts.interactive);
@@ -470,8 +470,8 @@ export function buildAiPanelClientJs(): string {
           const pt = points[i];
           const rx = Math.max(padL, xFor(i) - step / 2);
           const tips = ['Turn ' + pt.turn];
-          if (typeof pt.p1 === 'number') tips.push('p1 ' + formatWinPct(pt.p1));
-          if (typeof pt.p2 === 'number') tips.push('p2 ' + formatWinPct(pt.p2));
+          if (typeof pt.p1 === 'number') tips.push('P1 ' + formatWinPct(pt.p1));
+          if (typeof pt.p2 === 'number') tips.push('P2 ' + formatWinPct(pt.p2));
           hits += '<rect class="ai-chart-hit" x="' + rx.toFixed(1) + '" y="' + padT +
             '" width="' + step.toFixed(1) + '" height="' + plotH +
             '" fill="transparent" data-seek-turn="' + pt.turn + '"><title>' +
@@ -544,9 +544,9 @@ export function buildAiPanelClientJs(): string {
       if (!hasInfo && !hasChart) return '';
       const stripHtml = (showStrip && hasInfo)
         ? '<div class="ai-strip">' +
-            '<div class="ai-strip-side"><span class="ai-slot-tag">p1</span>' +
+            '<div class="ai-strip-side"><span class="ai-slot-tag">P1</span>' +
               renderAiStatsHtml('p1', p1Info) + '</div>' +
-            '<div class="ai-strip-side"><span class="ai-slot-tag">p2</span>' +
+            '<div class="ai-strip-side"><span class="ai-slot-tag">P2</span>' +
               renderAiStatsHtml('p2', p2Info) + '</div>' +
           '</div>'
         : '';
@@ -847,8 +847,8 @@ export function buildBattleDetailClientJs(): string {
         }
       }
       const html = renderAiPanelHtml(
-        slot._aiSeat1 || 'p1',
-        slot._aiSeat2 || 'p2',
+        slot._aiSeat1 || 'P1',
+        slot._aiSeat2 || 'P2',
         snap.p1,
         snap.p2,
         winHistory,
@@ -983,13 +983,13 @@ export function buildBattleDetailClientJs(): string {
       if (leftEl) {
         if (isSingleGame) {
           leftEl.innerHTML = '<strong>Replay</strong> · <code>' + esc(matchId) + '</code> ' +
-            '<span class="muted">(<tt>p1</tt> ' + esc(p1Name) +
-            ' vs <tt>p2</tt> ' + esc(p2Name) + ')</span>';
+            '<span class="muted">(<tt>P1</tt> ' + esc(p1Name) +
+            ' vs <tt>P2</tt> ' + esc(p2Name) + ')</span>';
         } else {
           leftEl.innerHTML = '<strong>Replay</strong> · <code>' + esc(matchId) +
             '</code> · <strong>Game ' + activeGame + ' / ' + totalGames + '</strong> ' +
-            '<span class="muted">(<tt>p1</tt> ' + esc(seat1) +
-            ' vs <tt>p2</tt> ' + esc(seat2) + ')</span>';
+            '<span class="muted">(<tt>P1</tt> ' + esc(seat1) +
+            ' vs <tt>P2</tt> ' + esc(seat2) + ')</span>';
         }
       }
       if (rightEl) {
@@ -1231,7 +1231,7 @@ function buildBattlesScript(
         : '';
       return '<div class="live-g1-side">' +
         '<div class="live-g1-top">' +
-        '<span><tt>' + key + '</tt> ' + renderAgent(slotMeta, won) + '</span>' +
+        '<span><tt>' + key.toUpperCase() + '</tt> ' + renderAgent(slotMeta, won) + '</span>' +
         orbs +
         '</div>' +
         '<div class="live-g1-telemetry">' +
@@ -1300,7 +1300,8 @@ function buildBattlesScript(
             : 'Currently executing (SIGCONT)') +
           '">&#9679; ' + (isInit ? 'INITIALIZING' : 'RUNNING') + '</span>'
         : '<span class="state-paused" id="state-' + key +
-          '" title="Frozen by kernel SIGSTOP while ' + otherKey + ' computes">PAUSED</span>';
+          '" title="Frozen by kernel SIGSTOP while ' + otherKey.toUpperCase() +
+          ' computes">PAUSED</span>';
       const timerTitle = isVgcTimer
         ? '60s /ready init grace + Pokémon Showdown VGC Timer: 420s Your Time, 90s preview, ' +
           '55s/turn'
@@ -1316,7 +1317,7 @@ function buildBattlesScript(
         : '';
       return '<div class="slot-card ' + (isRunning ? 'running' : 'paused') +
         '" id="slot-' + key + '">' +
-        '<div class="slot-top"><span><tt>' + key + '</tt> ' +
+        '<div class="slot-top"><span><tt>' + key.toUpperCase() + '</tt> ' +
         renderAgent(slotData, true) + '</span>' +
         orbsHtml +
         badge + '</div>' +
@@ -3536,7 +3537,7 @@ function renderLiveGame1Side(
     <div className='live-g1-side'>
       <div className='live-g1-top'>
         <span>
-          <tt>{key}</tt> {renderAgentLink(slotMeta.name, href, won)}{' '}
+          <tt>{key.toUpperCase()}</tt> {renderAgentLink(slotMeta.name, href, won)}{' '}
           <code>{slotMeta.version}</code>
         </span>
         {renderPokemonOrbsNode(side.pokemon)}
@@ -3640,7 +3641,7 @@ function renderLiveSlotCard(
     <span
       className='state-paused'
       id={`state-${key}`}
-      title={`Frozen by kernel SIGSTOP while ${otherKey} computes`}
+      title={`Frozen by kernel SIGSTOP while ${otherKey.toUpperCase()} computes`}
     >
       PAUSED
     </span>
@@ -3660,7 +3661,7 @@ function renderLiveSlotCard(
     <div className={`slot-card ${isRunning ? 'running' : 'paused'}`} id={`slot-${key}`}>
       <div className='slot-top'>
         <span>
-          <tt>{key}</tt> {renderAgentLink(slotData.name, href, true)}{' '}
+          <tt>{key.toUpperCase()}</tt> {renderAgentLink(slotData.name, href, true)}{' '}
           <code>{slotData.version}</code>
         </span>
         {renderPokemonOrbsNode(slotData.pokemon)}

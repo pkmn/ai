@@ -1397,6 +1397,10 @@ describe('tournament SSR views', () => {
   test('renders multi-table live clocks with sandboxed viewer iframe', async () => {
     const tourney2Html = await h.getText('/arena/tournaments/2/');
     expect(tourney2Html).toContain('class="clock-bar"');
+    expect(tourney2Html).toContain('<tt>P1</tt>');
+    expect(tourney2Html).toContain('<tt>P2</tt>');
+    expect(tourney2Html).not.toContain('<tt>p1</tt>');
+    expect(tourney2Html).not.toContain('<tt>p2</tt>');
     expect(tourney2Html).toContain('02:25');
     expect(tourney2Html).toContain('01:52');
     expect(tourney2Html).toContain('class="clock-pill committed" id="clock-pill-p1"');
@@ -3441,6 +3445,11 @@ describe('JSON route parity & retired pool archives', () => {
       expect(html).toContain('12 turns');
       expect(html).toContain('Timeout');
       expect(html).toContain('1950 ms/turn');
+      expect(html).toContain('<tt>P1</tt>');
+      expect(html).toContain('<tt>P2</tt>');
+      expect(html).toContain('Frozen by kernel SIGSTOP while P1 computes');
+      expect(html).not.toContain('<tt>p1</tt>');
+      expect(html).not.toContain('<tt>p2</tt>');
       expect(html).toMatch(
         /<span[^>]*class="(?:green hp-orb|hp-orb green)"[^>]*title="98%"[^>]*>\u25cf<\/span>/
       );
@@ -4026,13 +4035,30 @@ describe('JSON route parity & retired pool archives', () => {
       'Vertex',
       {win: 0.64, depth: 7, nodes: 205000, nps: 99000},
       {win: 0.41, nodes: 38900, nps: 54000},
-      [{turn: 1, p1: 0.52, p2: 0.49}, {turn: 2, p1: 0.64, p2: 0.41}]
+      [{turn: 1, p1: 0.52, p2: 0.49}, {turn: 2, p1: 0.64, p2: 0.41}],
+      {interactive: true}
     );
     expect(both).toContain('ai-winbar-mark');
     expect(both).toContain('ai-swatch-p1');
     expect(both).toContain('ai-swatch-p2');
-    expect(both).toContain('1−p2 win%');
+    expect(both).toContain('<span class="ai-slot-tag">P1</span>');
+    expect(both).toContain('<span class="ai-slot-tag">P2</span>');
+    expect(both).toContain('Hydra (P1): 64.0%');
+    expect(both).toContain('Vertex (P2): 41.0%');
+    expect(both).toContain('P1 win%');
+    expect(both).toContain('1−P2 win%');
+    expect(both).toContain('Turn 1 · P1 52.0% · P2 49.0%');
     expect(both).not.toContain('no /info telemetry');
+
+    const clientAiJs = render.buildAiPanelClientJs();
+    expect(clientAiJs).toContain('<span class="ai-slot-tag">P1</span>');
+    expect(clientAiJs).toContain('<span class="ai-slot-tag">P2</span>');
+    expect(clientAiJs).toContain('P1 win%');
+    expect(clientAiJs).toContain('1−P2 win%');
+    expect(clientAiJs).not.toContain('>p1<');
+    expect(clientAiJs).not.toContain('>p2<');
+    expect(clientAiJs).not.toContain('p1 win%');
+    expect(clientAiJs).not.toContain('1−p2 win%');
 
     const withoutStrip = render.renderAiPanelHtml(
       'Hydra',

@@ -33,6 +33,11 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
 - **Never `"bot"`:** Always use **`agent`** or **`project`** everywhere (identifiers, types, files,
   SQL, config, UI), except upstream names (`vgc.bot`, `PokemonShowdownBot`) in `static/projects.yml`
   or citations.
+- **Uppercase `P1`/`P2` in UI:** Always render player slot labels in uppercase (`P1`, `P2`) across
+  every site UI surface (tags, badges, legends, tooltips, live slot cards, clock headers, and replay
+  headers). Leave Pokémon Showdown battle log output (including offline viewer log entries like
+  `p1`/`p2`/`p1a`) at Showdown's default lowercase, and keep lowercase `p1`/`p2` for internal code
+  identifiers, DOM IDs/CSS classes, and Showdown wire protocol tokens.
 - **Implicit module scope:** Don't repeat filenames in exports (`Config`, `Options`, `Entry`,
   `register` from `server/wiki.tsx`, consumed as `wiki.Config`).
 - **No `DEFAULT_` prefix:** Name constants directly (`DB_PATH`, `PROJECTS_FILE`, `AVATARS_DIR`).
