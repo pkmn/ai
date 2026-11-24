@@ -1555,21 +1555,33 @@ function buildProfileScript(
     };
     window.addEventListener('hashchange', () => { void applyHash(); });
 
-    const applyInitVs = () => {
-      const initVs = new URLSearchParams(location.search).get('vs');
+    const applyInitParams = () => {
+      const params = new URLSearchParams(location.search);
+      let changed = false;
+      const initVer = params.get('v');
+      if (initVer && verSelect) {
+        const matchVer = Array.from(verSelect.options).find(o => o.value === initVer);
+        if (matchVer) {
+          curVer = initVer;
+          verSelect.value = initVer;
+          changed = true;
+        }
+      }
+      const initVs = params.get('vs');
       if (initVs && oppSelect) {
         const matchOpt = Array.from(oppSelect.options).find(o => o.value === initVs);
         if (matchOpt) {
           curOpp = initVs;
           oppSelect.value = initVs;
-          applyStats(curVer);
+          changed = true;
         }
       }
+      if (changed) applyStats(curVer);
     };
     if (location.hash) {
-      void applyHash().then(applyInitVs);
+      void applyHash().then(applyInitParams);
     } else {
-      applyInitVs();
+      applyInitParams();
     }
 
     if (matchupsSec) {
