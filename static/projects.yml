@@ -782,6 +782,21 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Loxias
+  company:
+    name: Delf Research
+    url: https://delf-research.com/
+  active: 2026 # October 10
+  engine:
+    - name: poke-env
+      url: https://github.com/hsahovic/poke-env
+  language: [Rust, Python]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      hsahovic: hsahovic.516335
 - name: Mocca
   active: 2026 # October 11
   engine: Custom
