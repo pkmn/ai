@@ -94,6 +94,7 @@ describe('schema migrations', () => {
       'config.sql',
       'developers.sql',
       'discord-members.sql',
+      'discord-watches.sql',
       'ladder-entries.sql',
       'ladder-teams.sql',
       'ladders.sql',
@@ -3107,6 +3108,7 @@ describe('per-ladder qualification & migrations', () => {
         '0005-telemetry-aggregates.sql',
         '0006-smoke-diagnostics.sql',
         '0007-staged-smoke-status.sql',
+        '0008-discord-watches.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -4050,4 +4052,286 @@ describe('per-ladder qualification & migrations', () => {
       }
     }
   );
+});
+
+describe('discord watches', () => {
+  const sampleProjects = `
+- name: Alpha
+  arena:
+    owners:
+      dev1: '1001'
+- name: Beta
+  arena:
+    owners:
+      dev2: '1002'
+- name: Gamma
+  arena:
+    owners:
+      dev3: '1003'
+- name: Delta
+  arena:
+    owners:
+      dev4: '1004'
+- name: Epsilon
+  arena:
+    owners:
+      dev5: '1005'
+- name: Zeta
+  arena:
+    owners:
+      dev6: '1006'
+`;
+
+  const sampleLadders = `
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: active
+- name: RAND
+  format: gen9randombattle
+  id: gen9randombattle20261109
+  team: random
+  status: active
+`;
+
+  test('migration 0008-discord-watches.sql is additive and matches declarative schema', () => {
+    const sql = fs.readFileSync(
+      root('db', 'migration', '0008-discord-watches.sql'),
+      'utf8'
+    );
+    expect(database.classifyMigrationSql(sql)).toBe('additive');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-watch-mig-'));
+    try {
+      const preSchemaDir = path.join(tmpDir, 'pre-schema');
+      const preMigrationDir = path.join(tmpDir, 'pre-migration');
+      fs.mkdirSync(preSchemaDir, {recursive: true});
+      fs.mkdirSync(preMigrationDir, {recursive: true});
+      for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
+        if (file === 'discord-watches.sql') continue;
+        fs.copyFileSync(path.join(database.SCHEMA_DIR, file), path.join(preSchemaDir, file));
+      }
+      for (const file of fs.readdirSync(database.MIGRATION_DIR)) {
+        if (file === '0008-discord-watches.sql') continue;
+        fs.copyFileSync(
+          path.join(database.MIGRATION_DIR, file),
+          path.join(preMigrationDir, file)
+        );
+      }
+
+      const dbFile = path.join(tmpDir, 'arena.sqlite');
+      const preDb = new database.Database(dbFile, {
+        schemaDir: preSchemaDir,
+        migrationDir: preMigrationDir,
+        now: 1000,
+      });
+      preDb.close();
+
+      const migrated = new database.Database(dbFile, {now: 2000});
+      const fresh = new database.Database(':memory:', {now: 2000});
+      try {
+        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+      } finally {
+        migrated.close();
+        fresh.close();
+      }
+    } finally {
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('manages canonicalized watches, per-user limits, consumption, and pruning', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      db.upsertTournament({
+        id: 't1',
+        name: 'Tournament #1',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 2,
+        hardware: 'test',
+        status: 'running',
+        startsAt: 1_700_000_000,
+      });
+
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      const gamma = db.getAgentBySlug('gamma')!;
+      const delta = db.getAgentBySlug('delta')!;
+      const epsilon = db.getAgentBySlug('epsilon')!;
+      const zeta = db.getAgentBySlug('zeta')!;
+
+      // Canonicalizes (beta, alpha) to (alpha, beta) and deduplicates reversed additions.
+      const first = db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: beta.id,
+        opponentId: alpha.id,
+        now: 1_700_000_010,
+      });
+      expect(first.status).toBe('added');
+      expect(first.watch?.agentId).toBe(Math.min(alpha.id, beta.id));
+      expect(first.watch?.opponentId).toBe(Math.max(alpha.id, beta.id));
+
+      const dup = db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        opponentId: beta.id,
+        now: 1_700_000_020,
+      });
+      expect(dup.status).toBe('exists');
+      expect(dup.watch?.id).toBe(first.watch?.id);
+
+      // Rejects self-matchup and dual ladder+tournament scope.
+      expect(() => db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        opponentId: alpha.id,
+      })).toThrow(/different agent/i);
+      expect(() => db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        ladderId: 'gen1ou20261109',
+        tournamentId: 't1',
+      })).toThrow(/both a ladder and a tournament/i);
+
+      // Enforces MAX_WATCHES_PER_USER cap per user.
+      for (const ag of [gamma, delta, epsilon, zeta]) {
+        expect(db.addDiscordWatch({
+          discordId: 'u1',
+          agentId: ag.id,
+          now: 1_700_000_030,
+        }).status).toBe('added');
+      }
+      const capped = db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        ladderId: 'gen1ou20261109',
+        now: 1_700_000_040,
+      });
+      expect(capped).toEqual({status: 'limit', limit: database.MAX_WATCHES_PER_USER});
+
+      // Ownership-checked deletion & clear.
+      expect(db.deleteDiscordWatchForUser('u2', first.watch!.id)).toBe(false);
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(5);
+      expect(db.deleteDiscordWatchForUser('u1', first.watch!.id)).toBe(true);
+      expect(db.clearDiscordWatchesForUser('u1')).toBe(4);
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(0);
+
+      // Matching consumption across broad, matchup, ladder-scoped, and tournament-scoped watches.
+      db.addDiscordWatch({discordId: 'u1', agentId: alpha.id, now: 1_700_000_100});
+      db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: alpha.id,
+        opponentId: beta.id,
+        ladderId: 'gen1ou20261109',
+        now: 1_700_000_101,
+      });
+      db.addDiscordWatch({
+        discordId: 'u2',
+        agentId: alpha.id,
+        ladderId: 'gen9randombattle20261109',
+        now: 1_700_000_102,
+      });
+      db.addDiscordWatch({
+        discordId: 'u3',
+        agentId: beta.id,
+        tournamentId: 't1',
+        now: 1_700_000_103,
+      });
+
+      const consumedLadder = db.consumeMatchingDiscordWatches({
+        p1AgentId: beta.id,
+        p2AgentId: alpha.id,
+        ladderId: 'gen1ou20261109',
+      });
+      expect(consumedLadder).toHaveLength(2);
+      expect(consumedLadder.every(w => w.discordId === 'u1')).toBe(true);
+      // Consumed watches are deleted atomically; re-running yields none.
+      expect(db.consumeMatchingDiscordWatches({
+        p1AgentId: alpha.id,
+        p2AgentId: beta.id,
+        ladderId: 'gen1ou20261109',
+      })).toEqual([]);
+      // Other scopes remain untouched.
+      expect(db.listDiscordWatchesForUser('u2')).toHaveLength(1);
+      expect(db.listDiscordWatchesForUser('u3')).toHaveLength(1);
+
+      // Tournament match consumes only the tournament-scoped watch.
+      const consumedTourney = db.consumeMatchingDiscordWatches({
+        p1AgentId: gamma.id,
+        p2AgentId: beta.id,
+        tournamentId: 't1',
+      });
+      expect(consumedTourney.map(w => w.discordId)).toEqual(['u3']);
+
+      // Mirror match (p1 === p2) consumes a single-agent watch without matching 2-agent watches.
+      db.addDiscordWatch({discordId: 'u4', agentId: alpha.id, now: 1_700_000_110});
+      db.addDiscordWatch({
+        discordId: 'u5',
+        agentId: alpha.id,
+        opponentId: beta.id,
+        now: 1_700_000_111,
+      });
+      const consumedMirror = db.consumeMatchingDiscordWatches({
+        p1AgentId: alpha.id,
+        p2AgentId: alpha.id,
+        ladderId: 'gen1ou20261109',
+      });
+      expect(consumedMirror.map(w => w.discordId)).toEqual(['u4']);
+      expect(db.listDiscordWatchesForUser('u5')).toHaveLength(1);
+
+      // Pruning removes expired watches, archived-ladder watches, and completed-tournament watches.
+      db.addDiscordWatch({
+        discordId: 'u6',
+        agentId: gamma.id,
+        tournamentId: 't1',
+        now: 1_700_000_120,
+      });
+      db.setLadderStatus('gen9randombattle20261109', 'archived', 1_700_000_200);
+      db.setTournamentStatus('t1', 'completed', 1_700_000_200);
+      // u2 (archived ladder) and u6 (completed tournament) pruned immediately; u5 stays fresh.
+      expect(db.pruneExpiredDiscordWatches(1_700_000_300)).toBe(2);
+      expect(db.listDiscordWatchesForUser('u2')).toHaveLength(0);
+      expect(db.listDiscordWatchesForUser('u6')).toHaveLength(0);
+      expect(db.listDiscordWatchesForUser('u5')).toHaveLength(1);
+      // After TTL passes, u5 is pruned too.
+      expect(
+        db.pruneExpiredDiscordWatches(1_700_000_111 + database.WATCH_TTL_SECONDS + 1)
+      ).toBe(1);
+      expect(db.listDiscordWatchesForUser('u5')).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('listWatchableAgents prioritizes active ladder and tournament agents', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const zeta = db.getAgentBySlug('zeta')!;
+      db.setAgentLadders(zeta.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: zeta.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/zeta-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'passed', now: 1_700_000_010});
+
+      const list = db.listWatchableAgents();
+      expect(list[0]).toEqual({id: zeta.id, slug: 'zeta', name: 'Zeta', active: true});
+      expect(list.find(a => a.id === alpha.id)?.active).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
 });

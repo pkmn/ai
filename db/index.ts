@@ -13,6 +13,7 @@ import * as agents from './agents';
 import * as config from './config';
 import * as developers from './developers';
 import * as discordMembers from './discord-members';
+import * as discordWatches from './discord-watches';
 import * as entries from './ladder-entries';
 import * as ladderTeams from './ladder-teams';
 import * as ladders from './ladders';
@@ -571,6 +572,34 @@ export class Database extends SqliteDatabase {
     return discordMembers.countDiscordMembers(this.db);
   }
 
+  addDiscordWatch(input: discordWatches.AddInput): discordWatches.AddResult {
+    return discordWatches.addWatch(this.db, this.txRunner, input);
+  }
+
+  listDiscordWatchesForUser(discordId: string): discordWatches.View[] {
+    return discordWatches.listWatchesForUser(this.db, discordId);
+  }
+
+  deleteDiscordWatchForUser(discordId: string, watchId: number): boolean {
+    return discordWatches.deleteWatchForUser(this.db, discordId, watchId);
+  }
+
+  clearDiscordWatchesForUser(discordId: string): number {
+    return discordWatches.clearWatchesForUser(this.db, discordId);
+  }
+
+  consumeMatchingDiscordWatches(target: discordWatches.MatchTarget): discordWatches.View[] {
+    return discordWatches.consumeMatchingWatches(this.db, this.txRunner, target);
+  }
+
+  pruneExpiredDiscordWatches(now?: number): number {
+    return discordWatches.pruneExpiredWatches(this.db, now);
+  }
+
+  listWatchableAgents(): discordWatches.WatchableAgent[] {
+    return discordWatches.listWatchableAgents(this.db);
+  }
+
   hasActiveLadderTeams(ladderId: string, agentId: number): boolean {
     return teams.hasActiveLadderTeams(this.db, ladderId, agentId);
   }
@@ -948,6 +977,16 @@ export * from './agents';
 export * from './config';
 export * from './developers';
 export * from './discord-members';
+export {
+  MAX_WATCHES_PER_USER,
+  WATCH_TTL_SECONDS,
+} from './discord-watches';
+export type DiscordWatchAddInput = discordWatches.AddInput;
+export type DiscordWatchAddResult = discordWatches.AddResult;
+export type DiscordWatchMatchTarget = discordWatches.MatchTarget;
+export type DiscordWatchRow = discordWatches.Row;
+export type DiscordWatchView = discordWatches.View;
+export type WatchableAgent = discordWatches.WatchableAgent;
 export * from './ladder-entries';
 export * from './ladder-teams';
 export * from './ladders';

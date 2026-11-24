@@ -35,6 +35,7 @@ erDiagram
     agents ||--o{ agent_ladder_teams : "stages/activates pool"
     agents ||--o{ agent_ladder_stats : "accumulates career"
     agents ||--o{ tournament_entrants : "enters (max 1)"
+    agents ||--o{ discord_watches : "watched by Discord users"
 
     developers ||--o{ agent_versions : "submitted by"
 
@@ -44,6 +45,7 @@ erDiagram
     ladders ||--o{ matches : "records blind pairs"
     ladders ||--o{ pair_aggregates : "aggregates H2H"
     ladders ||--o{ rating_snapshots : "tracks daily Elo"
+    ladders ||--o{ discord_watches : "scopes watch"
 
     agent_versions ||--o{ ladder_entries : "competes in"
     agent_versions ||--o{ smoke_diagnostics : "stores diagnostics"
@@ -56,6 +58,7 @@ erDiagram
 
     tournaments ||--o{ tournament_entrants : "locks roster"
     tournaments ||--o{ tournament_matches : "schedules matches"
+    tournaments ||--o{ discord_watches : "scopes watch"
     tournament_matches ||--o{ tournament_games : "contains games"
 ```
 
@@ -70,6 +73,7 @@ erDiagram
 | `agent_ladders` | [`agent-ladders.sql`](agent-ladders.sql) | Per-slot ladder qualification grants (`rby`/`adv`/`sv`/`rand`/`vgc`) in SQLite. |
 | `developers` | [`developers.sql`](developers.sql) | Co-owners with globally `UNIQUE` GitHub, Smogon, and Discord IDs (1 project/human). |
 | `discord_members` | [`discord-members.sql`](discord-members.sql) | Guild cache backing sub-ms `/auth/discord/validate` for `/chat/logs/`. |
+| `discord_watches` | [`discord-watches.sql`](discord-watches.sql) | One-shot Discord `/watch` live match/tournament DM subscriptions. |
 | `agent_versions` | [`agent-versions.sql`](agent-versions.sql) | Bundles/OCI images, one-time encrypted pull tokens, diagnostic/staged/activation lifecycle, DM state. |
 | `smoke_diagnostics` | [`smoke-diagnostics.sql`](smoke-diagnostics.sql) | Private per-format self-play diagnostic replays (with `|ai|`), bounded 64 KiB `p1`/`p2` `stderr`, and CPU/RAM metrics. |
 | `agent_ladder_teams` | [`agent-ladder-teams.sql`](agent-ladder-teams.sql) | Saved/pending/active 20-team rosters per `(agent_id, ladder_id)` for `pools` ladders. |
