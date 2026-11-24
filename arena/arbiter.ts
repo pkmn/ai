@@ -127,6 +127,15 @@ interface SandboxedPlayer {
 
 const ARENA_BIN = '/opt/arena/bin/arena';
 
+export function computeEffectiveCpuCores(
+  cpuMillis: number | undefined,
+  activeWallMillis: number
+): number | undefined {
+  if (cpuMillis === undefined || activeWallMillis <= 0) return undefined;
+  const cores = Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10);
+  return cores > 0 ? cores : undefined;
+}
+
 export class TimeSlicedArenaGame {
   private readonly version: string;
   private format: string;
@@ -993,12 +1002,10 @@ export class TimeSlicedArenaGame {
       const elapsedNs = process.hrtime.bigint() - this.activeTurnState.decisionStartNs;
       activeWallMillis += Number(elapsedNs) / 1e6;
     }
-    const cpuCores = cpuMillis !== undefined && activeWallMillis > 0
-      ? Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10)
-      : undefined;
+    const cpuCores = computeEffectiveCpuCores(cpuMillis, activeWallMillis);
     return {
       ...(cpuMillis !== undefined ? {cpuMillis} : {}),
-      ...(cpuCores !== undefined && cpuCores > 0 ? {cpuCores} : {}),
+      ...(cpuCores !== undefined ? {cpuCores} : {}),
     };
   }
 

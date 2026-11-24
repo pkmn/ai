@@ -790,8 +790,42 @@ describe('glossary slash commands', () => {
   });
 
   test('rejects interaction requests with missing or invalid Ed25519 signature', () => {
-    const bad = discord.handleInteraction('{"type":1}', {}, verifyKey, glossary);
-    expect(bad.status).toBe(401);
+    const ping = signedInteraction({type: 1});
+    expect(discord.handleInteraction('{"type":1}', {}, verifyKey, glossary).status).toBe(401);
+    // Bit-flipped signature
+    const flipped = (ping.headers['x-signature-ed25519'][0] === '0' ? '1' : '0') +
+      ping.headers['x-signature-ed25519'].slice(1);
+    expect(
+      discord.handleInteraction(
+        ping.body,
+        {...ping.headers, 'x-signature-ed25519': flipped},
+        verifyKey,
+        glossary
+      ).status
+    ).toBe(401);
+    // Tampered body
+    expect(
+      discord.handleInteraction('{"type":2}', ping.headers, verifyKey, glossary).status
+    ).toBe(401);
+    // Wrong verifyKey
+    const otherKey = crypto
+      .generateKeyPairSync('ed25519')
+      .publicKey.export({type: 'spki', format: 'der'})
+      .subarray(12)
+      .toString('hex');
+    expect(discord.handleInteraction(ping.body, ping.headers, otherKey, glossary).status).toBe(401);
+    // Malformed signature hex / missing verifyKey
+    expect(
+      discord.handleInteraction(
+        ping.body,
+        {...ping.headers, 'x-signature-ed25519': 'zzzz'},
+        verifyKey,
+        glossary
+      ).status
+    ).toBe(401);
+    expect(
+      discord.handleInteraction(ping.body, ping.headers, undefined, glossary).status
+    ).toBe(401);
   });
 
   test('responds to signed PING interactions with PONG', () => {
@@ -917,6 +951,33 @@ describe('glossary slash commands', () => {
       });
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual({type: 1});
+
+      // Unsigned request returns 401.
+      const unauth = await realFetch(`${baseUrl}/discord/interactions`, {
+        method: 'POST',
+        body: '{"type":1}',
+      });
+      expect(unauth.status).toBe(401);
+
+      // Signed malformed JSON returns 400.
+      const badJsonBody = '{not-json';
+      const ts = String(Math.floor(Date.now() / 1000));
+      const badJsonSig = crypto
+        .sign(undefined, Buffer.from(`${ts}${badJsonBody}`), privateKey)
+        .toString('hex');
+      const badJsonRes = await realFetch(`${baseUrl}/discord/interactions`, {
+        method: 'POST',
+        headers: {'x-signature-ed25519': badJsonSig, 'x-signature-timestamp': ts},
+        body: badJsonBody,
+      });
+      expect(badJsonRes.status).toBe(400);
+
+      // Oversized payload (> 64 KiB) returns 413.
+      const bigRes = await realFetch(`${baseUrl}/discord/interactions`, {
+        method: 'POST',
+        body: 'x'.repeat(70 * 1024),
+      });
+      expect(bigRes.status).toBe(413);
     } finally {
       handle.stop();
       server.closeAllConnections();
@@ -2782,6 +2843,69 @@ describe('live match watches (/watch)', () => {
     } finally {
       console.error = errSpy;
       globalThis.fetch = realFetch;
+      db.close();
+    }
+  });
+
+  test('rejects invalid /watch option combos, watch:arm targets, or malformed custom_id', () => {
+    const db = seedWatchDb();
+    try {
+      const ctx: discord.InteractionContext = {db, nowSeconds: () => 1_700_000_010};
+      const fp = db.getAgentBySlug('foul-play')!;
+      const ze = db.getAgentBySlug('0-error')!;
+
+      // opponent without agent is rejected ephemerally.
+      const oppOnly = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {name: 'watch', options: [{name: 'opponent', value: '0-error'}]},
+      });
+      const rOpp = discord.handleInteraction(oppOnly.body, oppOnly.headers, verifyKey, {}, ctx);
+      expect(JSON.parse(rOpp.body!).data.content).toContain('Specify an `agent`');
+
+      // Malformed watch:* custom_id returns 400.
+      const badBtn = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {custom_id: 'watch:bogus:payload', component_type: 2},
+      });
+      expect(
+        discord.handleInteraction(badBtn.body, badBtn.headers, verifyKey, {}, ctx).status
+      ).toBe(400);
+
+      // watch:arm on archived ladder or disabled agent returns ephemeral error.
+      const archivedBtn = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {
+          custom_id: discord.formatWatchArmCustomId({
+            agentId: fp.id,
+            ladderId: 'gen3ou20250101',
+          }),
+          component_type: 2,
+        },
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(archivedBtn.body, archivedBtn.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toContain('archived');
+
+      db.db.prepare('UPDATE agents SET status = ? WHERE id = ?').run('disabled', ze.id);
+      const disabledBtn = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {
+          custom_id: discord.formatWatchArmCustomId({agentId: ze.id}),
+          component_type: 2,
+        },
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(disabledBtn.body, disabledBtn.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toContain('no longer active');
+    } finally {
       db.close();
     }
   });

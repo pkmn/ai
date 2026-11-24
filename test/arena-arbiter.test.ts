@@ -804,13 +804,20 @@ describe('TimeSlicedArenaGame', () => {
     expect(coordinator.parsePrngSeed('1, 2, 3, 4')).toBe('1,2,3,4');
   });
 
-  test('InfoCoalescer throttles live updates to 1 Hz and collapses turn snapshots', async () => {
+  test('InfoCoalescer throttles live updates to 1 Hz while collapsing turn snapshots', async () => {
     let nowMillis = 10_000;
     const broadcasts: Array<{slot: engine.PlayerSlot; win?: number; nodes?: number}> = [];
+    let resolveDelayed!: () => void;
+    const delayedBroadcast = new Promise<void>(resolve => {
+      resolveDelayed = resolve;
+    });
     const coalescer = new engine.InfoCoalescer({
-      intervalMillis: 50,
+      intervalMillis: 20,
       now: () => nowMillis,
-      onBroadcast: (slot, info) => broadcasts.push({slot, win: info.win, nodes: info.nodes}),
+      onBroadcast: (slot, info) => {
+        broadcasts.push({slot, win: info.win, nodes: info.nodes});
+        if (broadcasts.length >= 2) resolveDelayed();
+      },
     });
 
     const interceptP1 = engine.createInfoLineInterceptor('p1', coalescer);
@@ -826,8 +833,8 @@ describe('TimeSlicedArenaGame', () => {
     expect(interceptP1('/info {"win":0.64,"nodes":5000,"policy":{"move 1":0.9}}')).toBe(true);
     expect(broadcasts).toHaveLength(1);
 
-    nowMillis += 55;
-    await new Promise(r => setTimeout(r, 65));
+    nowMillis += 25;
+    await delayedBroadcast;
     expect(broadcasts).toEqual([
       {slot: 'p1', win: 0.52, nodes: 1000},
       {slot: 'p1', win: 0.64, nodes: 5000},
@@ -1094,5 +1101,13 @@ describe('TimeSlicedArenaGame', () => {
     coalescer.clearPending('p1');
     expect(coalescer.commitTurn('p1', 1)).toBeUndefined();
     expect(coalescer.getCommittedByTurn().size).toBe(0);
+  });
+
+  test('computeEffectiveCpuCores caps at 10 cores while ignoring non-positive inputs', () => {
+    expect(arbiter.computeEffectiveCpuCores(undefined, 1000)).toBeUndefined();
+    expect(arbiter.computeEffectiveCpuCores(500, 0)).toBeUndefined();
+    expect(arbiter.computeEffectiveCpuCores(10, 1000)).toBeUndefined();
+    expect(arbiter.computeEffectiveCpuCores(2540, 1000)).toBe(2.5);
+    expect(arbiter.computeEffectiveCpuCores(15000, 1000)).toBe(10);
   });
 });

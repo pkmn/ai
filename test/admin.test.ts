@@ -712,4 +712,56 @@ describe('/admin dashboard & API', () => {
     expect(res.headers.get('cache-control')).toBe('private, no-store, no-transform');
     expect(adminHandle.getAdminStreamCount()).toBe(0);
   });
+
+  test('enforces auth, admin role, or CSRF rejection across all admin routes',
+    async () => {
+      const nonAdminCookie = cookieFor('pmariglia', 2002);
+      const adminCookie = cookieFor('scheibo');
+      const postEndpoints = [
+        {path: '/api/admin/agents/newcomer/ladders', body: {slot: 'rby', qualified: true}},
+        {path: '/api/admin/agents/newcomer/refund-cooldown', body: {}},
+        {path: '/api/admin/versions/1/discard', body: {}},
+        {path: '/api/admin/versions/0-error/1.0/quarantine', body: {reason: 'test'}},
+        {path: '/api/admin/versions/0-error/1.0/unquarantine', body: {}},
+        {path: '/api/admin/ladders/gen1ou20261109/entries/0-error/1.0/retire', body: {}},
+      ];
+      for (const ep of postEndpoints) {
+        const unauth = await fetch(`${baseUrl}${ep.path}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(ep.body),
+        });
+        expect(unauth.status).toBe(401);
+
+        const nonAdmin = await fetch(`${baseUrl}${ep.path}`, {
+          method: 'POST',
+          headers: {Cookie: nonAdminCookie, 'Content-Type': 'application/json'},
+          body: JSON.stringify(ep.body),
+        });
+        expect(nonAdmin.status).toBe(403);
+
+        const csrf = await fetch(`${baseUrl}${ep.path}`, {
+          method: 'POST',
+          headers: {
+            Cookie: adminCookie,
+            'Content-Type': 'application/json',
+            'Sec-Fetch-Site': 'cross-site',
+          },
+          body: JSON.stringify(ep.body),
+        });
+        expect(csrf.status).toBe(403);
+      }
+
+      const getEndpoints = [
+        '/admin/index.json',
+        '/api/admin/stream',
+        '/api/admin/diagnostics/1/log',
+        '/api/admin/diagnostics/1/stderr',
+      ];
+      for (const ep of getEndpoints) {
+        expect((await fetch(`${baseUrl}${ep}`)).status).toBe(401);
+        expect((await fetch(`${baseUrl}${ep}`, {headers: {Cookie: nonAdminCookie}})).status)
+          .toBe(403);
+      }
+    });
 });

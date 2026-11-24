@@ -3051,6 +3051,7 @@ describe('per-ladder qualification & migrations', () => {
         file === 'agent-ladders.sql' ||
         file === 'config.sql' ||
         file === 'smoke-diagnostics.sql' ||
+        file === 'discord-watches.sql' ||
         !file.endsWith('.sql')
       ) {
         continue;
@@ -3095,12 +3096,23 @@ describe('per-ladder qualification & migrations', () => {
       now: 1_760_000_000,
     });
     legacyDb.db.exec(`
+      INSERT INTO ladders (id, slot, name, format, version, team, min, status, created_at) VALUES
+        ('gen1ou20261109', 'rby', 'RBY', 'gen1ou', '0.11.0', 'harvested', 2, 'active', 1760000000);
+      INSERT INTO tournaments (
+        id, name, format, version, games_per_matchup, parallel_tables, hardware,
+        status, starts_at
+      ) VALUES (
+        't1', 'Invitational', 'gen9ou', '0.11.0', 2, 1, '1x A100',
+        'scheduled', 1760100000
+      );
       INSERT INTO agents (slug, name, status, updated_at) VALUES
         ('magpie', 'Magpie', 'qualified', 1760000000),
         ('mocca', 'Mocca', 'qualified', 1760000000),
         ('missingnozero', 'MissingNo.Zero', 'qualified', 1760000000),
         ('other', 'Other', 'qualified', 1760000000),
         ('retired-proj', 'Retired Proj', 'disabled', 1760000000);
+      INSERT INTO developers (agent_id, github_login, smogon_username, created_at) VALUES
+        ((SELECT id FROM agents WHERE slug = 'magpie'), 'magpie-dev', 'magpie-smogon', 1760000000);
       INSERT INTO agent_versions (
         agent_id, version, package, url, sha256, ladders_json, tournaments_json,
         smoke_status, submitted_at, activated_at, notified
@@ -3109,6 +3121,45 @@ describe('per-ladder qualification & migrations', () => {
         '1.0.0', 'bundle', 'https://example.com/magpie.tar.gz',
         'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         '["gen1ou20261109"]', '[]', 'passed', 1760000000, 1760000010, 0
+      ), (
+        (SELECT id FROM agents WHERE slug = 'mocca'),
+        '1.0.0', 'bundle', 'https://example.com/mocca.tar.gz',
+        'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        '["gen1ou20261109"]', '[]', 'passed', 1760000001, 1760000011, 1
+      );
+      INSERT INTO ladder_entries (ladder_id, version_id, role, matches, se, started_at) VALUES
+        ('gen1ou20261109', 1, 'champion', 30, 25.0, 1760000010),
+        ('gen1ou20261109', 2, 'champion', 30, 25.0, 1760000011);
+      INSERT INTO matches (
+        id, ladder_id, p1_version_id, p2_version_id, seed,
+        game1_outcome, game2_outcome, category,
+        game1_turns, game2_turns, game1_end_reason, game2_end_reason,
+        p1_game1_peak_ram, p1_game2_peak_ram, p2_game1_peak_ram, p2_game2_peak_ram,
+        p1_game1_bank_seconds, p1_game2_bank_seconds, p2_game1_bank_seconds, p2_game2_bank_seconds,
+        p1_game1_mean_turn_millis, p1_game2_mean_turn_millis,
+        p2_game1_mean_turn_millis, p2_game2_mean_turn_millis,
+        completed_at
+      ) VALUES (
+        'm-pre-mig-1', 'gen1ou20261109', 1, 2, '1,2,3,4',
+        'W', 'L', 'WL', 12, 14, 'normal', 'normal',
+        50, 50, 60, 60, 120, 120, 110, 110, 40, 40, 50, 50, 1760000020
+      );
+      INSERT INTO pair_aggregates (ladder_id, low_version_id, high_version_id, split) VALUES
+        ('gen1ou20261109', 1, 2, 1);
+      INSERT INTO rating_snapshots (
+        ladder_id, version_id, day_utc, matches, elo, se, lcb, gxe
+      ) VALUES
+        ('gen1ou20261109', 1, '2025-10-09', 1, 1500, 100, 1300, 50);
+      INSERT INTO agent_ladder_stats (ladder_id, agent_id, max_elo_version_id) VALUES
+        ('gen1ou20261109', (SELECT id FROM agents WHERE slug = 'magpie'), 1);
+      INSERT INTO tournament_entrants (tournament_id, agent_id, version_id, seed) VALUES
+        ('t1', (SELECT id FROM agents WHERE slug = 'magpie'), 1, 1),
+        ('t1', (SELECT id FROM agents WHERE slug = 'mocca'), 2, 2);
+      INSERT INTO tournament_matches (
+        id, tournament_id, stage, cycle, matchup_game, p1_version_id, p2_version_id,
+        status, outcome, completed_at
+      ) VALUES (
+        'tm-1', 't1', 'Round Robin', 1, 1, 1, 2, 'completed', 'W', 1760000030
       );
     `);
     legacyDb.close();
@@ -3117,6 +3168,7 @@ describe('per-ladder qualification & migrations', () => {
     const freshDb = new database.Database(':memory:', {now: 1_760_000_100});
     try {
       expect(compareDatabaseSchemas(migratedDb.db, freshDb.db)).toEqual([]);
+      expect(migratedDb.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
       expect(migratedDb.getAppliedMigrations().map(m => m.version)).toEqual([
         '0001-agent-ladders.sql',
         '0002-sync-agent-status.sql',
@@ -3129,12 +3181,56 @@ describe('per-ladder qualification & migrations', () => {
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
+      expect(migratedDb.getRecentMatches(10)).toHaveLength(1);
+      expect(
+        migratedDb.db.prepare('SELECT COUNT(*) AS n FROM tournament_matches').get()
+      ).toEqual({n: 1});
 
       const magpie = migratedDb.getAgentBySlug('magpie')!;
       const mocca = migratedDb.getAgentBySlug('mocca')!;
       const missingno = migratedDb.getAgentBySlug('missingnozero')!;
       const other = migratedDb.getAgentBySlug('other')!;
       const retired = migratedDb.getAgentBySlug('retired-proj')!;
+
+      // Verify post-0007 staged/discarded lifecycle, version-label reuse, and smoke_diagnostics
+      // ON DELETE CASCADE on the migrated database.
+      const postCooldown = 1_760_000_000 + 15 * 86_400;
+      const v2 = migratedDb.createSubmission({
+        agentId: magpie.id,
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://example.com/magpie-2.0.0.tar.zst',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: postCooldown,
+      });
+      migratedDb.applySubmissionStatus({
+        versionId: v2.id,
+        smokeStatus: 'staged',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 5,
+          endReason: 'win',
+          durationMillis: 1000,
+          battleLog: '|turn|1',
+        }],
+        now: postCooldown + 10,
+      });
+      migratedDb.discardStagedVersion({versionId: v2.id, agentId: magpie.id});
+      expect(migratedDb.getVersionById(v2.id)?.smokeStatus).toBe('discarded');
+      const v2Retry = migratedDb.createSubmission({
+        agentId: magpie.id,
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://example.com/magpie-2.0.0-r2.tar.zst',
+        sha256: 'd'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: postCooldown + 20,
+      });
+      expect(v2Retry.id).toBeGreaterThan(v2.id);
+      migratedDb.db.prepare('DELETE FROM agent_versions WHERE id = ?').run(v2.id);
+      expect(migratedDb.getSmokeDiagnosticsForVersion(v2.id)).toEqual([]);
 
       expect(magpie.status).toBe('qualified');
       expect(migratedDb.getAgentLadders(magpie.id)).toEqual(['rby', 'adv']);

@@ -10,6 +10,7 @@ import polka from 'polka';
 import {ALL_SLOTS, COOLDOWN_SECONDS, Database} from '../db';
 import type * as db from '../db';
 import * as account from '../server/account';
+import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import {clearReferencePoolCache, splitSubmittedTeams} from '../server/teams';
 import * as wiki from '../server/wiki';
@@ -1991,6 +1992,195 @@ describe('account routes', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/event-stream');
       expect(res.headers.get('cache-control')).toBe('private, no-store, no-transform');
+    });
+
+    test('diagnostic downloads send nosniff header', async () => {
+      openLadders(['gen1ou20261109']);
+      const zero = db.getAgentBySlug('0-error')!;
+      const v = db.createSubmission({
+        agentId: zero.id,
+        version: '3.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-3.0.0.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      db.applySubmissionStatus({
+        versionId: v.id,
+        smokeStatus: 'staged',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 2,
+          endReason: 'win',
+          durationMillis: 500,
+          battleLog: '|turn|1\n|win|0 ERROR',
+        }],
+        now: currentNow + 5,
+      });
+      const diagId = db.getSmokeDiagnosticsForVersion(v.id)[0].id;
+      const dlRes = await realFetch(
+        `${baseUrl}/api/account/diagnostics/${diagId}/log?download=1`,
+        {headers: {Cookie: cookieFor('pre')}}
+      );
+      expect(dlRes.headers.get('x-content-type-options')).toBe('nosniff');
+      const errRes = await realFetch(
+        `${baseUrl}/api/account/diagnostics/${diagId}/stderr`,
+        {headers: {Cookie: cookieFor('pre')}}
+      );
+      expect(errRes.headers.get('x-content-type-options')).toBe('nosniff');
+
+      // Diagnostic without stderr omits the STDERR link while keeping log download.
+      const html = await (await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).text();
+      expect(html).not.toContain(`/api/account/diagnostics/${diagId}/stderr`);
+      expect(html).toContain(`/api/account/diagnostics/${diagId}/log?download=1`);
+    });
+
+    test('blocks rival discard IDOR, cross-site activate, or disabled diagnostics', async () => {
+      openLadders(['gen1ou20261109']);
+      const zero = db.getAgentBySlug('0-error')!;
+      const v = db.createSubmission({
+        agentId: zero.id,
+        version: '3.1.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-3.1.0.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      db.applySubmissionStatus({
+        versionId: v.id,
+        smokeStatus: 'staged',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 1,
+          endReason: 'win',
+          durationMillis: 400,
+          battleLog: '|turn|1',
+        }],
+        now: currentNow + 5,
+      });
+      const diagId = db.getSmokeDiagnosticsForVersion(v.id)[0].id;
+
+      // Rival developer cannot discard another project's staged version.
+      expect((await realFetch(`${baseUrl}/api/account/versions/${v.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: cookieFor('pmariglia')},
+      })).status).toBe(403);
+
+      // Cross-site activate is rejected for both Sec-Fetch-Site and Origin mismatch.
+      expect((await realFetch(`${baseUrl}/api/account/versions/${v.id}/activate`, {
+        method: 'POST',
+        headers: {Cookie: cookieFor('pre'), 'Sec-Fetch-Site': 'cross-site'},
+      })).status).toBe(403);
+      expect((await realFetch(`${baseUrl}/api/account/versions/${v.id}/activate`, {
+        method: 'POST',
+        headers: {Cookie: cookieFor('pre'), Origin: 'https://evil.example'},
+      })).status).toBe(403);
+
+      // Unregistered and disabled users receive 403 on diagnostic endpoints.
+      expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
+        headers: {Cookie: cookieFor('stranger')},
+      })).status).toBe(403);
+      db.db.prepare('UPDATE agents SET status = ? WHERE id = ?').run('disabled', zero.id);
+      expect((await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).status).toBe(403);
+    });
+
+    test('diagnostic SSE delivers live frames only to the owning project', async () => {
+      const liveApp = polka();
+      const liveAuth = new auth.Auth({config: AUTH_CFG, db});
+      const liveArena = arena.register(liveApp, {
+        db,
+        auth: liveAuth,
+        arenaSecret: 'diag-live-secret',
+        now: () => currentNow,
+      });
+      account.register(liveApp, {db, auth: liveAuth, arena: liveArena, now: () => currentNow});
+      const liveSrv = http.createServer((req, res) => liveApp.handler(req as polka.Request, res));
+      await new Promise<void>(resolve => liveSrv.listen(0, '127.0.0.1', resolve));
+      const liveBase = `http://127.0.0.1:${(liveSrv.address() as {port: number}).port}`;
+      const ownerAc = new AbortController();
+      const rivalAc = new AbortController();
+      try {
+        const zero = db.getAgentBySlug('0-error')!;
+        // Unauthenticated POST to /api/arena/diagnostic-live is rejected with 401.
+        expect((await realFetch(`${liveBase}/api/arena/diagnostic-live`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({agentId: zero.id}),
+        })).status).toBe(401);
+
+        const [ownerRes, rivalRes] = await Promise.all([
+          realFetch(`${liveBase}/api/account/diagnostic/stream`, {
+            headers: {Cookie: cookieFor('pre')},
+            signal: ownerAc.signal,
+          }),
+          realFetch(`${liveBase}/api/account/diagnostic/stream`, {
+            headers: {Cookie: cookieFor('pmariglia')},
+            signal: rivalAc.signal,
+          }),
+        ]);
+        expect(ownerRes.status).toBe(200);
+        expect(rivalRes.status).toBe(200);
+
+        const ownerReader = ownerRes.body!.getReader();
+        const rivalReader = rivalRes.body!.getReader();
+        const dec = new TextDecoder();
+        // Consume initial `event: idle` frames emitted on connect.
+        expect(dec.decode((await ownerReader.read()).value)).toContain('event: idle');
+        expect(dec.decode((await rivalReader.read()).value)).toContain('event: idle');
+
+        const ownerNext = ownerReader.read();
+        let rivalReceived = '';
+        void rivalReader.read().then(chunk => {
+          if (chunk.value) rivalReceived += dec.decode(chunk.value);
+        }).catch(() => undefined);
+
+        const pushRes = await realFetch(`${liveBase}/api/arena/diagnostic-live`, {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer diag-live-secret',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            versionId: 42,
+            agentId: zero.id,
+            agentSlug: '0-error',
+            agentName: '0 ERROR',
+            version: '3.2.0',
+            format: 'gen1ou',
+            targetName: 'RBY',
+            phase: 'battle',
+            turn: 2,
+            activeSlot: 'p1',
+            turnStartedAt: currentNow,
+            turnBudgetSeconds: 60,
+            incrementSeconds: 5,
+            p1: {name: '0 ERROR (P1)', version: '3.2.0', bankSeconds: 120, thinking: true},
+            p2: {name: '0 ERROR (P2)', version: '3.2.0', bankSeconds: 120, thinking: false},
+            lines: ['|turn|2'],
+          }),
+        });
+        expect(pushRes.status).toBe(200);
+
+        const nextChunk = await ownerNext;
+        const ownerText = dec.decode(nextChunk.value);
+        expect(ownerText).toContain('event: diagnostic');
+        expect(ownerText).toContain('3.2.0');
+        expect(rivalReceived).toBe('');
+      } finally {
+        ownerAc.abort();
+        rivalAc.abort();
+        liveArena.close();
+        liveSrv.closeAllConnections();
+        await new Promise<void>(resolve => liveSrv.close(() => resolve()));
+      }
     });
   });
 });

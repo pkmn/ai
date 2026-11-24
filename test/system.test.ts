@@ -281,11 +281,100 @@ describe('system telemetry parsers & TrafficTracker', () => {
 
   test('Database.getRecentFaultSummary counts faulted matches within the 24h window', () => {
     const now = 1_760_000_000;
-    const db = new Database(':memory:');
+    const db = new Database(':memory:', {now});
     try {
       db.syncLadders(undefined, now);
       db.db.prepare("UPDATE ladders SET status = 'active'").run();
       expect(db.getRecentFaultSummary(now)).toEqual({matches: 0, faults: 0});
+
+      db.syncProjectsFromYaml(
+        '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n' +
+          '- name: Beta\n  slug: beta\n  arena:\n    owner: {github: b1, smogon: b1}\n',
+        undefined,
+        now
+      );
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      db.setAgentLadders(alpha.id, ['rby'], now);
+      db.setAgentLadders(beta.id, ['rby'], now);
+      const va = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/a.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now,
+      });
+      const vb = db.createSubmission({
+        agentId: beta.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/b.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now,
+      });
+      db.applySubmissionStatus({versionId: va.id, smokeStatus: 'passed', now: now + 1});
+      db.applySubmissionStatus({versionId: vb.id, smokeStatus: 'passed', now: now + 1});
+      const baseMatch = {
+        ladderId: 'gen1ou20261109',
+        p1VersionId: va.id,
+        p2VersionId: vb.id,
+        seed: '1,2,3,4',
+        game1Outcome: 'W' as const,
+        game2Outcome: 'L' as const,
+        category: 'WL' as const,
+        game1Turns: 10,
+        game2Turns: 10,
+        p1Game1PeakRam: 20,
+        p1Game2PeakRam: 20,
+        p2Game1PeakRam: 20,
+        p2Game2PeakRam: 20,
+        p1Game1InitMillis: 10,
+        p1Game2InitMillis: 10,
+        p2Game1InitMillis: 10,
+        p2Game2InitMillis: 10,
+        p1Game1MeanTurnMillis: 10,
+        p1Game2MeanTurnMillis: 10,
+        p2Game1MeanTurnMillis: 10,
+        p2Game2MeanTurnMillis: 10,
+        p1Game1BankSeconds: 100,
+        p1Game2BankSeconds: 100,
+        p2Game1BankSeconds: 100,
+        p2Game2BankSeconds: 100,
+      };
+      // 1. Clean match inside 24h window.
+      db.recordCompletedMatch({
+        match: {
+          ...baseMatch,
+          id: 'm-clean',
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          completedAt: now - 3600,
+        },
+      });
+      // 2. Faulted match (timeout) inside 24h window.
+      db.recordCompletedMatch({
+        match: {
+          ...baseMatch,
+          id: 'm-fault',
+          game1EndReason: 'timeout',
+          game2EndReason: 'normal',
+          completedAt: now - 1800,
+        },
+      });
+      // 3. Faulted match (crash) outside 24h window (25h ago) must be excluded.
+      db.recordCompletedMatch({
+        match: {
+          ...baseMatch,
+          id: 'm-old-fault',
+          game1EndReason: 'crash',
+          game2EndReason: 'normal',
+          completedAt: now - 25 * 3600,
+        },
+      });
+      expect(db.getRecentFaultSummary(now)).toEqual({matches: 2, faults: 1});
     } finally {
       db.close();
     }

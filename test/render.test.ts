@@ -4142,4 +4142,60 @@ describe('JSON route parity & retired pool archives', () => {
       'data-title-epochs': String(retry),
     });
   });
+
+  test('profile JSON exposes supportsInfo on version entries while HTML syncs ?v=', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    const app = polka();
+    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
+    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_020});
+    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    try {
+      testDb.syncLadders(undefined, 1_760_000_000);
+      testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+      testDb.syncProjectsFromYaml(
+        '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n',
+        undefined,
+        1_760_000_000
+      );
+      const alpha = testDb.getAgentBySlug('alpha')!;
+      testDb.setAgentLadders(alpha.id, ['rby'], 1_760_000_000);
+      const v1 = testDb.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_000,
+      });
+      testDb.applySubmissionStatus({
+        versionId: v1.id,
+        smokeStatus: 'passed',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 4,
+          endReason: 'win',
+          durationMillis: 500,
+          battleLog: '|turn|1\n|ai|p1|{"win":0.55}',
+          supportsInfo: true,
+        }],
+        now: 1_760_000_010,
+      });
+      const doc = await (await fetch(`${base}/projects/alpha.json`)).json() as {
+        ladders: Array<{versions: Array<{supportsInfo?: boolean}>}>;
+      };
+      expect(doc.ladders[0].versions[0].supportsInfo).toBe(true);
+      const html = await (await fetch(`${base}/projects/alpha/`)).text();
+      expect(html).toContain("url.searchParams.set('v', curVer)");
+      expect(html).toContain('tabindex="0"');
+    } finally {
+      arenaHandle.close();
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      testDb.close();
+    }
+  });
 });
