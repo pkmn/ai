@@ -362,6 +362,53 @@ describe('system telemetry parsers & TrafficTracker', () => {
       const liveText = await (await fetch(`${baseUrl}/api/live.json`)).text();
       expect(liveText).not.toContain('arena-mini');
       expect(liveText).not.toContain('/Volumes/Archive');
+
+      const activeRes = await fetch(`${baseUrl}/api/arena/heartbeat`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-arena-secret',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          matchId: 'm-live-sys-1',
+          ladderId: 'gen9randombattle20261109',
+          ladderName: 'RAND',
+          format: 'gen9randombattle',
+          game: 1,
+          turn: 3,
+          heartbeatSeq: 1,
+          turnStartedAt: now,
+          turnBudgetSeconds: 60,
+          incrementSeconds: 5,
+          p1: {
+            slug: 'alpha',
+            name: 'Alpha',
+            version: '1.0',
+            bankSeconds: 150,
+            lastTurnMillis: 120,
+            meanTurnMillis: 120,
+            ram: 64,
+          },
+          p2: {
+            slug: 'beta',
+            name: 'Beta',
+            version: '1.0',
+            bankSeconds: 150,
+            lastTurnMillis: 110,
+            meanTurnMillis: 110,
+            ram: 64,
+          },
+          system: {...arenaSys, hostname: 'arena-mini-active'},
+        }),
+      });
+      expect(activeRes.status).toBe(200);
+      expect(arenaHandle.getState().arenaSystem?.hostname).toBe('arena-mini-active');
+
+      const activeLiveText = await (await fetch(`${baseUrl}/api/live.json`)).text();
+      expect(activeLiveText).toContain('m-live-sys-1');
+      expect(activeLiveText).not.toContain('arena-mini-active');
+      expect(activeLiveText).not.toContain('/Volumes/Archive');
+      expect(activeLiveText).not.toContain('"system"');
     } finally {
       arenaHandle.close();
       server.closeAllConnections();

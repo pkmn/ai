@@ -1814,6 +1814,7 @@ function sanitizeLiveMatch(
   slot?: db.LadderSlot
 ): LiveMatch {
   const {viewer: rawViewer, game1Summary: rawG1, winHistory: rawWinHistory, ...rest} = input;
+  delete (rest as {system?: unknown}).system;
   let p1 = allowViewer ? rest.p1 : {...rest.p1, info: undefined};
   let p2 = allowViewer ? rest.p2 : {...rest.p2, info: undefined};
   if (!allowViewer) {
@@ -2432,7 +2433,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      const frame = body as LiveMatchInput;
+      const frame = {...body} as LiveMatchInput & {system?: unknown};
+      delete frame.system;
       if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
