@@ -1371,6 +1371,7 @@ export interface PlayableLaddersResponse {
   unpublishedArchivedPoolsLadders?: string[];
   quarantinedVersionIds?: number[];
   activatedVersionIds?: number[];
+  stagedVersionIds?: number[];
   smokeCadence?: db.SmokeCadence;
 }
 
@@ -3115,12 +3116,14 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const quarantinedVersionIds = db.getQuarantinedVersionIds();
     const activatedVersionIds = db.getActivatedLadderVersionIds();
+    const stagedVersionIds = db.getStagedLadderVersionIds();
     const smokeCadence = db.getSmokeCadence();
     sendJson(res, 200, {
       ladders,
       unpublishedArchivedPoolsLadders,
       quarantinedVersionIds,
       activatedVersionIds,
+      stagedVersionIds,
       smokeCadence,
     });
   });

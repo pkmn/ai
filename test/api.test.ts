@@ -3298,7 +3298,7 @@ describe('createServerApp production HTTP hardening', () => {
     }
   });
 
-  test('serves activated artifact authToken until scrubbed by archived callback',
+  test('exposes stagedVersionIds while scrubbing ladder authToken on staged',
     async () => {
       const a1 = db.getAgentBySlug('0-error')!;
       const v1 = db.createSubmission({
@@ -3307,11 +3307,13 @@ describe('createServerApp production HTTP hardening', () => {
         package: 'bundle',
         url: 'https://github.com/pkmn/z-2.0.0.tar.zst',
         sha256: SHA,
-        authTokenEncoding: encryptSecret('ghp_activated_secret', AUTH_CFG.sessionSecret),
+        authTokenEncoding: encryptSecret('ghp_ladder_secret', AUTH_CFG.sessionSecret),
         ladderIds: ['gen1ou20261109'],
         now: 1_760_000_010,
       });
       db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_760_000_020});
+      // Ladder auth token is scrubbed immediately once diagnostic fetch completes.
+      expect(db.getVersionById(v1.id)?.authTokenEncoding).toBeUndefined();
 
       const app = polka();
       const ctrl = arena.register(app, {
@@ -3322,19 +3324,21 @@ describe('createServerApp production HTTP hardening', () => {
       });
       const srv = await startTestServer(app);
       try {
-        // Staged (unactivated) versions are not returned in activatedVersionIds or artifacts/:id.
+        // Staged versions appear in stagedVersionIds (not activatedVersionIds) and return 409.
         const beforeSnap = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
+        expect(beforeSnap.data.stagedVersionIds).toContain(v1.id);
         expect(beforeSnap.data.activatedVersionIds).not.toContain(v1.id);
         const stagedRes = await apiJson(
           srv.baseUrl, 'GET', `/api/arena/artifacts/${v1.id}`, ARENA_SECRET
         );
         expect(stagedRes.status).toBe(409);
 
-        // Once activated, artifact metadata + decrypted authToken are served until marked archived.
+        // Once activated, artifact metadata moves to activatedVersionIds without any authToken.
         db.activateStagedVersion({versionId: v1.id, agentId: a1.id, now: 1_760_000_030});
         const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
         const snap = await client.getPlayableLadders();
         expect(snap.activatedVersionIds).toContain(v1.id);
+        expect(snap.stagedVersionIds).not.toContain(v1.id);
 
         const artifact = await client.getActivatedArtifact(v1.id);
         expect(artifact).toMatchObject({
@@ -3343,8 +3347,54 @@ describe('createServerApp production HTTP hardening', () => {
           version: '2.0.0',
           package: 'bundle',
           sha256: SHA,
-          authToken: 'ghp_activated_secret',
         });
+        expect(artifact.authToken).toBeUndefined();
+      } finally {
+        ctrl.close();
+        await srv.close();
+      }
+    });
+
+  test('serves activated tournament OCI authToken until scrubbed by archived callback',
+    async () => {
+      db.upsertTournament({
+        id: 't-art',
+        name: 'Artifact Cup',
+        format: 'gen9ou',
+        version: '0.11.0',
+        startsAt: 1_760_200_000,
+        status: 'scheduled',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: 'L4',
+      });
+      const a1 = db.getAgentBySlug('0-error')!;
+      const v1 = db.createSubmission({
+        agentId: a1.id,
+        version: '2.0.1',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/z:2.0.1',
+        sha256: SHA,
+        authTokenEncoding: encryptSecret('ghp_tourney_secret', AUTH_CFG.sessionSecret),
+        ladderIds: [],
+        tournamentIds: ['t-art'],
+        now: 1_760_000_010,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_760_000_020});
+      db.activateStagedVersion({versionId: v1.id, agentId: a1.id, now: 1_760_000_030});
+
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        arenaSecret: ARENA_SECRET,
+        publicDir: tmpDir,
+        auth: new auth.Auth({db, config: AUTH_CFG}),
+      });
+      const srv = await startTestServer(app);
+      try {
+        const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
+        const artifact = await client.getActivatedArtifact(v1.id);
+        expect(artifact.authToken).toBe('ghp_tourney_secret');
 
         await client.markArtifactArchived(v1.id);
         expect(db.getVersionById(v1.id)?.authTokenEncoding).toBeUndefined();
@@ -3361,15 +3411,27 @@ describe('createServerApp production HTTP hardening', () => {
       const prevSecret = process.env.SESSION_SECRET;
       process.env.SESSION_SECRET = AUTH_CFG.sessionSecret;
       try {
+        db.upsertTournament({
+          id: 't-env',
+          name: 'Env Cup',
+          format: 'gen9ou',
+          version: '0.11.0',
+          startsAt: 1_760_200_000,
+          status: 'scheduled',
+          gamesPerMatchup: 2,
+          parallelTables: 1,
+          hardware: 'L4',
+        });
         const a1 = db.getAgentBySlug('0-error')!;
         const v1 = db.createSubmission({
           agentId: a1.id,
           version: '2.1.0',
-          package: 'bundle',
-          url: 'https://github.com/pkmn/z-2.1.0.tar.zst',
+          package: 'oci',
+          url: 'ghcr.io/pkmn/z:2.1.0',
           sha256: SHA,
           authTokenEncoding: encryptSecret('ghp_env_fallback', AUTH_CFG.sessionSecret),
-          ladderIds: ['gen1ou20261109'],
+          ladderIds: [],
+          tournamentIds: ['t-env'],
           now: 1_760_000_010,
         });
         db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_760_000_020});

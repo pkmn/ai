@@ -21,8 +21,9 @@ CREATE TABLE IF NOT EXISTS local_agents (
   mode TEXT NOT NULL CHECK (mode IN ('native', 'container')),
   -- Relative bundle directory under `agentsDir` or local Podman image tag (`localhost/arena-...`).
   target TEXT NOT NULL,
-  -- Current SSD tier ('hot' unpacked on SSD ready to spawn, or 'cold' compressed `.tar.zst`).
-  residency TEXT NOT NULL DEFAULT 'hot' CHECK (residency IN ('hot', 'cold')),
+  -- Current SSD tier ('staged' passed diagnostic awaiting activation, 'hot' unpacked & archived,
+  -- or 'cold' compressed `.tar.zst` in `/Volumes/Archive/cold-agents`).
+  residency TEXT NOT NULL DEFAULT 'hot' CHECK (residency IN ('staged', 'hot', 'cold')),
   -- Uncompressed resident byte count on disk, used to enforce high/low watermarks on the 256 GB SSD.
   unpacked_bytes INTEGER NOT NULL DEFAULT 0,
   -- Consecutive games ending in a process fault ('crash', 'timeout', 'oom', 'invalid-choice').

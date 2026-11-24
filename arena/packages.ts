@@ -1300,6 +1300,9 @@ export function ensureAgentResident(
 
   const now = opts.now ?? Math.floor(Date.now() / 1000);
   const dirs = opts.dirs ?? PROD_DIRS;
+  if (row.residency === 'staged') {
+    throw new Error(`Cannot load unactivated staged agent ${row.target}`);
+  }
   if (row.residency === 'hot') {
     if (row.mode === 'native') {
       const hotRun = path.join(dirs.agents, row.target, 'run');

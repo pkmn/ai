@@ -215,30 +215,26 @@ describe('Coordinator', () => {
       expect(receivedUtms[0]).not.toBe(receivedUtms[1]);
       expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[0], 'gen9ou')).toHaveLength(6);
       expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[1], 'gen9ou')).toHaveLength(6);
-      // Unactivated staged builds are NOT persisted on disk or in cold archives.
-      expect(h.stateDb.getLocalAgent(30)).toBeUndefined();
+      // Passed builds stay staged on local SSD (not yet archived in `/Volumes/Archive`).
+      expect(h.stateDb.getLocalAgent(30)?.residency).toBe('staged');
+      expect(h.stateDb.getLocalAgent(30)?.target).toBe('foul-play-3.0.0-v30');
+      expect(
+        fs.existsSync(path.join(h.dirs.agents, 'foul-play-3.0.0-v30', 'run'))
+      ).toBe(true);
       expect(
         fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
       ).toBe(false);
-      expect(
-        fs.existsSync(path.join(h.dirs.agents, 'foul-play-3.0.0-v30'))
-      ).toBe(false);
 
-      // Once explicitly activated, syncActivatedAgents pulls, registers, and cold-archives it.
+      // Once activated, syncActivatedAgents promotes & cold-archives locally without re-pulling.
+      let artifactFetchCalls = 0;
       const archivedIds: number[] = [];
       (h.coord.client as unknown as {
         getActivatedArtifact: (id: number) => Promise<serverArena.ActivatedArtifact>;
         markArtifactArchived: (id: number) => Promise<{ok: true}>;
-      }).getActivatedArtifact = id => Promise.resolve({
-        versionId: id,
-        agentId: 2,
-        agentSlug: 'foul-play',
-        agentName: 'Foul Play',
-        version: '3.0.0',
-        package: 'bundle',
-        url: `file://${bundleTar}`,
-        sha256: bundleSha,
-      });
+      }).getActivatedArtifact = () => {
+        artifactFetchCalls++;
+        return Promise.reject(new Error('should not re-fetch locally staged bundle'));
+      };
       (h.coord.client as unknown as {
         markArtifactArchived: (id: number) => Promise<{ok: true}>;
       }).markArtifactArchived = id => {
@@ -246,7 +242,8 @@ describe('Coordinator', () => {
         return Promise.resolve({ok: true});
       };
       expect(await h.coord.syncActivatedAgents([30])).toBe(1);
-      expect(h.stateDb.getLocalAgent(30)?.target).toBe('foul-play-3.0.0-v30');
+      expect(artifactFetchCalls).toBe(0);
+      expect(h.stateDb.getLocalAgent(30)?.residency).toBe('hot');
       expect(
         fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
       ).toBe(true);
@@ -1357,6 +1354,110 @@ describe('Coordinator', () => {
       expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(false);
     } finally {
       fs.rmSync(stateDir, {recursive: true, force: true});
+    }
+  });
+
+  test('syncActivatedAgents prunes discarded staged builds while keeping outbox-pending ones',
+    async () => {
+      const h = createMockCoordHarness('prune-staged');
+      try {
+        const stagedDir = path.join(h.dirs.agents, 'alpha-1.0-v41');
+        const outboxDir = path.join(h.dirs.agents, 'alpha-1.1-v42');
+        fs.mkdirSync(stagedDir, {recursive: true});
+        fs.mkdirSync(outboxDir, {recursive: true});
+        fs.writeFileSync(path.join(stagedDir, 'run'), '#!/bin/sh\n', {mode: 0o755});
+        fs.writeFileSync(path.join(outboxDir, 'run'), '#!/bin/sh\n', {mode: 0o755});
+
+        h.stateDb.upsertLocalAgent({
+          versionId: 41,
+          agentId: 1,
+          slug: 'alpha',
+          version: '1.0',
+          mode: 'native',
+          target: 'alpha-1.0-v41',
+          residency: 'staged',
+          unpackedBytes: 1024,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 42,
+          agentId: 1,
+          slug: 'alpha',
+          version: '1.1',
+          mode: 'native',
+          target: 'alpha-1.1-v42',
+          residency: 'staged',
+          unpackedBytes: 1024,
+        });
+        h.stateDb.enqueueOutbox('submission-status', {versionId: 42, smokeStatus: 'staged'});
+
+        await h.coord.syncActivatedAgents([], {stagedVersionIds: []});
+        expect(h.stateDb.getLocalAgent(41)).toBeUndefined();
+        expect(fs.existsSync(stagedDir)).toBe(false);
+        expect(h.stateDb.getLocalAgent(42)?.residency).toBe('staged');
+        expect(fs.existsSync(outboxDir)).toBe(true);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
+  test('arena DB migration 0001-staged-local-agents upgrades existing local_agents rows', () => {
+    const migTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-mig-0001-'));
+    try {
+      const preSchemaDir = path.join(migTmp, 'pre-schema');
+      const emptyMigDir = path.join(migTmp, 'empty-mig');
+      fs.mkdirSync(preSchemaDir, {recursive: true});
+      fs.mkdirSync(emptyMigDir, {recursive: true});
+      for (const file of fs.readdirSync(arenaDb.SCHEMA_DIR)) {
+        if (!file.endsWith('.sql')) continue;
+        let sql = fs.readFileSync(path.join(arenaDb.SCHEMA_DIR, file), 'utf8');
+        if (file === 'local-agents.sql') {
+          sql = sql.replace(
+            "CHECK (residency IN ('staged', 'hot', 'cold'))",
+            "CHECK (residency IN ('hot', 'cold'))"
+          );
+        }
+        fs.writeFileSync(path.join(preSchemaDir, file), sql, 'utf8');
+      }
+
+      const dbPath = path.join(migTmp, 'arena.sqlite');
+      const legacy = new arenaDb.Database(dbPath, {
+        schemaDir: preSchemaDir,
+        migrationDir: emptyMigDir,
+        now: 1_760_000_000,
+      });
+      legacy.upsertLocalAgent({
+        versionId: 7,
+        agentId: 1,
+        slug: 'alpha',
+        version: '1.0',
+        mode: 'native',
+        target: 'alpha-1.0-v7',
+        residency: 'hot',
+        unpackedBytes: 2048,
+        now: 1_760_000_000,
+      });
+      legacy.close();
+
+      const migrated = new arenaDb.Database(dbPath, {now: 1_760_000_010});
+      try {
+        expect(migrated.getLocalAgent(7)?.residency).toBe('hot');
+        migrated.upsertLocalAgent({
+          versionId: 8,
+          agentId: 1,
+          slug: 'alpha',
+          version: '1.1',
+          mode: 'native',
+          target: 'alpha-1.1-v8',
+          residency: 'staged',
+          unpackedBytes: 4096,
+          now: 1_760_000_010,
+        });
+        expect(migrated.getLocalAgent(8)?.residency).toBe('staged');
+      } finally {
+        migrated.close();
+      }
+    } finally {
+      fs.rmSync(migTmp, {recursive: true, force: true});
     }
   });
 });

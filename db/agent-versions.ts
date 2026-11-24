@@ -1061,7 +1061,14 @@ export function applySubmissionStatus(
       throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
     }
     const agent = getAgentById(db, prev.agentId)!;
-    const scrubAuth = input.smokeStatus !== 'staged' || prev.ladders.length === 0;
+    // Ladder submissions stay locally staged on the Mac mini after diagnostic fetch, so their
+    // one-time auth header is always scrubbed immediately. Tournament-only OCI submissions are
+    // pulled again when baking ephemeral GCP tournament workers, so they retain credentials while
+    // staged/passed until archived or tournament completion.
+    const isTournamentOnly = prev.ladders.length === 0 && prev.tournaments.length > 0;
+    const retainTournamentAuth =
+      isTournamentOnly && (input.smokeStatus === 'staged' || input.smokeStatus === 'passed');
+    const scrubAuth = !retainTournamentAuth;
     if (prev.smokeStatus === input.smokeStatus) {
       db.prepare(`
         UPDATE agent_versions
@@ -1306,6 +1313,7 @@ export function activateStagedVersion(
       teams.revertPendingTeamsToSaved(db, droppedLadderIds, prev.agentId);
     }
 
+    const keepTournamentAuth = openLadderIds.length === 0 && openTournamentIds.length > 0;
     db.prepare(`
       UPDATE agent_versions
       SET smoke_status = 'passed',
@@ -1316,7 +1324,7 @@ export function activateStagedVersion(
       WHERE id = ?
     `).run(
       JSON.stringify(openLadderIds),
-      openLadderIds.length === 0 ? 1 : 0,
+      keepTournamentAuth ? 0 : 1,
       now,
       prev.id
     );
@@ -1390,6 +1398,17 @@ export function getActivatedLadderVersionIds(db: DatabaseSync): number[] {
       AND le.role IN ('champion', 'challenger')
       AND av.smoke_status = 'passed'
     ORDER BY le.version_id ASC
+  `).all() as Array<{id: number}>;
+  return rows.map(r => r.id);
+}
+
+export function getStagedLadderVersionIds(db: DatabaseSync): number[] {
+  const rows = db.prepare(`
+    SELECT id
+    FROM agent_versions
+    WHERE smoke_status = 'staged'
+      AND ladders_json != '[]'
+    ORDER BY id ASC
   `).all() as Array<{id: number}>;
   return rows.map(r => r.id);
 }

@@ -225,6 +225,28 @@ export function setTournamentStatus(
       if (completedGames.count > 0) {
         recomputeTournamentStandings(db, id, true);
       }
+      // Scrub retained private registry tokens once a tournament completes (unless another
+      // non-completed tournament still references the same version).
+      const activeTourneys = new Set(
+        (db.prepare("SELECT id FROM tournaments WHERE status != 'completed'").all() as
+          Array<{id: string}>).map(r => r.id)
+      );
+      const tokenRows = db.prepare(`
+        SELECT id, tournaments_json
+        FROM agent_versions
+        WHERE auth_token_encoding IS NOT NULL
+          AND ladders_json = '[]'
+          AND tournaments_json != '[]'
+      `).all() as Array<{id: number; tournaments_json: string}>;
+      const clearToken = db.prepare(
+        'UPDATE agent_versions SET auth_token_encoding = NULL WHERE id = ?'
+      );
+      for (const row of tokenRows) {
+        const tids = JSON.parse(row.tournaments_json) as string[];
+        if (tids.includes(id) && !tids.some(tid => activeTourneys.has(tid))) {
+          clearToken.run(row.id);
+        }
+      }
     } else if (existing.status === 'completed') {
       db.prepare('UPDATE tournament_entrants SET final_rank = NULL WHERE tournament_id = ?')
         .run(id);

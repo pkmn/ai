@@ -1,7 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 
 export type ExecutionMode = 'native' | 'container';
-export type ResidencyState = 'hot' | 'cold';
+export type ResidencyState = 'staged' | 'hot' | 'cold';
 
 export interface LocalAgentRow {
   versionId: number;

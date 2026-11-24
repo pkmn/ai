@@ -287,21 +287,84 @@ export class Coordinator {
     }
   }
 
-  // Pulls, verifies SHA-256, and cold-archives activated ladder versions that are not yet installed
-  // in `local_agents`. Unactivated (`pending`/`staged`/`discarded`) submissions are never saved or
-  // archived on disk; only developer-activated versions are persisted here.
+  private isLocalArtifactPresent(mode: db.ExecutionMode, targetId: string): boolean {
+    if (mode === 'native') {
+      return fs.existsSync(path.join(this.dirs.agents, targetId, 'run'));
+    }
+    if (this.devMode) return true;
+    try {
+      execFileSync('podman', ['image', 'exists', targetId], {timeout: 15_000});
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private getOutboxSubmissionVersionIds(): Set<number> {
+    const ids = new Set<number>();
+    for (const entry of this.stateDb.listOutbox()) {
+      if (entry.endpoint !== 'submission-status') continue;
+      try {
+        const parsed = JSON.parse(entry.payloadJson) as {versionId?: number};
+        if (typeof parsed.versionId === 'number') ids.add(parsed.versionId);
+      } catch {}
+    }
+    return ids;
+  }
+
+  // Promotes locally staged builds to hot + cold-archived once activated (avoiding a second pull
+  // and allowing one-time auth tokens to be scrubbed right after the diagnostic fetch), falls back
+  // to fetching activated artifacts if a staged copy is absent on disk, and prunes local staged
+  // builds that were discarded on the server.
   async syncActivatedAgents(
     versionIds: readonly number[],
-    shouldYield?: () => boolean
+    opts: {stagedVersionIds?: readonly number[]; shouldYield?: () => boolean} = {}
   ): Promise<number> {
-    if (this.draining || !this.client.getActivatedArtifact || shouldYield?.()) return 0;
+    if (this.draining || opts.shouldYield?.()) return 0;
     const nowSeconds = Math.floor(Date.now() / 1000);
+    const activatedSet = new Set(versionIds);
     let installed = 0;
-    for (const versionId of new Set(versionIds)) {
-      if (this.draining || shouldYield?.()) break;
-      if (this.stateDb.getLocalAgent(versionId) !== undefined) continue;
+
+    for (const versionId of activatedSet) {
+      if (this.draining || opts.shouldYield?.()) break;
+      const local = this.stateDb.getLocalAgent(versionId);
+      if (local && local.residency !== 'staged') continue;
       const brokenUntil = this.brokenUntilByVersion.get(versionId);
       if (brokenUntil !== undefined && nowSeconds < brokenUntil) continue;
+
+      if (local?.residency === 'staged' && this.isLocalArtifactPresent(local.mode, local.target)) {
+        try {
+          if (local.mode === 'native' || !this.devMode) {
+            packages.archiveColdAgent({mode: local.mode, target: local.target}, {dirs: this.dirs});
+          }
+          this.stateDb.setAgentResidency(versionId, 'hot', nowSeconds);
+          this.brokenUntilByVersion.delete(versionId);
+          try {
+            packages.evictColdAgentsIfNeeded(this.stateDb, {
+              dirs: this.dirs,
+              pinnedVersionIds: new Set([versionId]),
+            });
+          } catch (evictErr) {
+            console.error(
+              `Failed evicting cold agents after archiving version ${versionId}:`,
+              evictErr
+            );
+          }
+          await this.client.markArtifactArchived?.(versionId).catch(() => undefined);
+          installed++;
+        } catch (err) {
+          this.brokenUntilByVersion.set(versionId, nowSeconds + BROKEN_AGENT_COOLDOWN_SECONDS);
+          const msg = err instanceof Error ? err.message : String(err);
+          this.notifyAlert({
+            key: `activation-pull-${versionId}`,
+            message: `Failed archiving activated version ${local.slug} ${local.version}`,
+            detail: msg,
+          });
+        }
+        continue;
+      }
+
+      if (!this.client.getActivatedArtifact) continue;
 
       let artifact: arena.ActivatedArtifact;
       try {
@@ -379,6 +442,23 @@ export class Coordinator {
         });
       }
     }
+
+    if (opts.stagedVersionIds !== undefined && !this.draining && !opts.shouldYield?.()) {
+      const stagedSet = new Set(opts.stagedVersionIds);
+      const outboxIds = this.getOutboxSubmissionVersionIds();
+      for (const row of this.stateDb.listLocalAgents('staged')) {
+        if (
+          activatedSet.has(row.versionId) ||
+          stagedSet.has(row.versionId) ||
+          outboxIds.has(row.versionId)
+        ) {
+          continue;
+        }
+        this.cleanupUnpackedAgent(row.mode, row.target);
+        this.stateDb.deleteLocalAgent(row.versionId);
+      }
+    }
+
     return installed;
   }
 
@@ -634,6 +714,7 @@ export class Coordinator {
       const diagnostics: SmokeDiagnosticInput[] = [];
       let smokeError: string | undefined;
 
+      let keepStaged = false;
       try {
         for (const item of targetsToTest) {
           let t1Packed: string;
@@ -788,10 +869,14 @@ export class Coordinator {
           engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
           engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
         }
+        keepStaged = smokeError === undefined;
       } finally {
-        // Never persist unactivated diagnostic builds on disk or in cold archives; activated
-        // versions are pulled and archived via `syncActivatedAgents` once explicitly approved.
-        this.cleanupUnpackedAgent(mode, targetId);
+        // Keep passed ladder builds staged locally on SSD (not yet archived to `/Volumes/Archive`)
+        // so Activation archives directly without re-downloading and one-time auth tokens can be
+        // scrubbed immediately after diagnostic fetch. Delete failed/errored builds immediately.
+        if (!keepStaged) {
+          this.cleanupUnpackedAgent(mode, targetId);
+        }
         if (this.client.sendDiagnosticLive) {
           await this.client.sendDiagnosticLive({
             done: true,
@@ -812,6 +897,17 @@ export class Coordinator {
         });
         continue;
       }
+
+      this.stateDb.upsertLocalAgent({
+        versionId: sub.versionId,
+        agentId: sub.agentId,
+        slug: sub.agentSlug,
+        version: sub.version,
+        mode,
+        target: targetId,
+        residency: 'staged',
+        unpackedBytes,
+      });
 
       await this.reportSubmissionOrOutbox({
         versionId: sub.versionId,
@@ -1723,7 +1819,8 @@ export class Coordinator {
           if (nowSeconds < brokenUntil) return false;
           this.brokenUntilByVersion.delete(e.versionId);
         }
-        return this.stateDb.getLocalAgent(e.versionId) !== undefined;
+        const local = this.stateDb.getLocalAgent(e.versionId);
+        return local !== undefined && local.residency !== 'staged';
       });
       const rosterIds = ladder.team === 'pools' && ladder.roster
         ? new Set(ladder.roster.map(r => r.agentId))

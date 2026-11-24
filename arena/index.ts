@@ -285,8 +285,15 @@ export async function runDaemon(opts: {
               .filter(e => e.role === 'champion' || e.role === 'challenger')
               .map(e => e.versionId)),
           ];
-          if (activatedVersionIds.length && !shouldYieldForMaintenance?.()) {
-            await coord.syncActivatedAgents(activatedVersionIds, shouldYieldForMaintenance);
+          const stagedVersionIds = initialSnap.stagedVersionIds;
+          if (
+            (activatedVersionIds.length || stagedVersionIds !== undefined) &&
+            !shouldYieldForMaintenance?.()
+          ) {
+            await coord.syncActivatedAgents(activatedVersionIds, {
+              stagedVersionIds,
+              shouldYield: shouldYieldForMaintenance,
+            });
           }
           if (
             initialSnap.unpublishedArchivedPoolsLadders?.length &&

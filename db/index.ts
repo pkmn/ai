@@ -714,6 +714,10 @@ export class Database extends SqliteDatabase {
     return versions.getActivatedLadderVersionIds(this.db);
   }
 
+  getStagedLadderVersionIds(): number[] {
+    return versions.getStagedLadderVersionIds(this.db);
+  }
+
   getSmokeDiagnosticsForVersion(versionId: number): smokeDiagnostics.Row[] {
     return smokeDiagnostics.getForVersion(this.db, versionId);
   }
