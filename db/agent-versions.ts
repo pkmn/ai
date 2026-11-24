@@ -1029,7 +1029,7 @@ const VALID_TRANSITIONS: Record<SmokeStatus, ReadonlySet<Exclude<SmokeStatus, 'p
   pending: new Set(['staged', 'passed', 'failed', 'discarded', 'quarantined']),
   staged: new Set(['passed', 'discarded', 'quarantined']),
   passed: new Set(['quarantined']),
-  failed: new Set(['quarantined']),
+  failed: new Set(),
   discarded: new Set(),
   quarantined: new Set(),
 };
@@ -1239,17 +1239,34 @@ export function activateStagedVersion(
     }
 
     const openLadderIds: string[] = [];
+    const droppedLadderIds: string[] = [];
     if (prev.ladders.length > 0) {
+      if (agent.status !== 'qualified') {
+        throw Object.assign(
+          new Error('Project qualification is pending staff review.'),
+          {status: 403}
+        );
+      }
+      const qualifiedSlots = new Set(getAgentLadders(db, prev.agentId));
+      let hadQualifiedTarget = false;
       for (const ladderId of prev.ladders) {
         const ladder = getLadder(db, ladderId);
-        if (ladder && (ladder.status === 'upcoming' || ladder.status === 'active')) {
+        const isQualified = Boolean(ladder && qualifiedSlots.has(ladder.slot));
+        if (isQualified) hadQualifiedTarget = true;
+        if (isQualified && (ladder!.status === 'upcoming' || ladder!.status === 'active')) {
           openLadderIds.push(ladderId);
+        } else {
+          droppedLadderIds.push(ladderId);
         }
       }
       if (!openLadderIds.length) {
         throw Object.assign(
-          new Error('All target ladders for this version have closed to new entries.'),
-          {status: 400}
+          new Error(
+            hadQualifiedTarget
+              ? 'All target ladders for this version have closed to new entries.'
+              : `${agent.name} is no longer qualified for any target ladders of this version.`
+          ),
+          {status: hadQualifiedTarget ? 400 : 403}
         );
       }
     }
@@ -1273,18 +1290,37 @@ export function activateStagedVersion(
             {status: 400}
           );
         }
+        const existingEntrant = db.prepare(
+          'SELECT 1 FROM tournament_entrants WHERE tournament_id = ? AND agent_id = ? LIMIT 1'
+        ).get(tournamentId, prev.agentId);
+        if (existingEntrant) {
+          throw Object.assign(
+            new Error(`Already entered in "${tournament.name}".`),
+            {status: 409}
+          );
+        }
         openTournamentIds.push(tournamentId);
       }
+    }
+
+    if (droppedLadderIds.length > 0) {
+      teams.revertPendingTeamsToSaved(db, droppedLadderIds, prev.agentId);
     }
 
     db.prepare(`
       UPDATE agent_versions
       SET smoke_status = 'passed',
+          ladders_json = ?,
           auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
           activated_at = ?,
           notified = 1
       WHERE id = ?
-    `).run(openLadderIds.length === 0 ? 1 : 0, now, prev.id);
+    `).run(
+      JSON.stringify(openLadderIds),
+      openLadderIds.length === 0 ? 1 : 0,
+      now,
+      prev.id
+    );
 
     const retiredByLadder = enrollActivatedVersion(
       db,

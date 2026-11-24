@@ -1020,6 +1020,8 @@ function renderStagedSection(opts: {
   versions: db.VersionHistoryView[];
   ladderNameById: Map<string, string>;
   openLadderIds: ReadonlySet<string>;
+  qualifiedOpenLadderIds: ReadonlySet<string>;
+  agentQualified: boolean;
   tournamentById: Map<string, db.TournamentSubmissionStatus>;
   now: number;
 }): util.Child {
@@ -1036,8 +1038,14 @@ function renderStagedSection(opts: {
         ];
         const statsText = formatSmokeStatsText(v);
         let activateDisabledAttrs: util.LocalizedTitleAttrs | Record<string, never> = {};
-        if (v.ladders.length > 0 && !v.ladders.some(id => opts.openLadderIds.has(id))) {
-          activateDisabledAttrs = {title: 'All target ladders for this version have closed.'};
+        if (v.ladders.length > 0) {
+          if (!opts.agentQualified) {
+            activateDisabledAttrs = {title: 'Project qualification is pending staff review.'};
+          } else if (!v.ladders.some(id => opts.qualifiedOpenLadderIds.has(id))) {
+            activateDisabledAttrs = v.ladders.some(id => opts.openLadderIds.has(id))
+              ? {title: 'Project is no longer qualified for the target ladders of this version.'}
+              : {title: 'All target ladders for this version have closed.'};
+          }
         } else if (v.tournaments.length > 0) {
           for (const tid of v.tournaments) {
             const ts = opts.tournamentById.get(tid);
@@ -1415,6 +1423,13 @@ export function renderAccountPage(opts: {
   const openLadderIds = new Set(
     currentLadders.filter(l => l.status === 'upcoming' || l.status === 'active').map(l => l.id)
   );
+  const qualifiedOpenLadderIds = new Set(
+    currentLadders
+      .filter(
+        l => (l.status === 'upcoming' || l.status === 'active') && qualifiedSlots.has(l.slot)
+      )
+      .map(l => l.id)
+  );
   const tournamentById = new Map(tournamentStatuses.map(t => [t.tournamentId, t]));
   const hasPending = versions.some(v => v.smokeStatus === 'pending');
   const content = (
@@ -1455,6 +1470,8 @@ export function renderAccountPage(opts: {
         versions,
         ladderNameById,
         openLadderIds,
+        qualifiedOpenLadderIds,
+        agentQualified: agent.status === 'qualified',
         tournamentById,
         now,
       })}

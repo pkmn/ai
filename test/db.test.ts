@@ -2031,8 +2031,25 @@ describe('quarantine invariants', () => {
     });
     expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_030))
       .toThrow(/not quarantined/);
+    expect(() => db.quarantineVersion('alpha', '1.1.0', 'Cannot quarantine failed', 1_760_002_035))
+      .toThrow(/Invalid submission status transition/);
 
-    db.quarantineVersion('alpha', '1.1.0', 'Manual quarantine of failed version', 1_760_002_035);
+    // Quarantining a staged (unactivated) version still blocks unquarantine.
+    const stagedSub = db.createSubmission({
+      agentId: agAlpha.id,
+      version: '1.1.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/alpha-110-r2.tar.zst',
+      sha256: '8'.repeat(64),
+      ladderIds: ['gen9randombattle'],
+      now: 1_760_002_036,
+    });
+    db.applySubmissionStatus({
+      versionId: stagedSub.id,
+      smokeStatus: 'staged',
+      now: 1_760_002_037,
+    });
+    db.quarantineVersion('alpha', '1.1.0', 'Manual quarantine of staged version', 1_760_002_038);
     expect(() => db.unquarantineVersion('alpha', '1.1.0', 1_760_002_040))
       .toThrow(/never passed smoke testing/);
   });
@@ -4443,6 +4460,124 @@ describe('discord watches', () => {
       db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
       db.syncProjectsFromYaml('[]\n', undefined, 1_700_000_020);
       expect(db.getVersionById(ver.id)?.authTokenEncoding).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('activateStagedVersion rejects revoked ladder qualification', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      db.setAgentLadders(alpha.id, [], 1_700_000_020);
+      expect(() => db.activateStagedVersion({
+        versionId: ver.id, agentId: alpha.id, now: 1_700_000_030,
+      })).toThrow(/pending staff review/);
+
+      db.setAgentLadders(alpha.id, ['rand'], 1_700_000_040);
+      expect(() => db.activateStagedVersion({
+        versionId: ver.id, agentId: alpha.id, now: 1_700_000_050,
+      })).toThrow(/no longer qualified/);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('activateStagedVersion reverts pending pools teams on closed target ladder', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(
+        `${sampleLadders}\n- name: VGC\n  format: gen9championsvgc2026regmc\n` +
+          '  version: 0.11.0\n  team: pools\n  teams: 2\n  id: vgc2026\n',
+        1_700_000_000
+      );
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby', 'vgc'], 1_700_000_000);
+      db.replaceSavedTeams('vgc2026', alpha.id, ['t1', 't2'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109', 'vgc2026'],
+        teamsByLadder: {vgc2026: ['t1', 't2']},
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      db.setLadderStatus('vgc2026', 'archived', 1_700_000_020);
+      db.activateStagedVersion({versionId: ver.id, agentId: alpha.id, now: 1_700_000_030});
+
+      expect(db.getVersionById(ver.id)?.ladders).toEqual(['gen1ou20261109']);
+      expect(db.getTeamsForAgentLadder('vgc2026', alpha.id, 'pending')).toEqual([]);
+      expect(db.getTeamsForAgentLadder('vgc2026', alpha.id, 'saved')).toEqual(['t1', 't2']);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('activateStagedVersion rejects duplicate tournament entry with 409', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      db.upsertTournament({
+        id: 't-dup',
+        name: 'Dup Cup',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: '1× A100',
+        startsAt: 1_700_100_000,
+      });
+      const v1 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:1.0',
+        sha256: 'a'.repeat(64),
+        ladderIds: [],
+        tournamentIds: ['t-dup'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_700_000_010});
+      const seeded = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.9',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:0.9',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_015,
+      });
+      db.applySubmissionStatus({versionId: seeded.id, smokeStatus: 'passed', now: 1_700_000_016});
+      db.upsertTournamentEntrant({
+        tournamentId: 't-dup',
+        agentId: alpha.id,
+        versionId: seeded.id,
+        seed: 1,
+      });
+      expect(() => db.activateStagedVersion({
+        versionId: v1.id, agentId: alpha.id, now: 1_700_000_020,
+      })).toThrow(/Already entered/);
+      expect(db.getVersionById(v1.id)?.smokeStatus).toBe('staged');
     } finally {
       db.close();
     }
