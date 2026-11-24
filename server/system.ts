@@ -837,6 +837,69 @@ export interface VpsMonitorOptions {
   now?: () => number;
 }
 
+export interface LinuxDiskRateState {
+  prev?: {atMs: number; sample: ProcDiskSample};
+  rates?: {readBytesPerSec: number; writeBytesPerSec: number; iops: number; busyPct: number};
+}
+
+export function advanceLinuxDiskRates(
+  state: LinuxDiskRateState,
+  cur: ProcDiskSample,
+  nowMs: number
+): LinuxDiskRateState['rates'] {
+  if (state.prev?.sample.name !== cur.name) {
+    state.prev = {atMs: nowMs, sample: cur};
+    state.rates = undefined;
+    return undefined;
+  }
+  const dtSec = (nowMs - state.prev.atMs) / 1000;
+  if (dtSec < 0.5) {
+    // Keep the previous baseline and most recent rates during sub-500ms bursts (e.g. /admin load
+    // immediately followed by /api/admin/stream connect) so rates are never erased.
+    return state.rates;
+  }
+  const dReadSec = Math.max(0, cur.sectorsRead - state.prev.sample.sectorsRead);
+  const dWriteSec = Math.max(0, cur.sectorsWritten - state.prev.sample.sectorsWritten);
+  const dOps = Math.max(0, cur.readsCompleted - state.prev.sample.readsCompleted) +
+    Math.max(0, cur.writesCompleted - state.prev.sample.writesCompleted);
+  const dTicks = Math.max(0, cur.ioTicksMillis - state.prev.sample.ioTicksMillis);
+  state.rates = {
+    readBytesPerSec: Math.round((dReadSec * 512) / dtSec),
+    writeBytesPerSec: Math.round((dWriteSec * 512) / dtSec),
+    iops: Math.round(dOps / dtSec),
+    busyPct: Math.min(100, Math.round((dTicks / (dtSec * 1000)) * 100)),
+  };
+  state.prev = {atMs: nowMs, sample: cur};
+  return state.rates;
+}
+
+export interface NetRateState {
+  prev?: {atMs: number; sample: NetCounterSample};
+  rates?: {rxBytesPerSec: number; txBytesPerSec: number};
+}
+
+export function advanceNetRates(
+  state: NetRateState,
+  cur: NetCounterSample,
+  nowMs: number
+): NetRateState['rates'] {
+  if (state.prev?.sample.iface !== cur.iface) {
+    state.prev = {atMs: nowMs, sample: cur};
+    state.rates = undefined;
+    return undefined;
+  }
+  const dtSec = (nowMs - state.prev.atMs) / 1000;
+  if (dtSec < 0.5) {
+    return state.rates;
+  }
+  state.rates = {
+    rxBytesPerSec: Math.round(Math.max(0, cur.rxBytes - state.prev.sample.rxBytes) / dtSec),
+    txBytesPerSec: Math.round(Math.max(0, cur.txBytes - state.prev.sample.txBytes) / dtSec),
+  };
+  state.prev = {atMs: nowMs, sample: cur};
+  return state.rates;
+}
+
 export class VpsHostMonitor {
   private readonly dbPath: string;
   private readonly traffic: TrafficTracker | undefined;
@@ -844,8 +907,8 @@ export class VpsHostMonitor {
   private readonly tlsCertPath: string;
   private readonly tlsProbe: {host: string; port: number; servername: string} | undefined;
   private readonly now: () => number;
-  private prevDisk: {atMs: number; sample: ProcDiskSample} | undefined;
-  private prevNet: {atMs: number; sample: NetCounterSample} | undefined;
+  private readonly diskRateState: LinuxDiskRateState;
+  private readonly netRateState: NetRateState;
   private cachedExternalProbe: NetworkProbe | undefined;
   private cachedTlsCert: TlsCertStatus | undefined;
   private tlsChecked: boolean;
@@ -869,8 +932,8 @@ export class VpsHostMonitor {
         : undefined
     );
     this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
-    this.prevDisk = undefined;
-    this.prevNet = undefined;
+    this.diskRateState = {};
+    this.netRateState = {};
     this.cachedExternalProbe = undefined;
     this.cachedTlsCert = undefined;
     this.tlsChecked = false;
@@ -1049,24 +1112,13 @@ export class VpsHostMonitor {
         const dev = pickRootLinuxDisk(stats, mounts);
         const cur = dev ? stats.get(dev) : undefined;
         if (cur) {
-          if (this.prevDisk?.sample.name === cur.name) {
-            const dtSec = (nowMs - this.prevDisk.atMs) / 1000;
-            if (dtSec >= 0.5) {
-              const dReadSec = Math.max(0, cur.sectorsRead - this.prevDisk.sample.sectorsRead);
-              const dWriteSec = Math.max(
-                0,
-                cur.sectorsWritten - this.prevDisk.sample.sectorsWritten
-              );
-              const dOps = Math.max(0, cur.readsCompleted - this.prevDisk.sample.readsCompleted) +
-                Math.max(0, cur.writesCompleted - this.prevDisk.sample.writesCompleted);
-              const dTicks = Math.max(0, cur.ioTicksMillis - this.prevDisk.sample.ioTicksMillis);
-              rootDisk.readBytesPerSec = Math.round((dReadSec * 512) / dtSec);
-              rootDisk.writeBytesPerSec = Math.round((dWriteSec * 512) / dtSec);
-              rootDisk.iops = Math.round(dOps / dtSec);
-              rootDisk.busyPct = Math.min(100, Math.round((dTicks / (dtSec * 1000)) * 100));
-            }
+          const rates = advanceLinuxDiskRates(this.diskRateState, cur, nowMs);
+          if (rates) {
+            rootDisk.readBytesPerSec = rates.readBytesPerSec;
+            rootDisk.writeBytesPerSec = rates.writeBytesPerSec;
+            rootDisk.iops = rates.iops;
+            rootDisk.busyPct = rates.busyPct;
           }
-          this.prevDisk = {atMs: nowMs, sample: cur};
         }
       } catch {}
     }
@@ -1086,18 +1138,11 @@ export class VpsHostMonitor {
           out.iface = cur.iface;
           out.rxErrors = cur.rxErrors;
           out.txErrors = cur.txErrors;
-          if (this.prevNet?.sample.iface === cur.iface) {
-            const dtSec = (nowMs - this.prevNet.atMs) / 1000;
-            if (dtSec >= 0.5) {
-              out.rxBytesPerSec = Math.round(
-                Math.max(0, cur.rxBytes - this.prevNet.sample.rxBytes) / dtSec
-              );
-              out.txBytesPerSec = Math.round(
-                Math.max(0, cur.txBytes - this.prevNet.sample.txBytes) / dtSec
-              );
-            }
+          const rates = advanceNetRates(this.netRateState, cur, nowMs);
+          if (rates) {
+            out.rxBytesPerSec = rates.rxBytesPerSec;
+            out.txBytesPerSec = rates.txBytesPerSec;
           }
-          this.prevNet = {atMs: nowMs, sample: cur};
         }
       } catch {}
 
@@ -1212,7 +1257,8 @@ export class ArenaHostMonitor {
   private rootDiskName: string | undefined;
   private archiveDiskName: string | undefined;
   private prevIostat: {atMs: number; disks: Map<string, MacIostatSample>} | undefined;
-  private prevNet: {atMs: number; sample: NetCounterSample} | undefined;
+  private lastIostatRates: Map<string, {ioBytesPerSec: number; iops: number}>;
+  private readonly netRateState: NetRateState;
   private lastFastAt: number | undefined;
   private lastSlowAt: number | undefined;
   private lastBackupScanAt: number | undefined;
@@ -1242,7 +1288,8 @@ export class ArenaHostMonitor {
     this.rootDiskName = undefined;
     this.archiveDiskName = undefined;
     this.prevIostat = undefined;
-    this.prevNet = undefined;
+    this.lastIostatRates = new Map();
+    this.netRateState = {};
     this.lastFastAt = undefined;
     this.lastSlowAt = undefined;
     this.lastBackupScanAt = undefined;
@@ -1383,7 +1430,9 @@ export class ArenaHostMonitor {
     const backupGood = cur?.lastBackupAt !== undefined && cur.lastBackupAt >= windowStart;
     const gcsGood = !this.requireGcsSync ||
       (cur?.lastArchiveUploadAt !== undefined && cur.lastArchiveUploadAt >= windowStart);
-    if (cur && !cur.archiveError && backupGood && gcsGood) {
+    const updatesGood =
+      this.cachedUpdates !== undefined && this.cachedUpdates.checkedAt >= windowStart;
+    if (cur && !cur.archiveError && backupGood && gcsGood && updatesGood) {
       return false;
     }
     if (
@@ -1484,7 +1533,7 @@ export class ArenaHostMonitor {
       const [vmOut, sysctlOut, iostatOut, netOut] = await Promise.all([
         execTextAsync('vm_stat', []),
         execTextAsync('sysctl', ['-n', 'vm.swapusage', 'kern.memorystatus_vm_pressure_level']),
-        execTextAsync('iostat', ['-Id']),
+        execTextAsync('iostat', ['-Id', '-n', '16']),
         execTextAsync('netstat', ['-ibn']),
       ]);
 
@@ -1505,24 +1554,40 @@ export class ArenaHostMonitor {
 
       if (iostatOut) {
         const curDisks = parseMacIostat(iostatOut);
-        if (this.prevIostat) {
+        if (!this.prevIostat) {
+          this.prevIostat = {atMs: nowMs, disks: curDisks};
+        } else {
           const dtSec = (nowMs - this.prevIostat.atMs) / 1000;
           if (dtSec >= 0.5) {
-            const applyIo = (target: DiskMetrics, diskName?: string) => {
+            const updateIo = (target: DiskMetrics, diskName?: string) => {
               if (!diskName) return;
               const cur = curDisks.get(diskName);
               const prev = this.prevIostat!.disks.get(diskName);
               if (!cur || !prev) return;
               const dMb = Math.max(0, cur.megabytes - prev.megabytes);
               const dXfrs = Math.max(0, cur.transfers - prev.transfers);
-              target.ioBytesPerSec = Math.round((dMb * 1024 * 1024) / dtSec);
-              target.iops = Math.round(dXfrs / dtSec);
+              const rates = {
+                ioBytesPerSec: Math.round((dMb * 1024 * 1024) / dtSec),
+                iops: Math.round(dXfrs / dtSec),
+              };
+              this.lastIostatRates.set(diskName, rates);
+              target.ioBytesPerSec = rates.ioBytesPerSec;
+              target.iops = rates.iops;
             };
-            applyIo(rootDisk, this.rootDiskName);
-            if (archiveMounted) applyIo(archiveDisk, this.archiveDiskName);
+            updateIo(rootDisk, this.rootDiskName);
+            if (archiveMounted) updateIo(archiveDisk, this.archiveDiskName);
+            this.prevIostat = {atMs: nowMs, disks: curDisks};
+          } else {
+            const reuseIo = (target: DiskMetrics, diskName?: string) => {
+              const cached = diskName ? this.lastIostatRates.get(diskName) : undefined;
+              if (!cached) return;
+              target.ioBytesPerSec = cached.ioBytesPerSec;
+              target.iops = cached.iops;
+            };
+            reuseIo(rootDisk, this.rootDiskName);
+            if (archiveMounted) reuseIo(archiveDisk, this.archiveDiskName);
           }
         }
-        this.prevIostat = {atMs: nowMs, disks: curDisks};
       }
 
       if (netOut) {
@@ -1531,18 +1596,11 @@ export class ArenaHostMonitor {
           network.iface = curNet.iface;
           network.rxErrors = curNet.rxErrors;
           network.txErrors = curNet.txErrors;
-          if (this.prevNet?.sample.iface === curNet.iface) {
-            const dtSec = (nowMs - this.prevNet.atMs) / 1000;
-            if (dtSec >= 0.5) {
-              network.rxBytesPerSec = Math.round(
-                Math.max(0, curNet.rxBytes - this.prevNet.sample.rxBytes) / dtSec
-              );
-              network.txBytesPerSec = Math.round(
-                Math.max(0, curNet.txBytes - this.prevNet.sample.txBytes) / dtSec
-              );
-            }
+          const rates = advanceNetRates(this.netRateState, curNet, nowMs);
+          if (rates) {
+            network.rxBytesPerSec = rates.rxBytesPerSec;
+            network.txBytesPerSec = rates.txBytesPerSec;
           }
-          this.prevNet = {atMs: nowMs, sample: curNet};
         }
       }
     }
@@ -1583,8 +1641,8 @@ export class ArenaHostMonitor {
     ]);
     const checkedAt = this.now();
     this.externalProbe = extProbe;
-    if (podmanOut) {
-      this.cachedPodmanState = podmanOut.trim().toLowerCase();
+    if (process.platform === 'darwin') {
+      this.cachedPodmanState = podmanOut ? podmanOut.trim().toLowerCase() : 'error';
       this.cachedPodmanCheckedAt = checkedAt;
     }
     if (this.latest) {

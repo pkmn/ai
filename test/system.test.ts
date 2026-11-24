@@ -487,4 +487,101 @@ describe('system telemetry parsers & TrafficTracker', () => {
       fs.rmSync(dir, {recursive: true, force: true});
     }
   });
+
+  test('advanceLinuxDiskRates preserves rates during sub-500ms bursts', () => {
+    const diskState: system.LinuxDiskRateState = {};
+    const s0: system.ProcDiskSample = {
+      name: 'sda',
+      readsCompleted: 100,
+      sectorsRead: 1000,
+      writesCompleted: 50,
+      sectorsWritten: 500,
+      ioTicksMillis: 100,
+    };
+    expect(system.advanceLinuxDiskRates(diskState, s0, 1000)).toBeUndefined();
+    const s1: system.ProcDiskSample = {
+      name: 'sda',
+      readsCompleted: 110,
+      sectorsRead: 1020,
+      writesCompleted: 55,
+      sectorsWritten: 510,
+      ioTicksMillis: 200,
+    };
+    const r1 = system.advanceLinuxDiskRates(diskState, s1, 2000);
+    expect(r1).toEqual({
+      readBytesPerSec: 10240,
+      writeBytesPerSec: 5120,
+      iops: 15,
+      busyPct: 10,
+    });
+    // Burst sample 50ms later must preserve previous rates and baseline timestamp.
+    const rBurst = system.advanceLinuxDiskRates(diskState, s1, 2050);
+    expect(rBurst).toEqual(r1);
+    expect(diskState.prev?.atMs).toBe(2000);
+
+    const netState: system.NetRateState = {};
+    expect(
+      system.advanceNetRates(netState, {
+        iface: 'eth0', rxBytes: 1000, txBytes: 500, rxErrors: 0, txErrors: 0,
+      }, 1000)
+    ).toBeUndefined();
+    const nr1 = system.advanceNetRates(netState, {
+      iface: 'eth0', rxBytes: 3000, txBytes: 1500, rxErrors: 0, txErrors: 0,
+    }, 2000);
+    expect(nr1).toEqual({rxBytesPerSec: 2000, txBytesPerSec: 1000});
+    expect(
+      system.advanceNetRates(netState, {
+        iface: 'eth0', rxBytes: 3000, txBytes: 1500, rxErrors: 0, txErrors: 0,
+      }, 2050)
+    ).toEqual(nr1);
+    expect(netState.prev?.atMs).toBe(2000);
+  });
+
+  test('ArenaHostMonitor rescans when updates-status.json arrives after archive-status.json',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-upd-'));
+      try {
+        const statusFile = path.join(tmpDir, 'archive-status.json');
+        const updatesFile = path.join(tmpDir, 'updates-status.json');
+        const windowStart = Math.floor(Date.UTC(2026, 4, 10, 10, 0, 0) / 1000);
+        // Archive finishes first; updates-status.json still carries yesterday's timestamp.
+        fs.writeFileSync(statusFile, JSON.stringify({
+          completedAt: windowStart + 30,
+          backupAt: windowStart + 30,
+          backupBytes: 2048,
+          gcsSyncedAt: windowStart + 60,
+        }));
+        fs.writeFileSync(updatesFile, JSON.stringify({
+          pending: 0,
+          rebootRequired: false,
+          checkedAt: windowStart - 86400,
+        }));
+        let nowSec = windowStart + 90;
+        const monitor = new system.ArenaHostMonitor({
+          stateDbPath: ':memory:',
+          getOutboxCount: () => 0,
+          isArchiveMounted: () => false,
+          archiveStatusPath: statusFile,
+          updatesStatusPath: updatesFile,
+          requireGcsSync: true,
+          now: () => nowSec,
+        });
+        await monitor.refreshFast();
+        expect(monitor.getSnapshot()?.updates?.pending).toBe(0);
+
+        // Maintenance finishes softwareupdate 10s later; next maybeRefresh after retry interval
+        // must pick up the new updates-status.json instead of waiting 24h.
+        fs.writeFileSync(updatesFile, JSON.stringify({
+          pending: 2,
+          rebootRequired: true,
+          checkedAt: windowStart + 100,
+          summary: 'macOS 15.6',
+        }));
+        nowSec = windowStart + 90 + 360;
+        await monitor.maybeRefresh();
+        expect(monitor.getSnapshot()?.updates?.pending).toBe(2);
+      } finally {
+        fs.rmSync(tmpDir, {recursive: true, force: true});
+      }
+    });
 });
