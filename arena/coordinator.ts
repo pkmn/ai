@@ -10,7 +10,10 @@ import {
   SMOKE_TEST_CYCLE_INTERVAL,
   SmokeCadence,
 } from '../db/config';
-import type {Input as SmokeDiagnosticInput} from '../db/smoke-diagnostics';
+import {
+  Input as SmokeDiagnosticInput,
+  battleLogHasAiTelemetry,
+} from '../db/smoke-diagnostics';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
@@ -269,30 +272,101 @@ export class Coordinator {
     this.diagnosticWallCapMillis = options.diagnosticWallCapMillis;
   }
 
-  pruneDiscardedVersions(discardedVersionIds: readonly number[]): number {
-    let pruned = 0;
-    let removedNative = false;
-    for (const versionId of discardedVersionIds) {
-      const local = this.stateDb.getLocalAgent(versionId);
-      if (!local) continue;
-      if (local.mode === 'native') {
-        fs.rmSync(path.join(this.dirs.agents, local.target), {recursive: true, force: true});
-        removedNative = true;
-      } else {
-        try {
-          execFileSync('podman', ['rmi', '-f', local.target], {timeout: 30_000});
-        } catch {}
+  private cleanupUnpackedAgent(mode: db.ExecutionMode, targetId: string) {
+    if (mode === 'native') {
+      fs.rmSync(path.join(this.dirs.agents, targetId), {recursive: true, force: true});
+      if (fs.existsSync(this.dirs.cas)) {
+        packages.pruneUnreferencedCasBlobs(this.dirs.cas, this.dirs.agents);
       }
-      fs.rmSync(path.join(this.dirs.cold, `${local.target}.tar.zst`), {force: true});
-      this.stateDb.deleteLocalAgent(versionId);
-      this.faultCounters.delete(versionId);
-      this.brokenUntilByVersion.delete(versionId);
-      pruned++;
+    } else {
+      try {
+        execFileSync('podman', ['rmi', '-f', targetId], {timeout: 30_000});
+      } catch {}
     }
-    if (removedNative && fs.existsSync(this.dirs.cas)) {
-      packages.pruneUnreferencedCasBlobs(this.dirs.cas, this.dirs.agents);
+  }
+
+  // Pulls, verifies SHA-256, and cold-archives activated ladder versions that are not yet installed
+  // in `local_agents`. Unactivated (`pending`/`staged`/`discarded`) submissions are never saved or
+  // archived on disk; only developer-activated versions are persisted here.
+  async syncActivatedAgents(versionIds: readonly number[]): Promise<number> {
+    if (this.draining || !this.client.getActivatedArtifact) return 0;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    let installed = 0;
+    for (const versionId of new Set(versionIds)) {
+      if (this.draining) break;
+      if (this.stateDb.getLocalAgent(versionId) !== undefined) continue;
+      const brokenUntil = this.brokenUntilByVersion.get(versionId);
+      if (brokenUntil !== undefined && nowSeconds < brokenUntil) continue;
+
+      let artifact: arena.ActivatedArtifact;
+      try {
+        artifact = await this.client.getActivatedArtifact(versionId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.brokenUntilByVersion.set(versionId, nowSeconds + BROKEN_AGENT_COOLDOWN_SECONDS);
+        this.notifyAlert({
+          key: `activation-fetch-${versionId}`,
+          message: `Failed fetching activated artifact metadata for version ${versionId}`,
+          detail: msg,
+        });
+        continue;
+      }
+
+      const mode = packages.toExecutionMode(artifact.package);
+      const targetId = packages.formatAgentTargetId(
+        artifact.agentSlug,
+        artifact.version,
+        artifact.versionId
+      );
+      try {
+        const unpackedBytes = mode === 'container'
+          ? packages.pullAndVerifyOciImage({
+            imageRef: artifact.url,
+            agentTargetId: targetId,
+            expectedSha256: artifact.sha256,
+            creds: artifact.authToken,
+            dirs: this.dirs,
+          })
+          : await packages.downloadAndUnpackBundle({
+            url: artifact.url,
+            expectedSha256: artifact.sha256,
+            agentTargetId: targetId,
+            authToken: artifact.authToken,
+            dirs: this.dirs,
+            allowPrivateUrls: this.devMode,
+          });
+        this.stateDb.upsertLocalAgent({
+          versionId: artifact.versionId,
+          agentId: artifact.agentId,
+          slug: artifact.agentSlug,
+          version: artifact.version,
+          mode,
+          target: targetId,
+          residency: 'hot',
+          unpackedBytes,
+        });
+        this.brokenUntilByVersion.delete(versionId);
+        if (mode === 'native' || !this.devMode) {
+          packages.archiveColdAgent({mode, target: targetId}, {dirs: this.dirs});
+        }
+        packages.evictColdAgentsIfNeeded(this.stateDb, {
+          dirs: this.dirs,
+          pinnedVersionIds: new Set([artifact.versionId]),
+        });
+        await this.client.markArtifactArchived?.(artifact.versionId).catch(() => undefined);
+        installed++;
+      } catch (err) {
+        this.cleanupUnpackedAgent(mode, targetId);
+        this.brokenUntilByVersion.set(versionId, nowSeconds + BROKEN_AGENT_COOLDOWN_SECONDS);
+        const msg = err instanceof Error ? err.message : String(err);
+        this.notifyAlert({
+          key: `activation-pull-${versionId}`,
+          message: `Failed archiving activated version ${artifact.agentSlug} ${artifact.version}`,
+          detail: msg,
+        });
+      }
     }
-    return pruned;
+    return installed;
   }
 
   requestDrain() {
@@ -633,6 +707,10 @@ export class Coordinator {
           });
           const res = await game.run();
           const gameDurationMillis = Math.max(1, Date.now() - gameStartMillis);
+          const supportsInfo =
+            res.p1.info !== undefined ||
+            res.p2.info !== undefined ||
+            battleLogHasAiTelemetry(res.omniscientLog);
           diagnostics.push({
             ladderId: item.ladderId,
             format: item.format,
@@ -640,6 +718,7 @@ export class Coordinator {
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
             battleLog: res.omniscientLog,
+            supportsInfo,
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
             ...(res.p1.cpuCores !== undefined ? {p1CpuCores: res.p1.cpuCores} : {}),
@@ -672,6 +751,9 @@ export class Coordinator {
           engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
         }
       } finally {
+        // Never persist unactivated diagnostic builds on disk or in cold archives; activated
+        // versions are pulled and archived via `syncActivatedAgents` once explicitly approved.
+        this.cleanupUnpackedAgent(mode, targetId);
         if (this.client.sendDiagnosticLive) {
           await this.client.sendDiagnosticLive({
             done: true,
@@ -684,16 +766,6 @@ export class Coordinator {
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
 
       if (smokeError) {
-        if (mode === 'native') {
-          fs.rmSync(path.join(this.dirs.agents, targetId), {recursive: true, force: true});
-          if (fs.existsSync(this.dirs.cas)) {
-            packages.pruneUnreferencedCasBlobs(this.dirs.cas, this.dirs.agents);
-          }
-        } else {
-          try {
-            execFileSync('podman', ['rmi', '-f', targetId], {timeout: 30_000});
-          } catch {}
-        }
         await this.reportSubmissionOrOutbox({
           versionId: sub.versionId,
           smokeStatus: 'failed',
@@ -702,27 +774,6 @@ export class Coordinator {
         });
         continue;
       }
-
-      this.stateDb.upsertLocalAgent({
-        versionId: sub.versionId,
-        agentId: sub.agentId,
-        slug: sub.agentSlug,
-        version: sub.version,
-        mode,
-        target,
-        residency: 'hot',
-        unpackedBytes,
-      });
-      this.brokenUntilByVersion.delete(sub.versionId);
-
-      if (mode === 'native' || !this.devMode) {
-        packages.archiveColdAgent({mode, target}, {dirs: this.dirs});
-      }
-
-      packages.evictColdAgentsIfNeeded(this.stateDb, {
-        dirs: this.dirs,
-        pinnedVersionIds: new Set([sub.versionId]),
-      });
 
       await this.reportSubmissionOrOutbox({
         versionId: sub.versionId,

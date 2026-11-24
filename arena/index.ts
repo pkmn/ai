@@ -261,8 +261,14 @@ export async function runDaemon(opts: {
         const initialSnap = await client.getPlayableLadders();
         let ladders = initialSnap.ladders;
         let quarantinedVersionIds = initialSnap.quarantinedVersionIds ?? [];
-        if (initialSnap.discardedVersionIds?.length) {
-          coord.pruneDiscardedVersions(initialSnap.discardedVersionIds);
+        const activatedVersionIds = [
+          ...(initialSnap.activatedVersionIds ?? []),
+          ...ladders.flatMap(l => l.entries
+            .filter(e => e.role === 'champion' || e.role === 'challenger')
+            .map(e => e.versionId)),
+        ];
+        if (activatedVersionIds.length) {
+          await coord.syncActivatedAgents(activatedVersionIds);
         }
         if (initialSnap.unpublishedArchivedPoolsLadders?.length) {
           await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);

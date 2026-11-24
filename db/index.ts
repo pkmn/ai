@@ -605,6 +605,10 @@ export class Database extends SqliteDatabase {
     return versions.getVersionById(this.db, versionId);
   }
 
+  isVersionClaimed(agentId: number, version: string): boolean {
+    return versions.isVersionClaimed(this.db, agentId, version);
+  }
+
   getVersionBySlugAndLabel(
     agentSlug: string,
     version: string
@@ -669,8 +673,12 @@ export class Database extends SqliteDatabase {
     return versions.discardStagedVersion(this.db, this.txRunner, input);
   }
 
-  getDiscardedVersionIds(): number[] {
-    return versions.getDiscardedVersionIds(this.db);
+  clearVersionAuthToken(versionId: number) {
+    versions.clearVersionAuthToken(this.db, versionId);
+  }
+
+  getActivatedLadderVersionIds(): number[] {
+    return versions.getActivatedLadderVersionIds(this.db);
   }
 
   getSmokeDiagnosticsForVersion(versionId: number): smokeDiagnostics.Row[] {

@@ -3290,12 +3290,71 @@ describe('createServerApp production HTTP hardening', () => {
       const after = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
       expect(after.status).toBe(200);
       expect(after.data.quarantinedVersionIds).not.toContain(v1.id);
+      expect(after.data.activatedVersionIds).toContain(v1.id);
       expect(after.data.smokeCadence).toEqual({maxPerCycle: 2, everyCycles: 4});
     } finally {
       ctrl.close();
       await srv.close();
     }
   });
+
+  test('serves activated artifact metadata with authToken and scrubs on archived callback',
+    async () => {
+      const a1 = db.getAgentBySlug('0-error')!;
+      const v1 = db.createSubmission({
+        agentId: a1.id,
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/z-2.0.0.tar.zst',
+        sha256: SHA,
+        authTokenEncoding: encryptSecret('ghp_activated_secret', AUTH_CFG.sessionSecret),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_010,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: 1_760_000_020});
+
+      const app = polka();
+      const ctrl = arena.register(app, {
+        db,
+        arenaSecret: ARENA_SECRET,
+        publicDir: tmpDir,
+        auth: new auth.Auth({db, config: AUTH_CFG}),
+      });
+      const srv = await startTestServer(app);
+      try {
+        // Staged (unactivated) versions are not returned in activatedVersionIds or artifacts/:id.
+        const beforeSnap = await apiJson(srv.baseUrl, 'GET', '/api/arena/ladders', ARENA_SECRET);
+        expect(beforeSnap.data.activatedVersionIds).not.toContain(v1.id);
+        const stagedRes = await apiJson(
+          srv.baseUrl, 'GET', `/api/arena/artifacts/${v1.id}`, ARENA_SECRET
+        );
+        expect(stagedRes.status).toBe(409);
+
+        // Once activated, artifact metadata + decrypted authToken are served until marked archived.
+        db.activateStagedVersion({versionId: v1.id, agentId: a1.id, now: 1_760_000_030});
+        const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
+        const snap = await client.getPlayableLadders();
+        expect(snap.activatedVersionIds).toContain(v1.id);
+
+        const artifact = await client.getActivatedArtifact(v1.id);
+        expect(artifact).toMatchObject({
+          versionId: v1.id,
+          agentSlug: '0-error',
+          version: '2.0.0',
+          package: 'bundle',
+          sha256: SHA,
+          authToken: 'ghp_activated_secret',
+        });
+
+        await client.markArtifactArchived(v1.id);
+        expect(db.getVersionById(v1.id)?.authTokenEncoding).toBeUndefined();
+        const afterArchive = await client.getActivatedArtifact(v1.id);
+        expect(afterArchive.authToken).toBeUndefined();
+      } finally {
+        ctrl.close();
+        await srv.close();
+      }
+    });
 
   test('broadcast off completion triggers onUpdate plus live battle stream', async () => {
     db.upsertTournament({

@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS smoke_diagnostics (
   p2_cpu_cores REAL,
   p1_peak_ram INTEGER,
   p2_peak_ram INTEGER,
+  supports_info INTEGER NOT NULL DEFAULT 0 CHECK (supports_info IN (0, 1)),
   created_at INTEGER NOT NULL
 );
 

@@ -3050,6 +3050,13 @@ describe('per-ladder qualification & migrations', () => {
           "CHECK (smoke_status IN ('pending', 'staged', 'passed', " +
             "'failed', 'discarded', 'quarantined'))",
           "CHECK (smoke_status IN ('pending', 'passed', 'failed', 'quarantined'))"
+        ).replace(
+          /notified INTEGER NOT NULL DEFAULT 0 CHECK \(notified IN \(0, 1\)\)\n\);/,
+          'notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1)),\n' +
+            '  UNIQUE (agent_id, version)\n);'
+        ).replace(
+          /CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_claimed[\s\S]*?;\s*/,
+          ''
         );
       }
       fs.writeFileSync(path.join(preSchemaDir, file), sql);
@@ -3898,17 +3905,19 @@ describe('per-ladder qualification & migrations', () => {
         expect(blockedByStaged.canSubmit).toBe(false);
         expect(blockedByStaged.reason).toContain('activate or discard');
 
-        // Diagnostics persisted & summarized on version history
+        // Diagnostics persisted & summarized on version history (including /info support)
         const diags = db.getSmokeDiagnosticsForVersion(v1.id);
         expect(diags).toHaveLength(1);
         expect(diags[0].p1Stderr).toBe('p1 debug line');
+        expect(diags[0].supportsInfo).toBe(true);
         const history = db.getVersionsForAgent(agent.id);
         expect(history[0].diagnostics?.[0].hasStderr).toBe(true);
+        expect(history[0].smokeSupportsInfo).toBe(true);
 
-        // Discard reverts pending VGC teams back to saved (not deleted)
+        // Discard reverts pending VGC teams back to saved (not deleted) and frees '1.0.0'
         const discarded = db.discardStagedVersion({versionId: v1.id, agentId: agent.id});
         expect(discarded.smokeStatus).toBe('discarded');
-        expect(db.getDiscardedVersionIds()).toEqual([v1.id]);
+        expect(db.isVersionClaimed(agent.id, '1.0.0')).toBe(false);
         expect(
           db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'saved')
         ).toEqual(['Team1', 'Team2', 'Team3']);
@@ -3916,12 +3925,12 @@ describe('per-ladder qualification & migrations', () => {
           db.getTeamsForAgentLadder('gen9championsvgc2026regmc', agent.id, 'pending')
         ).toEqual([]);
 
-        // Two more discarded/failed runs exhaust the 3/24h retry budget
+        // Two more discarded/failed runs reusing the same version label '1.0.0' exhaust 3/24h
         const v2 = db.createSubmission({
           agentId: agent.id,
-          version: '1.0.1',
+          version: '1.0.0',
           package: 'bundle',
-          url: 'https://example.com/a-1.0.1.tar.gz',
+          url: 'https://example.com/a-1.0.0-retry2.tar.gz',
           sha256: sha,
           ladderIds: ['gen1ou20261109'],
           now: now + 100,
@@ -3931,9 +3940,9 @@ describe('per-ladder qualification & migrations', () => {
 
         const v3 = db.createSubmission({
           agentId: agent.id,
-          version: '1.0.2',
+          version: '1.0.0',
           package: 'bundle',
-          url: 'https://example.com/a-1.0.2.tar.gz',
+          url: 'https://example.com/a-1.0.0-retry3.tar.gz',
           sha256: sha,
           ladderIds: ['gen1ou20261109'],
           now: now + 200,
@@ -3944,13 +3953,13 @@ describe('per-ladder qualification & migrations', () => {
         expect(budgetBlocked.canSubmit).toBe(false);
         expect(budgetBlocked.reason).toContain('Failed smoke test limit reached');
 
-        // After 24h window passes, submit + stage + activate starts 14-day cooldown at activated_at
+        // After 24h window passes, submit '1.0.0' again, stage + activate -> permanently claimed
         const dayLater = now + database.FAILED_SMOKE_WINDOW_SECONDS + 300;
         const v4 = db.createSubmission({
           agentId: agent.id,
-          version: '1.1.0',
+          version: '1.0.0',
           package: 'bundle',
-          url: 'https://example.com/a-1.1.0.tar.gz',
+          url: 'https://example.com/a-1.0.0-final.tar.gz',
           sha256: sha,
           ladderIds: ['gen1ou20261109'],
           now: dayLater,
@@ -3971,6 +3980,9 @@ describe('per-ladder qualification & migrations', () => {
         });
         expect(activated.version.smokeStatus).toBe('passed');
         expect(activated.version.activatedAt).toBe(activateAt);
+        expect(db.isVersionClaimed(agent.id, '1.0.0')).toBe(true);
+        expect(db.getVersionBySlugAndLabel('alpha', '1.0.0')?.id).toBe(v4.id);
+        expect(db.getActivatedLadderVersionIds()).toEqual([v4.id]);
         expect(db.getActiveEntriesForAgent(agent.id)).toHaveLength(1);
 
         // Cooldown is 14d from activateAt (not submittedAt!)

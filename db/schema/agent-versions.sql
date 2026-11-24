@@ -63,13 +63,17 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   submitted_at INTEGER NOT NULL,
   -- Unix timestamp (seconds) when `smoke_status` first transitioned to 'passed', or NULL.
   activated_at INTEGER,
-  -- Boolean flag (0 or 1) tracking whether Discord DMs for the latest terminal status ('passed',
-  -- 'failed', or 'quarantined') have been delivered, enabling retry across transient Discord outages
-  -- and out-of-process `pkmn quarantine` CLI invocations.
-  notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1)),
-  UNIQUE (agent_id, version)
+  -- Boolean flag (0 or 1) tracking whether Discord DMs for the latest terminal status ('staged',
+  -- 'passed', 'failed', or 'quarantined') have been delivered, enabling retry across transient
+  -- Discord outages and out-of-process `pkmn quarantine` CLI invocations.
+  notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1))
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_versions_developer ON agent_versions(developer_id);
 CREATE INDEX IF NOT EXISTS idx_agent_versions_smoke ON agent_versions(smoke_status);
+-- Reserve version labels only once claimed (pending/staged/passed/quarantined); failed or
+-- discarded diagnostic runs free the version label so developers can iterate without bumping it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_claimed
+  ON agent_versions(agent_id, version)
+  WHERE smoke_status NOT IN ('failed', 'discarded');

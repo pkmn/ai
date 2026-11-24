@@ -509,6 +509,7 @@ function formatSmokeStatsSummary(input: {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
+  smokeSupportsInfo?: boolean;
 }): string | undefined {
   const parts: string[] = [];
   if (input.smokeDurationMillis !== undefined) {
@@ -526,6 +527,9 @@ function formatSmokeStatsSummary(input: {
   if (input.smokePeakRam !== undefined) {
     parts.push(`${input.smokePeakRam.toLocaleString('en-US')} MiB`);
   }
+  if (input.smokeSupportsInfo !== undefined) {
+    parts.push(input.smokeSupportsInfo ? '/info' : 'no /info');
+  }
   return parts.length ? parts.join(' · ') : undefined;
 }
 
@@ -540,6 +544,7 @@ export function formatSubmissionDm(input: {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
+  smokeSupportsInfo?: boolean;
 }): string {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
@@ -712,6 +717,7 @@ async function dispatchVersionDm(
         smokeTeamPreviewMillis: item.smokeTeamPreviewMillis,
         smokeTurnMillis: item.smokeTurnMillis,
         smokePeakRam: item.smokePeakRam,
+        smokeSupportsInfo: item.smokeSupportsInfo,
       });
 
       for (const ownerId of item.ownerDiscordIds) {
@@ -795,6 +801,8 @@ export async function notifySubmissionStatus(
     result.agent.id,
     result.version.developerId
   );
+  const diags = db.getSmokeDiagnosticsForVersion(result.version.id);
+  const smokeSupportsInfo = diags.length > 0 ? diags.some(d => d.supportsInfo) : undefined;
   return dispatchVersionDm(
     {db, token, config, state},
     {
@@ -810,6 +818,7 @@ export async function notifySubmissionStatus(
       smokeTeamPreviewMillis: result.version.smokeTeamPreviewMillis,
       smokeTurnMillis: result.version.smokeTurnMillis,
       smokePeakRam: result.version.smokePeakRam,
+      ...(smokeSupportsInfo !== undefined ? {smokeSupportsInfo} : {}),
       ladders: result.version.ladders,
       tournaments: result.version.tournaments,
       submittedAt: result.version.submittedAt,

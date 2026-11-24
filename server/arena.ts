@@ -1338,11 +1338,23 @@ export interface PlayableLadderSnapshot {
   roster?: ActiveRosterEntry[];
 }
 
+export interface ActivatedArtifact {
+  versionId: number;
+  agentId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+  package: db.PackageFormat;
+  url: string;
+  sha256: string;
+  authToken?: string;
+}
+
 export interface PlayableLaddersResponse {
   ladders: PlayableLadderSnapshot[];
   unpublishedArchivedPoolsLadders?: string[];
   quarantinedVersionIds?: number[];
-  discardedVersionIds?: number[];
+  activatedVersionIds?: number[];
   smokeCadence?: db.SmokeCadence;
 }
 
@@ -1454,6 +1466,20 @@ export class Client {
 
   getPlayableLadders(): Promise<PlayableLaddersResponse> {
     return this.requestJson('GET', '/api/arena/ladders');
+  }
+
+  getActivatedArtifact(versionId: number): Promise<ActivatedArtifact> {
+    return this.requestJson<ActivatedArtifact>(
+      'GET',
+      `/api/arena/artifacts/${encodeURIComponent(String(versionId))}`
+    );
+  }
+
+  markArtifactArchived(versionId: number): Promise<{ok: true}> {
+    return this.requestJson<{ok: true}>(
+      'POST',
+      `/api/arena/artifacts/${encodeURIComponent(String(versionId))}/archived`
+    );
   }
 
   reportSubmissionStatus(payload: SubmissionStatusPayload): Promise<SubmissionStatusResponse> {
@@ -2254,6 +2280,68 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
   });
 
+  app.get('/api/arena/artifacts/:id', (req, res) => {
+    if (!authenticateArena(req, res)) return;
+    const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const versionId = rawId && /^\d+$/.test(rawId) ? Number(rawId) : NaN;
+    if (!Number.isSafeInteger(versionId) || versionId <= 0) {
+      sendJson(res, 400, {error: 'Invalid versionId.'});
+      return;
+    }
+    const ver = db.getVersionById(versionId);
+    if (!ver) {
+      sendJson(res, 404, {error: `Unknown versionId ${versionId}.`});
+      return;
+    }
+    if (ver.smokeStatus !== 'passed') {
+      sendJson(res, 409, {
+        error: `Version ${versionId} is "${ver.smokeStatus}" and not activated for archival.`,
+      });
+      return;
+    }
+    const agent = db.getAgentById(ver.agentId);
+    if (!agent) {
+      sendJson(res, 404, {error: `Unknown agentId ${ver.agentId}.`});
+      return;
+    }
+    let authToken: string | undefined;
+    if (ver.authTokenEncoding) {
+      const sessionSecret = options.auth?.getConfig()?.sessionSecret;
+      if (!sessionSecret) {
+        sendJson(res, 500, {error: 'SESSION_SECRET is required to decrypt artifact authToken.'});
+        return;
+      }
+      try {
+        authToken = decryptSecret(ver.authTokenEncoding, sessionSecret);
+      } catch (err) {
+        console.error(`Failed decrypting authToken for activated version ${versionId}:`, err);
+      }
+    }
+    sendJson(res, 200, {
+      versionId: ver.id,
+      agentId: ver.agentId,
+      agentSlug: agent.slug,
+      agentName: agent.name,
+      version: ver.version,
+      package: ver.package,
+      url: ver.url,
+      sha256: ver.sha256,
+      ...(authToken !== undefined ? {authToken} : {}),
+    });
+  });
+
+  app.post('/api/arena/artifacts/:id/archived', (req, res) => {
+    if (!authenticateArena(req, res)) return;
+    const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const versionId = rawId && /^\d+$/.test(rawId) ? Number(rawId) : NaN;
+    if (!Number.isSafeInteger(versionId) || versionId <= 0) {
+      sendJson(res, 400, {error: 'Invalid versionId.'});
+      return;
+    }
+    db.clearVersionAuthToken(versionId);
+    sendJson(res, 200, {ok: true});
+  });
+
   app.post('/api/arena/submission-status', async (req, res) => {
     if (!authenticateArena(req, res)) return;
 
@@ -2956,13 +3044,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       .map(l => l.id);
 
     const quarantinedVersionIds = db.getQuarantinedVersionIds();
-    const discardedVersionIds = db.getDiscardedVersionIds();
+    const activatedVersionIds = db.getActivatedLadderVersionIds();
     const smokeCadence = db.getSmokeCadence();
     sendJson(res, 200, {
       ladders,
       unpublishedArchivedPoolsLadders,
       quarantinedVersionIds,
-      discardedVersionIds,
+      activatedVersionIds,
       smokeCadence,
     });
   });

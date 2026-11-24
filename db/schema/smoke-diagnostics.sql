@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS smoke_diagnostics (
   p1_peak_ram INTEGER,
   -- Peak physical memory footprint (MiB) observed for p2, or NULL.
   p2_peak_ram INTEGER,
+  -- Boolean flag (0 or 1) recording whether valid displayable `/info` telemetry was emitted.
+  supports_info INTEGER NOT NULL DEFAULT 0 CHECK (supports_info IN (0, 1)),
   -- Unix timestamp (seconds) when this diagnostic record was persisted.
   created_at INTEGER NOT NULL
 );

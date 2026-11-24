@@ -54,6 +54,7 @@ export interface VersionHistoryView extends AgentVersionRow {
   tournamentNames: string[];
   queueAhead?: number;
   diagnostics?: smokeDiagnostics.Summary[];
+  smokeSupportsInfo?: boolean;
 }
 
 export interface SubmissionStatus {
@@ -155,6 +156,7 @@ export interface PendingVersionDmRow {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
+  smokeSupportsInfo?: boolean;
   ladders: string[];
   tournaments: string[];
   submittedAt: number;
@@ -220,6 +222,20 @@ export function getVersionById(
   return raw ? mapVersionRow(raw) : undefined;
 }
 
+export function isVersionClaimed(
+  db: DatabaseSync,
+  agentId: number,
+  version: string
+): boolean {
+  const row = db.prepare(`
+    SELECT 1 FROM agent_versions
+    WHERE agent_id = ? AND version = ?
+      AND smoke_status NOT IN ('failed', 'discarded')
+    LIMIT 1
+  `).get(agentId, version.trim());
+  return row !== undefined;
+}
+
 export function getVersionBySlugAndLabel(
   db: DatabaseSync,
   agentSlug: string,
@@ -230,6 +246,14 @@ export function getVersionBySlugAndLabel(
     FROM agent_versions av
     JOIN agents a ON a.id = av.agent_id
     WHERE a.slug = ? AND av.version = ?
+    ORDER BY
+      CASE
+        WHEN av.smoke_status IN ('passed', 'quarantined') THEN 0
+        WHEN av.smoke_status IN ('staged', 'pending') THEN 1
+        ELSE 2
+      END ASC,
+      av.id DESC
+    LIMIT 1
   `).get(agentSlug.trim().toLowerCase(), version.trim()) as unknown as (
     RawAgentVersionRow & {agent_slug: string; agent_name: string}
   ) | undefined;
@@ -308,12 +332,16 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
       )
       : undefined;
     const diagnostics = diagnosticsByVersion.get(v.id);
+    const smokeSupportsInfo = diagnostics?.length
+      ? diagnostics.some(d => d.supportsInfo)
+      : undefined;
     return {
       ...mapped,
       activeLadderNames: activeByVersion.get(v.id) ?? [],
       tournamentNames,
       ...(queueAhead !== undefined ? {queueAhead} : {}),
       ...(diagnostics?.length ? {diagnostics} : {}),
+      ...(smokeSupportsInfo !== undefined ? {smokeSupportsInfo} : {}),
     };
   });
 }
@@ -741,10 +769,7 @@ export function createSubmission(
       );
     }
 
-    const existing = db.prepare(
-      'SELECT id FROM agent_versions WHERE agent_id = ? AND version = ?'
-    ).get(input.agentId, version) as {id: number} | undefined;
-    if (existing) {
+    if (isVersionClaimed(db, input.agentId, version)) {
       throw Object.assign(
         new Error(`Version "${version}" already exists for this project.`),
         {status: 409}
@@ -1028,10 +1053,11 @@ export function applySubmissionStatus(
       throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
     }
     const agent = getAgentById(db, prev.agentId)!;
+    const scrubAuth = input.smokeStatus !== 'staged';
     if (prev.smokeStatus === input.smokeStatus) {
       db.prepare(`
         UPDATE agent_versions
-        SET auth_token_encoding = NULL,
+        SET auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
             unpacked_bytes = COALESCE(?, unpacked_bytes),
             smoke_duration_millis = COALESCE(?, smoke_duration_millis),
             smoke_init_millis = COALESCE(?, smoke_init_millis),
@@ -1041,6 +1067,7 @@ export function applySubmissionStatus(
             smoke_error = ?
         WHERE id = ?
       `).run(
+        scrubAuth ? 1 : 0,
         input.unpackedBytes ?? null,
         input.smokeDurationMillis ?? null,
         input.smokeInitMillis ?? null,
@@ -1075,7 +1102,7 @@ export function applySubmissionStatus(
 
     db.prepare(`
       UPDATE agent_versions
-      SET auth_token_encoding = NULL,
+      SET auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
           smoke_status = ?,
           unpacked_bytes = COALESCE(?, unpacked_bytes),
           smoke_duration_millis = COALESCE(?, smoke_duration_millis),
@@ -1088,6 +1115,7 @@ export function applySubmissionStatus(
           notified = ?
       WHERE id = ?
     `).run(
+      scrubAuth ? 1 : 0,
       input.smokeStatus,
       input.unpackedBytes ?? null,
       input.smokeDurationMillis ?? null,
@@ -1293,6 +1321,7 @@ export function discardStagedVersion(
     db.prepare(`
       UPDATE agent_versions
       SET smoke_status = 'discarded',
+          auth_token_encoding = NULL,
           notified = 1
       WHERE id = ?
     `).run(prev.id);
@@ -1302,11 +1331,20 @@ export function discardStagedVersion(
   });
 }
 
-export function getDiscardedVersionIds(db: DatabaseSync): number[] {
+export function clearVersionAuthToken(db: DatabaseSync, versionId: number) {
+  db.prepare('UPDATE agent_versions SET auth_token_encoding = NULL WHERE id = ?').run(versionId);
+}
+
+export function getActivatedLadderVersionIds(db: DatabaseSync): number[] {
   const rows = db.prepare(`
-    SELECT id FROM agent_versions
-    WHERE smoke_status = 'discarded'
-    ORDER BY id ASC
+    SELECT DISTINCT le.version_id AS id
+    FROM ladder_entries le
+    JOIN ladders l ON l.id = le.ladder_id
+    JOIN agent_versions av ON av.id = le.version_id
+    WHERE l.status IN ('upcoming', 'active', 'settling')
+      AND le.role IN ('champion', 'challenger')
+      AND av.smoke_status = 'passed'
+    ORDER BY le.version_id ASC
   `).all() as Array<{id: number}>;
   return rows.map(r => r.id);
 }
@@ -1483,13 +1521,26 @@ export function getVersionOwnerDiscordIds(
 
 export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
   const rows = db.prepare(`
-    SELECT av.*, a.slug AS agent_slug, a.name AS agent_name
+    SELECT
+      av.*,
+      a.slug AS agent_slug,
+      a.name AS agent_name,
+      (SELECT COUNT(*) FROM smoke_diagnostics sd WHERE sd.version_id = av.id) AS diag_count,
+      (SELECT MAX(sd.supports_info) FROM smoke_diagnostics sd WHERE sd.version_id = av.id)
+        AS max_supports_info
     FROM agent_versions av
     JOIN agents a ON a.id = av.agent_id
     WHERE av.smoke_status IN ('staged', 'passed', 'failed', 'quarantined')
       AND av.notified = 0
     ORDER BY av.submitted_at ASC, av.id ASC
-  `).all() as unknown as Array<RawAgentVersionRow & {agent_slug: string; agent_name: string}>;
+  `).all() as unknown as Array<
+    RawAgentVersionRow & {
+      agent_slug: string;
+      agent_name: string;
+      diag_count: number;
+      max_supports_info: number | null;
+    }
+  >;
 
   return rows.map(row => ({
     versionId: row.id,
@@ -1504,6 +1555,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     smokeTeamPreviewMillis: row.smoke_team_preview_millis ?? undefined,
     smokeTurnMillis: row.smoke_turn_millis ?? undefined,
     smokePeakRam: row.smoke_peak_ram ?? undefined,
+    ...(row.diag_count > 0 ? {smokeSupportsInfo: row.max_supports_info === 1} : {}),
     ladders: JSON.parse(row.ladders_json) as string[],
     tournaments: JSON.parse(row.tournaments_json) as string[],
     submittedAt: row.submitted_at,

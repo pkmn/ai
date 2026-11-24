@@ -22,8 +22,7 @@ CREATE TABLE agent_versions_new (
   smoke_error TEXT,
   submitted_at INTEGER NOT NULL,
   activated_at INTEGER,
-  notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1)),
-  UNIQUE (agent_id, version)
+  notified INTEGER NOT NULL DEFAULT 0 CHECK (notified IN (0, 1))
 );
 
 INSERT INTO agent_versions_new (
@@ -45,3 +44,6 @@ ALTER TABLE agent_versions_new RENAME TO agent_versions;
 CREATE INDEX IF NOT EXISTS idx_agent_versions_agent ON agent_versions(agent_id);
 CREATE INDEX IF NOT EXISTS idx_agent_versions_developer ON agent_versions(developer_id);
 CREATE INDEX IF NOT EXISTS idx_agent_versions_smoke ON agent_versions(smoke_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_versions_claimed
+  ON agent_versions(agent_id, version)
+  WHERE smoke_status NOT IN ('failed', 'discarded');

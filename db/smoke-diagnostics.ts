@@ -14,6 +14,7 @@ export interface Input {
   p2CpuCores?: number;
   p1PeakRam?: number;
   p2PeakRam?: number;
+  supportsInfo?: boolean;
 }
 
 export interface Row {
@@ -34,6 +35,7 @@ export interface Row {
   p2CpuCores?: number;
   p1PeakRam?: number;
   p2PeakRam?: number;
+  supportsInfo: boolean;
   createdAt: number;
 }
 
@@ -50,6 +52,7 @@ export interface Summary {
   hasStderr: boolean;
   hasP1Stderr: boolean;
   hasP2Stderr: boolean;
+  supportsInfo: boolean;
   p1CpuCores?: number;
   p2CpuCores?: number;
   p1PeakRam?: number;
@@ -75,6 +78,7 @@ interface RawRow {
   p2_cpu_cores: number | null;
   p1_peak_ram: number | null;
   p2_peak_ram: number | null;
+  supports_info: number;
   created_at: number;
 }
 
@@ -90,6 +94,7 @@ interface RawSummaryRow {
   has_log: number;
   has_p1_stderr: number;
   has_p2_stderr: number;
+  supports_info: number;
   p1_cpu_cores: number | null;
   p2_cpu_cores: number | null;
   p1_peak_ram: number | null;
@@ -116,6 +121,7 @@ function mapRow(raw: RawRow): Row {
     p2CpuCores: raw.p2_cpu_cores ?? undefined,
     p1PeakRam: raw.p1_peak_ram ?? undefined,
     p2PeakRam: raw.p2_peak_ram ?? undefined,
+    supportsInfo: raw.supports_info === 1,
     createdAt: raw.created_at,
   };
 }
@@ -136,12 +142,17 @@ function mapSummary(raw: RawSummaryRow): Summary {
     hasStderr: hasP1Stderr || hasP2Stderr,
     hasP1Stderr,
     hasP2Stderr,
+    supportsInfo: raw.supports_info === 1,
     p1CpuCores: raw.p1_cpu_cores ?? undefined,
     p2CpuCores: raw.p2_cpu_cores ?? undefined,
     p1PeakRam: raw.p1_peak_ram ?? undefined,
     p2PeakRam: raw.p2_peak_ram ?? undefined,
     createdAt: raw.created_at,
   };
+}
+
+export function battleLogHasAiTelemetry(battleLog: string): boolean {
+  return battleLog.startsWith('|ai|') || battleLog.includes('\n|ai|');
 }
 
 export function replaceForVersion(
@@ -156,11 +167,12 @@ export function replaceForVersion(
     INSERT INTO smoke_diagnostics (
       version_id, ladder_id, tournament_id, format, turns, end_reason, duration_millis,
       battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
-      p1_peak_ram, p2_peak_ram, created_at
+      p1_peak_ram, p2_peak_ram, supports_info, created_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const d of diagnostics) {
+    const supportsInfo = d.supportsInfo ?? battleLogHasAiTelemetry(d.battleLog);
     insert.run(
       versionId,
       d.ladderId ?? null,
@@ -176,6 +188,7 @@ export function replaceForVersion(
       d.p2CpuCores ?? null,
       d.p1PeakRam ?? null,
       d.p2PeakRam ?? null,
+      supportsInfo ? 1 : 0,
       now
     );
   }
@@ -206,6 +219,7 @@ export function getSummariesForAgent(db: DatabaseSync, agentId: number): Map<num
       CASE WHEN length(sd.battle_log) > 0 THEN 1 ELSE 0 END AS has_log,
       CASE WHEN length(COALESCE(sd.p1_stderr, '')) > 0 THEN 1 ELSE 0 END AS has_p1_stderr,
       CASE WHEN length(COALESCE(sd.p2_stderr, '')) > 0 THEN 1 ELSE 0 END AS has_p2_stderr,
+      sd.supports_info,
       sd.p1_cpu_cores,
       sd.p2_cpu_cores,
       sd.p1_peak_ram,

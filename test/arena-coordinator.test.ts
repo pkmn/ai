@@ -215,12 +215,7 @@ describe('Coordinator', () => {
       expect(receivedUtms[0]).not.toBe(receivedUtms[1]);
       expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[0], 'gen9ou')).toHaveLength(6);
       expect(serverTeams.extractSpeciesIdsFromPacked(receivedUtms[1], 'gen9ou')).toHaveLength(6);
-      expect(
-        fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
-      ).toBe(true);
-
-      // Pruning discarded version IDs removes hot dir, cold archive, and local_agents entry.
-      expect(h.coord.pruneDiscardedVersions([30])).toBe(1);
+      // Unactivated staged builds are NOT persisted on disk or in cold archives.
       expect(h.stateDb.getLocalAgent(30)).toBeUndefined();
       expect(
         fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
@@ -228,6 +223,34 @@ describe('Coordinator', () => {
       expect(
         fs.existsSync(path.join(h.dirs.agents, 'foul-play-3.0.0-v30'))
       ).toBe(false);
+
+      // Once explicitly activated, syncActivatedAgents pulls, registers, and cold-archives it.
+      const archivedIds: number[] = [];
+      (h.coord.client as unknown as {
+        getActivatedArtifact: (id: number) => Promise<serverArena.ActivatedArtifact>;
+        markArtifactArchived: (id: number) => Promise<{ok: true}>;
+      }).getActivatedArtifact = id => Promise.resolve({
+        versionId: id,
+        agentId: 2,
+        agentSlug: 'foul-play',
+        agentName: 'Foul Play',
+        version: '3.0.0',
+        package: 'bundle',
+        url: `file://${bundleTar}`,
+        sha256: bundleSha,
+      });
+      (h.coord.client as unknown as {
+        markArtifactArchived: (id: number) => Promise<{ok: true}>;
+      }).markArtifactArchived = id => {
+        archivedIds.push(id);
+        return Promise.resolve({ok: true});
+      };
+      expect(await h.coord.syncActivatedAgents([30])).toBe(1);
+      expect(h.stateDb.getLocalAgent(30)?.target).toBe('foul-play-3.0.0-v30');
+      expect(
+        fs.existsSync(path.join(h.dirs.cold, 'foul-play-3.0.0-v30.tar.zst'))
+      ).toBe(true);
+      expect(archivedIds).toEqual([30]);
     } finally {
       h.stateDb.close();
     }

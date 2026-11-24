@@ -6,7 +6,10 @@ import * as path from 'path';
 import type {PRNGSeed} from '@pkmn/sim';
 
 import {SIM_VERSION} from '../db/ladders';
-import type {Input as SmokeDiagnosticInput} from '../db/smoke-diagnostics';
+import {
+  Input as SmokeDiagnosticInput,
+  battleLogHasAiTelemetry,
+} from '../db/smoke-diagnostics';
 import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
 import {
@@ -2065,6 +2068,7 @@ export class Coordinator {
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
             battleLog: res.omniscientLog,
+            supportsInfo: battleLogHasAiTelemetry(res.omniscientLog),
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
             ...(res.p1.peakRam > 0 ? {p1PeakRam: Math.round(res.p1.peakRam)} : {}),
@@ -2096,6 +2100,9 @@ export class Coordinator {
           engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
         }
       } finally {
+        // Never retain unactivated tournament rootfs images on disk; activated entrants are pulled
+        // cleanly when the tournament starts.
+        fs.rmSync(path.join(this.agentsDir, targetId), {recursive: true, force: true});
         if (this.client.sendDiagnosticLive) {
           await this.client.sendDiagnosticLive({
             done: true,
@@ -2107,7 +2114,6 @@ export class Coordinator {
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
       if (smokeError) {
-        fs.rmSync(path.join(this.agentsDir, targetId), {recursive: true, force: true});
         await this.client.reportSubmissionStatus({
           versionId: sub.versionId,
           smokeStatus: 'failed',
