@@ -671,6 +671,7 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         serverUrl,
         arenaSecret: secret,
         stateDbPath: ':memory:',
+        rootDir: path.join(tmpDir, 'drain-sleep-root'),
         pollIntervalMillis: 60_000,
       });
       setTimeout(() => {

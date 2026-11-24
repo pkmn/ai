@@ -127,6 +127,9 @@ Repo-specific style, naming, and architecture rules alongside `@pkmn/eslint-conf
 
 - Run `npm test` (`tsc -p .`, static build, `eslint --cache`, `stylelint --cache static/style/*.css tools/*.css`,
   `hyperlink public --check-anchors`, and `vitest run --testTimeout=15000 test`).
+- **Never ignore flaky tests — always fix them:** If any test fails intermittently (even in an
+  unrelated suite), never dismiss it as a transient flake and re-run past it — diagnose the root
+  cause (timing race, missing `rootDir` isolation, shared state) and fix it deterministically.
 - For TSX/CSS/client changes: **scope `npm run shots` with `--only <section|scenario,...>`** to
   capture only the states affected by your changes (`npm run shots -- --list` lists all sections and
   names; `--only` accepts comma-separated or repeatable filters, e.g. `--only ladders,battles`):

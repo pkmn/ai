@@ -542,11 +542,14 @@ describe('ConcurrentTournamentGame', () => {
 
   test('ConcurrentGame emits simultaneous thinking clocks with mid-turn commit', async () => {
     const slowAgentScript = path.join(tmpDir, 'slow-tourney-agent.js');
+    const p1CommittedGate = path.join(tmpDir, 'p1-committed.gate');
     fs.writeFileSync(
       slowAgentScript,
       [
         '#!/usr/bin/env node',
+        'const fs = require("fs");',
         'const readline = require("readline");',
+        `const gateFile = ${JSON.stringify(p1CommittedGate)};`,
         'process.stdout.write("/ready\\n");',
         'const rl = readline.createInterface({input: process.stdin, crlfDelay: Infinity});',
         'rl.on("line", line => {',
@@ -555,9 +558,16 @@ describe('ConcurrentTournamentGame', () => {
         '  if (!raw || raw === "null") return;',
         '  const req = JSON.parse(raw);',
         '  if (req.wait) return;',
-        '  setTimeout(() => {',
-        '    process.stdout.write(req.teamPreview ? "/team 1234\\n" : "default\\n");',
-        '  }, 30);',
+        '  const reply = req.teamPreview ? "/team 1234\\n" : "default\\n";',
+        '  const deadline = Date.now() + 2000;',
+        '  const waitForGate = () => {',
+        '    if (fs.existsSync(gateFile) || Date.now() >= deadline) {',
+        '      process.stdout.write(reply);',
+        '      return;',
+        '    }',
+        '    setTimeout(waitForGate, 5);',
+        '  };',
+        '  waitForGate();',
         '});',
       ].join('\n'),
       {mode: 0o755}
@@ -598,6 +608,9 @@ describe('ConcurrentTournamentGame', () => {
         },
         onClockChange: state => {
           clockChanges.push(structuredClone(state));
+          if (!state.p1.thinking && state.p2.thinking && !fs.existsSync(p1CommittedGate)) {
+            fs.writeFileSync(p1CommittedGate, 'go');
+          }
         },
       },
     }).run();
