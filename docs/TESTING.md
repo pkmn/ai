@@ -88,7 +88,8 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool, `Ineligible`
    (`PENDING` smoke test, 24h failed smoke-test limit, 14d cooldown w/ Tournament `#3` open,
    expanded stderr log, unsettled provisional, `QUARANTINED (DM sent)`, Smogon-banned
-   `smogon_standing = 'bad'`).
+   `smogon_standing = 'bad'`), and `/admin/` dashboard (`403` non-admin, overview, and expanded
+   project detail panel).
 7. **`wiki`:** Index, `/wiki/pages`, `/wiki/projects`, `developers`/`discord` project pages, public & project editors
    (visibility bar, live Djot preview), revision history/snapshot/diff, owner redirect & non-owner
    `404` on uncreated page, `403`s (unregistered, non-owner edit, non-guild Discord), `/auth/dev`.

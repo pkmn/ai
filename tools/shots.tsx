@@ -22,9 +22,11 @@ import polka from 'polka';
 
 import {Database} from '../db';
 import * as account from '../server/account';
+import * as admin from '../server/admin';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
 import * as render from '../server/render';
+import type * as system from '../server/system';
 import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
@@ -1559,6 +1561,29 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         );
       }),
     },
+    {
+      name: 'admin-forbidden',
+      section: 'account',
+      title: 'Admin (403)',
+      path: '/admin/',
+      githubUser: 'pmariglia',
+      expectHttpError: 403,
+    },
+    {
+      name: 'admin',
+      section: 'account',
+      title: 'Admin',
+      path: '/admin/',
+      githubUser: 'scheibo',
+    },
+    {
+      name: 'admin-expanded',
+      section: 'account',
+      title: 'Admin (Expanded)',
+      path: '/admin/',
+      githubUser: 'scheibo',
+      click: 'tr[data-agent-row="0-error"] .row-toggle',
+    },
 
     // =========================================================================
     // 7. Wiki
@@ -1812,12 +1837,174 @@ async function startFixture(): Promise<Fixture> {
     publicDir,
     now: () => NOW_SECONDS,
   });
+  const GIB = 1024 ** 3;
+  const MIB = 1024 ** 2;
+  const mockVpsSystem: system.VpsSystemInfo = {
+    collectedAt: NOW_SECONDS,
+    hostname: 'pkmn.ai',
+    platform: 'Linux 6.8.0 (x64)',
+    nodeVersion: 'v22.21.0',
+    gitCommit: '3a816e2f',
+    load: {
+      load1: 0.42,
+      load5: 0.38,
+      load15: 0.31,
+      cpus: 4,
+      uptimeSeconds: 14 * 86400 + 6 * 3600,
+      processUptimeSeconds: 3 * 86400 + 2 * 3600,
+    },
+    memory: {
+      totalBytes: 8 * GIB,
+      usedBytes: Math.round(2.1 * GIB),
+      availableBytes: Math.round(5.9 * GIB),
+      swapTotalBytes: 2 * GIB,
+      swapUsedBytes: Math.round(0.1 * GIB),
+      processRssBytes: 148 * MIB,
+    },
+    disks: [{
+      mount: '/',
+      label: 'Root',
+      mounted: true,
+      totalBytes: 80 * GIB,
+      usedBytes: Math.round(18.4 * GIB),
+      availableBytes: Math.round(61.6 * GIB),
+      readBytesPerSec: 420 * 1024,
+      writeBytesPerSec: 860 * 1024,
+      iops: 24,
+      busyPct: 2,
+    }],
+    network: {
+      iface: 'eth0',
+      rxBytesPerSec: 142 * 1024,
+      txBytesPerSec: 88 * 1024,
+      rxErrors: 0,
+      txErrors: 0,
+      internal: {target: 'SSH tunnel :2222', ok: true, checkedAt: NOW_SECONDS},
+      external: {target: 'api.github.com', ok: true, rttMillis: 18, checkedAt: NOW_SECONDS - 60},
+    },
+    updates: {
+      pending: 0,
+      security: 0,
+      rebootRequired: false,
+      checkedAt: NOW_SECONDS,
+    },
+    backups: {
+      lastBackupAt: NOW_SECONDS - 4 * 3600,
+      lastBackupBytes: Math.round(28.4 * MIB),
+      backupCount: 30,
+      checkedAt: NOW_SECONDS - 4 * 3600 + 60,
+    },
+    database: {
+      dbBytes: 84 * MIB,
+      walBytes: Math.round(3.2 * MIB),
+    },
+    traffic: {
+      sse: {battles: 4, tournaments: 1, admin: 1},
+      activeVisitors5m: 12,
+      requests1m: 38,
+      requests1h: 2140,
+      errors4xx1h: 4,
+      rateLimited4291h: 1,
+      errors5xx1h: 0,
+      meanLatencyMillis: 14,
+      p95LatencyMillis: 42,
+    },
+    tlsCert: {
+      expiresAt: NOW_SECONDS + 62 * 86400,
+      daysRemaining: 62,
+      checkedAt: NOW_SECONDS - 2 * 3600,
+    },
+    arenaFaults24h: {matches: 410, faults: 2},
+  };
+  const mockArenaSystem: system.ArenaSystemInfo = {
+    collectedAt: NOW_SECONDS - 14,
+    hostname: 'arena-mini',
+    platform: 'Darwin 24.6.0 (arm64)',
+    nodeVersion: 'v22.21.0',
+    gitCommit: '3a816e2f',
+    load: {
+      load1: 3.18,
+      load5: 2.94,
+      load15: 2.75,
+      cpus: 14,
+      uptimeSeconds: 29 * 86400 + 11 * 3600,
+      processUptimeSeconds: 6 * 86400 + 4 * 3600,
+    },
+    memory: {
+      totalBytes: 64 * GIB,
+      usedBytes: Math.round(21.4 * GIB),
+      availableBytes: Math.round(42.6 * GIB),
+      swapTotalBytes: 0,
+      swapUsedBytes: 0,
+      processRssBytes: 112 * MIB,
+      pressure: 'normal',
+    },
+    disks: [
+      {
+        mount: '/',
+        label: 'Internal',
+        mounted: true,
+        totalBytes: 460 * GIB,
+        usedBytes: 112 * GIB,
+        availableBytes: 348 * GIB,
+        ioBytesPerSec: Math.round(4.8 * MIB),
+        iops: 95,
+      },
+      {
+        mount: '/Volumes/Archive',
+        label: 'Archive',
+        mounted: true,
+        totalBytes: 1860 * GIB,
+        usedBytes: 340 * GIB,
+        availableBytes: 1520 * GIB,
+        ioBytesPerSec: 410 * 1024,
+        iops: 6,
+      },
+    ],
+    network: {
+      iface: 'en0',
+      rxBytesPerSec: 18 * 1024,
+      txBytesPerSec: 12 * 1024,
+      rxErrors: 0,
+      txErrors: 0,
+      internal: {target: 'VPS tunnel', ok: true, rttMillis: 24, checkedAt: NOW_SECONDS - 14},
+      external: {target: 'ghcr.io', ok: true, rttMillis: 42, checkedAt: NOW_SECONDS - 120},
+    },
+    updates: {
+      pending: 0,
+      rebootRequired: false,
+      checkedAt: NOW_SECONDS - 3600,
+    },
+    backups: {
+      lastBackupAt: NOW_SECONDS - 4 * 3600,
+      lastBackupBytes: Math.round(3.1 * MIB),
+      backupCount: 30,
+      lastArchiveUploadAt: NOW_SECONDS - 4 * 3600 + 180,
+      checkedAt: NOW_SECONDS - 4 * 3600 + 200,
+    },
+    database: {
+      dbBytes: 12 * MIB,
+      walBytes: Math.round(0.4 * MIB),
+    },
+    outboxPending: 0,
+    daemonErrors: 0,
+    podmanState: 'running',
+    podmanCheckedAt: NOW_SECONDS - 300,
+  };
+  const adminHandle = admin.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    arena: arenaHandle,
+    getVpsSystem: () => mockVpsSystem,
+    now: () => NOW_SECONDS,
+  });
   const defaultLiveState = {
     live: seeded.liveDoc.live,
     stale: seeded.liveDoc.stale,
     updatedAt: seeded.liveDoc.updatedAt,
   };
   arenaHandle.setLiveState(defaultLiveState);
+  arenaHandle.setArenaSystem(mockArenaSystem, NOW_SECONDS - 14);
   if (seeded.tournamentBroadcast) {
     arenaHandle.setTournamentBroadcast(seeded.tournamentBroadcast);
   }
@@ -1835,6 +2022,7 @@ async function startFixture(): Promise<Fixture> {
     const parsed = new URL(req.url || '/', 'http://127.0.0.1');
     if (
       parsed.pathname === '/api/battles/stream' ||
+      parsed.pathname === '/api/admin/stream' ||
       /^\/api\/tournaments\/[^/]+\/stream$/.test(parsed.pathname)
     ) {
       res.writeHead(204, {'Content-Type': 'text/event-stream'});
@@ -1899,6 +2087,7 @@ async function startFixture(): Promise<Fixture> {
       syncStaticLiveBanner(publicDir, show ? origGetRunningTournament() : undefined);
     },
     close: async () => {
+      adminHandle.close();
       arenaHandle.close();
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
