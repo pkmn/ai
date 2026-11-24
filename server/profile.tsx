@@ -991,6 +991,15 @@ function buildProjectMetaRows(
     );
   }
 
+  if (meta?.company) {
+    const companyNode = typeof meta.company === 'string'
+      ? meta.company
+      : meta.company.url
+        ? <a href={meta.company.url} className='subtle'>{meta.company.name}</a>
+        : meta.company.name;
+    rows.push(<tr><td><strong>Company</strong></td><td>{companyNode}</td></tr>);
+  }
+
   if (meta?.active !== undefined) {
     const activeNode = Array.isArray(meta.active)
       ? (meta.active[0] === meta.active[1]

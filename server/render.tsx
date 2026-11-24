@@ -1967,6 +1967,7 @@ export interface Options {
 export interface ProjectMeta {
   id: string;
   site?: string;
+  company?: projects.Project['company'];
   active?: number | [number, number];
   license?: string;
   source?: string;
@@ -2027,6 +2028,7 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
       map.set(p.name, {
         id,
         site: p.site,
+        company: p.company,
         active: p.active,
         license: p.license,
         source: p.source,

@@ -1261,6 +1261,11 @@ export class Runner {
     const isBanned = hasFlag(cmd, 'banned');
     const noGuild = hasFlag(cmd, 'no-guild');
     const logoFlag = getFlag(cmd, 'logo');
+    const companyName = getFlag(cmd, 'company');
+    const companyUrl = getFlag(cmd, 'company-url');
+    const company: Project['company'] = companyName
+      ? (companyUrl ? {name: companyName, url: companyUrl} : companyName)
+      : undefined;
     const discordSpecs = cmd.flags.get('discord') ?? [];
 
     const rawOwners = cmd.flags.get('owner') ?? [];
@@ -1307,10 +1312,12 @@ export class Runner {
 
     if (entry) {
       entry.arena = arenaBlock;
+      if (company) entry.company = company;
     } else {
       entry = {
         name,
         site: 'https://pkmn.cc',
+        ...(company ? {company} : {}),
         active: new Date(this.state.now * 1000).getUTCFullYear(),
         license: 'MIT',
         source: name === '0 ERROR'
@@ -4329,7 +4336,8 @@ const CLI_USAGE = [
   '  reset [--seed <n>] [--now <ts>] [--open-ladders]',
   '  time <+dur|-dur|now|now-dur|iso|unix>',
   '  rng <seed>',
-  '  register <name> [--owner <gh[:smogon]>...] [--pending|--disabled] [--logo <file|auto>]',
+  '  register <name> [--owner <gh[:smogon]>...] [--pending|--disabled] [--logo <file|auto>]' +
+    ' [--company <name>] [--company-url <url>]',
   '  qualify <agent> | disable <agent> | reassign <gh> <agent|--none> | refund-cooldown <agent>',
   '  discord <link|unlink|sync> ...',
   '  ladder <open|status|add|rotate|anchor|teams|archive> ...',

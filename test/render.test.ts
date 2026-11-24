@@ -1762,6 +1762,122 @@ describe('SSR cache invalidation', () => {
     }
   });
 
+  async function withCompanyProjectsHarness<T>(
+    projectsYaml: string,
+    fn: (h: Awaited<ReturnType<typeof startRenderHarness>>) => Promise<T>
+  ): Promise<T> {
+    const tmpStatic = path.join(tmpDir, 'company-static');
+    fs.mkdirSync(tmpStatic, {recursive: true});
+    for (const file of ['projects.dj', 'projects.bib']) {
+      fs.copyFileSync(root('static', file), path.join(tmpStatic, file));
+    }
+    fs.writeFileSync(path.join(tmpStatic, 'projects.yml'), projectsYaml, 'utf8');
+    fs.symlinkSync(root('static', 'style'), path.join(tmpStatic, 'style'));
+
+    db.syncProjectsFromYaml(projectsYaml, undefined, NOW);
+    const h = await startRenderHarness({
+      db,
+      publicDir: tmpPublic,
+      staticDir: tmpStatic,
+      now: NOW,
+    });
+    try {
+      return await fn(h);
+    } finally {
+      await h.close();
+    }
+  }
+
+  const COMPANY_PROJECTS_YAML = [
+    '- name: Foul Play',
+    '  company:',
+    '    name: Silph Co.',
+    '    url: https://silph.example',
+    '  active: 2019',
+    '  license: GPL-3.0',
+    '  source: https://github.com/pmariglia/showdown',
+    '  arena:',
+    '    owners:',
+    '      pmariglia: pmariglia.535629',
+    '- name: Technical Machine',
+    '  company:',
+    '    name: Devon Corp',
+    '    url: https://devon.example',
+    '  active: 2010',
+    '  arena:',
+    '    owners:',
+    '      davidstone: davidstone.50001',
+    '- name: Plain Org Agent',
+    '  company: Macro Cosmos',
+    '  active: 2026',
+    '- name: Indie Agent',
+    '  active: 2026',
+    '',
+  ].join('\n');
+
+  test('renders linked company row on /projects/', async () => {
+    await withCompanyProjectsHarness(COMPANY_PROJECTS_YAML, async h => {
+      const html = await h.getText('/projects/');
+      expect(html).toContain(
+        '<tr><td><strong>Company</strong></td>' +
+        '<td><a href="https://silph.example" class="subtle">Silph Co.</a></td></tr>'
+      );
+      expect(html).not.toMatch(/id="IndieAgent"[\s\S]*?<strong>Company<\/strong>/);
+    });
+  });
+
+  test('renders plain company name without URL on /projects/', async () => {
+    await withCompanyProjectsHarness(COMPANY_PROJECTS_YAML, async h => {
+      const html = await h.getText('/projects/');
+      expect(html).toContain(
+        '<tr><td><strong>Company</strong></td><td>Macro Cosmos</td></tr>'
+      );
+    });
+  });
+
+  test('renders linked company row on active /projects/:slug/ profile', async () => {
+    await withCompanyProjectsHarness(COMPANY_PROJECTS_YAML, async h => {
+      db.setAgentLadders('foul-play', ALL_SLOTS, NOW);
+      const ladder = db.getLadders().find(l => l.slot === 'rby')!;
+      forceLadderActive(db, ladder.id);
+      createVersionAndPassSmoke(db, 'foul-play', '1.0.0', [ladder.id], DAY_1);
+
+      const html = await h.getText('/projects/foul-play/');
+      expect(html).toContain(
+        '<tr><td><strong>Company</strong></td>' +
+        '<td><a href="https://silph.example" class="subtle">Silph Co.</a></td></tr>'
+      );
+      expect(html.indexOf('<strong>Author</strong>')).toBeLessThan(
+        html.indexOf('<strong>Company</strong>')
+      );
+      expect(html.indexOf('<strong>Company</strong>')).toBeLessThan(
+        html.indexOf('<strong>Active</strong>')
+      );
+    });
+  });
+
+  test('renders linked company row on zero-entry /projects/:slug/ profile', async () => {
+    await withCompanyProjectsHarness(COMPANY_PROJECTS_YAML, async h => {
+      const html = await h.getText('/projects/technical-machine/');
+      expect(html).toContain(
+        '<tr><td><strong>Company</strong></td>' +
+        '<td><a href="https://devon.example" class="subtle">Devon Corp</a></td></tr>'
+      );
+    });
+  });
+
+  test('exposes company metadata in /projects/:slug.json', async () => {
+    await withCompanyProjectsHarness(COMPANY_PROJECTS_YAML, async h => {
+      const doc = await h.getJson<{
+        metadata?: {company?: {name: string; url: string}};
+      }>('/projects/foul-play.json');
+      expect(doc.metadata?.company).toEqual({
+        name: 'Silph Co.',
+        url: 'https://silph.example',
+      });
+    });
+  });
+
   function seedInlineVgcBattleFixture() {
     forceLadderActive(db, 'gen9championsvgc2026regmc');
     const vFoul = createVersionAndPassSmoke(

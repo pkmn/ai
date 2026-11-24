@@ -67,8 +67,9 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary, Release,
    Research, Arena Rules, `404`.
 2. **`projects`:** Filters (`Active`/`All`/`Inactive`), champion profile (`/projects/0-error/`,
-   version & H2H filters, expanded telemetry, empty filter), provisional (`/projects/pokerus/`),
-   qualified w/ 0 entries (`/projects/cynthiai/`), pending (`/projects/asterai/`).
+   version & H2H filters, expanded telemetry, empty filter), provisional w/ company
+   (`/projects/pokerus/`), qualified w/ 0 entries (`/projects/cynthiai/`), pending
+   (`/projects/asterai/`).
 3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, RBY (`Active`/`Best`/`All`,
    secondary `1500 ±0` anchor), VGC `pools`, RAND (`<id>-logs.tar`), `settling` season
    (`#season-select`), `archived` season (`<id>-logs.tar`), `upcoming` ladder.

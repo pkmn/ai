@@ -24,6 +24,7 @@ export interface ArenaInfo {
 }
 
 export type Engine = string | {name: string; url: string};
+export type Company = string | {name: string; url?: string};
 
 export interface Project {
   name?: string;
@@ -31,6 +32,7 @@ export interface Project {
   framework?: true;
   site?: string;
   paper?: string;
+  company?: Company;
   active: number | [number, number];
   license?: string;
   source?: string;
@@ -134,6 +136,16 @@ const ProjectCard = ({project, bibliography, arenaInfo}: {
       {project.site && <a href={project.site} className='subtle'>{raw(EXT_ICON)}</a>}
     </h3>
     <table>
+      {project.company && <tr>
+        <td><strong>Company</strong></td>
+        <td>
+          {typeof project.company === 'string'
+            ? project.company
+            : project.company.url
+              ? <a href={project.company.url} className='subtle'>{project.company.name}</a>
+              : project.company.name}
+        </td>
+      </tr>}
       {project.paper && (() => {
         const p = bibliography[project.paper];
         return <tr>
