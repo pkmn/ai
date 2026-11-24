@@ -572,7 +572,13 @@ const VIEWER_SCRIPT = `
 
     const boot = async () => {
       window.exports = window;
-      applyTheme(window.matchMedia('(prefers-color-scheme: dark)').matches);
+      let initDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      try {
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') initDark = true;
+        else if (savedTheme === 'light') initDark = false;
+      } catch {}
+      applyTheme(initDark);
       STYLES.forEach(loadStyle);
       new ResizeObserver(fitScene).observe(el.stage);
       fitScene();

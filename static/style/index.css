@@ -1,6 +1,15 @@
+:root {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
 #topbar {
   position: fixed;
   top: 0;
+  left: 0;
   z-index: 10;
   box-sizing: border-box;
   width: 100%;
@@ -32,6 +41,84 @@
   background-color: color-mix(in oklab, #98c379 14%, black);
   border: 1px solid color-mix(in oklab, #98c379 40%, transparent);
   border-radius: 3px;
+}
+
+#top-controls {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 5;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: normal;
+  line-height: 1;
+}
+
+#topbar ~ #top-controls {
+  top: 3.25rem;
+}
+
+#theme-toggle,
+#account-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--fg-color);
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+#account-link:visited {
+  color: var(--fg-color);
+}
+
+#account-link.has-avatar {
+  overflow: hidden;
+}
+
+#theme-toggle svg,
+#account-link svg,
+#account-link img {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+#account-link img {
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+#theme-toggle .theme-icon {
+  display: none;
+}
+
+:root:not([data-theme-mode]) #theme-toggle .theme-icon-system,
+:root[data-theme-mode="system"] #theme-toggle .theme-icon-system,
+:root[data-theme-mode="light"] #theme-toggle .theme-icon-light,
+:root[data-theme-mode="dark"] #theme-toggle .theme-icon-dark {
+  display: block;
+}
+
+@media (width < 480px) {
+  #top-controls {
+    top: 1rem;
+    right: 1rem;
+  }
+
+  #topbar ~ #top-controls {
+    top: 3rem;
+  }
+
+  header:has(#topbar) {
+    margin-top: 4.75rem;
+  }
 }
 
 #citation {

@@ -860,12 +860,6 @@ export function buildBattleDetailClientJs(): string {
       } catch {}
     };
 
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
-      document.querySelectorAll('iframe.viewer-frame').forEach(f => {
-        postToFrame(f, {type: 'theme', dark: e.matches});
-      });
-    });
-
     window.addEventListener('message', ev => {
       const data = ev.data;
       if (!data || typeof data !== 'object') return;

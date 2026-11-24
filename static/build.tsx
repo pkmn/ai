@@ -42,12 +42,129 @@ const GTAG_RE = new RegExp(
   "\\s*<script>[\\s\\S]*?gtag\\('config',\\s*'[^']*'\\);\\s*</script>"
 );
 
+// Applied in `<head>` before first paint so a saved `localStorage` theme choice never flashes the
+// OS default. Defaults to `'system'` (tracking `prefers-color-scheme`) when unset or unavailable.
+export const EARLY_THEME_SCRIPT =
+  '(function(){try{' +
+  "var t=localStorage.getItem('theme');" +
+  "var m=t==='light'||t==='dark'?t:'system';" +
+  "var d=m==='dark'||(m==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);" +
+  "document.documentElement.setAttribute('data-theme',d?'dark':'light');" +
+  "document.documentElement.setAttribute('data-theme-mode',m);" +
+  '}catch(e){}})();';
+
 // `site`'s `layout.html` registers `pref.addEventListener('change', e => setTheme(...))` in its
 // outer `<script>` block without defining `setTheme`, expecting each page's `{{{ script }}}`
-// payload to supply it so live OS dark/light switches work. Injecting `SET_THEME` inside
-// `Renderer.render` satisfies that listener across every static and dynamic page in one place.
-export const SET_THEME =
-  "const setTheme = t => document.documentElement.setAttribute('data-theme', t);";
+// payload to supply it. Injecting `SET_THEME` inside `Renderer.render` wires up manual
+// switching (persisted in `localStorage`, starting opposite the current OS theme so the first
+// click always produces a visible change), live OS updates when in `system` mode, cross-tab sync,
+// battle viewer iframe theme updates, and the top-right account avatar via `/api/me` across every
+// static and dynamic page in one place.
+export const SET_THEME = [
+  "var THEME_KEY='theme';",
+  "var THEME_LABELS={system:'Theme: System',light:'Theme: Light',dark:'Theme: Dark'};",
+  'var readThemeMode=function(){try{var v=localStorage.getItem(THEME_KEY);',
+  "return v==='light'||v==='dark'?v:'system';}catch(e){return 'system';}};",
+  'var applyThemeMode=function(mode){',
+  "var m=mode==='light'||mode==='dark'?mode:'system';",
+  "var dark=m==='dark'||(m==='system'&&pref.matches);",
+  "document.documentElement.setAttribute('data-theme',dark?'dark':'light');",
+  "document.documentElement.setAttribute('data-theme-mode',m);",
+  "var btn=document.getElementById('theme-toggle');",
+  'if(btn){var lbl=THEME_LABELS[m];',
+  "btn.setAttribute('title',lbl);btn.setAttribute('aria-label',lbl);}",
+  "var frames=document.querySelectorAll('iframe.viewer-frame');",
+  'for(var i=0;i<frames.length;i++){',
+  "if(frames[i].contentWindow)frames[i].contentWindow.postMessage({type:'theme',dark:dark},'*');",
+  '}',
+  '};',
+  "var setTheme=function(){if(readThemeMode()==='system')applyThemeMode('system');};",
+  'applyThemeMode(readThemeMode());',
+  '(function(){',
+  "var btn=document.getElementById('theme-toggle');",
+  "if(btn){btn.addEventListener('click',function(){",
+  'var cur=readThemeMode();',
+  "var order=pref.matches?['system','light','dark']:['system','dark','light'];",
+  'var next=order[(order.indexOf(cur)+1)%order.length];',
+  "try{if(next==='system')localStorage.removeItem(THEME_KEY);",
+  'else localStorage.setItem(THEME_KEY,next);}catch(e){}',
+  'applyThemeMode(next);',
+  '});}',
+  "window.addEventListener('storage',function(ev){",
+  'if(ev.key===THEME_KEY||ev.key===null)applyThemeMode(readThemeMode());',
+  '});',
+  "var acc=document.getElementById('account-link');",
+  'if(acc&&window.fetch){',
+  "fetch('/api/me',{credentials:'same-origin'})",
+  '.then(function(r){return r.ok?r.json():null;})',
+  '.then(function(data){',
+  'if(!data||!data.authenticated)return;',
+  "if(data.username){var lbl='Account (@'+data.username+')';",
+  "acc.setAttribute('title',lbl);acc.setAttribute('aria-label',lbl);}",
+  'if(!data.avatarUrl)return;',
+  "var img=document.createElement('img');",
+  "img.alt='';",
+  "img.referrerPolicy='no-referrer';",
+  "img.decoding='async';",
+  'img.onload=function(){',
+  "acc.textContent='';",
+  'acc.appendChild(img);',
+  "acc.classList.add('has-avatar');",
+  '};',
+  'img.src=data.avatarUrl;',
+  '})',
+  '.catch(function(){});',
+  '}',
+  '})();',
+].join('');
+
+export const TOP_CONTROLS = String(
+  <div id='top-controls'>
+    <button
+      type='button'
+      id='theme-toggle'
+      aria-label='Theme: System'
+      title='Theme: System'
+    >
+      <svg className='theme-icon theme-icon-system' viewBox='0 0 20 20' aria-hidden='true'>
+        <circle cx='10' cy='10' r='7.5' fill='none' stroke='currentColor' strokeWidth='2' />
+        <path d='M10 2.5a7.5 7.5 0 0 0 0 15Z' fill='currentColor' />
+      </svg>
+      <svg className='theme-icon theme-icon-light' viewBox='0 0 20 20' aria-hidden='true'>
+        <circle cx='10' cy='10' r='4' fill='currentColor' />
+        <path
+          d={
+            'M10 1v2.5M10 16.5V19M1 10h2.5M16.5 10H19' +
+            'M3.6 3.6l1.8 1.8M14.6 14.6l1.8 1.8M3.6 16.4l1.8-1.8M14.6 5.4l1.8-1.8'
+          }
+          fill='none'
+          stroke='currentColor'
+          strokeWidth='2'
+          strokeLinecap='round'
+        />
+      </svg>
+      <svg className='theme-icon theme-icon-dark' viewBox='0 0 20 20' aria-hidden='true'>
+        <path d='M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7z' fill='currentColor' />
+      </svg>
+    </button>
+    <a
+      id='account-link'
+      href='/account/'
+      className='subtle'
+      aria-label='Account'
+      title='Account'
+    >
+      <svg className='account-icon' viewBox='0 0 20 20' aria-hidden='true'>
+        <circle cx='10' cy='10' r='7.5' fill='none' stroke='currentColor' strokeWidth='2' />
+        <circle cx='10' cy='7.5' r='2.5' fill='currentColor' />
+        <path
+          d='M4.5 15.1C5.3 12.5 7.4 11.3 10 11.3s4.7 1.2 5.5 3.8a7.5 7.5 0 0 1-11 0Z'
+          fill='currentColor'
+        />
+      </svg>
+    </a>
+  </div>
+);
 
 export function formatLiveTournamentBanner(tournament?: {id: string; name: string}): string {
   if (!tournament) return '';
@@ -194,17 +311,22 @@ export class Renderer extends site.page.Renderer {
     const script = page.script ? `${SET_THEME}\n${page.script}` : SET_THEME;
     const banner = this.liveBannerProvider?.() ?? '';
     const rawHeader = page.header !== undefined ? String(page.header) : undefined;
-    const headerHtml = banner && !rawHeader?.includes('id="topbar"')
+    const withBanner = banner && !rawHeader?.includes('id="topbar"')
       ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
       : rawHeader;
+    const headerHtml = withBanner?.includes('id="top-controls"')
+      ? withBanner
+      : (withBanner ? `${withBanner}\n  ${TOP_CONTROLS}` : TOP_CONTROLS);
 
     if (this.minify) {
-      const transform = IS_PRODUCTION
-        ? replace
-        : (s: string) => {
-          const clean = s.replace(GTAG_RE, '');
-          return replace ? replace(clean) : clean;
-        };
+      const transform = (s: string) => {
+        const cleaned = IS_PRODUCTION ? s : s.replace(GTAG_RE, '');
+        const withTheme = cleaned.replace(
+          '</head>',
+          `<script>${EARLY_THEME_SCRIPT}</script></head>`
+        );
+        return replace ? replace(withTheme) : withTheme;
+      };
       return super.render({
         ...page,
         header: headerHtml,
@@ -223,7 +345,7 @@ export class Renderer extends site.page.Renderer {
       : '';
     const styleTag = page.style ? `<style>${page.style}</style>` : '';
     const bodyTag = page.id ? `<body id="${escapeHtml(page.id)}">` : '<body>';
-    const headerTag = headerHtml ? `<header>${headerHtml}</header>` : '';
+    const headerTag = `<header>${headerHtml}</header>`;
     const rendered = [
       '<!doctype html><html lang="en"><head>',
       '<meta charset="utf-8">',
@@ -237,6 +359,7 @@ export class Renderer extends site.page.Renderer {
       analytics,
       `<link rel="stylesheet" href="${stylesheetHref}">`,
       styleTag,
+      `<script>${EARLY_THEME_SCRIPT}</script>`,
       `</head>${bodyTag}`,
       `${headerTag}<main>${String(page.content)}</main>`,
       '<footer><a href="https://creativecommons.org/licenses/by-sa/4.0/">',
@@ -245,7 +368,6 @@ export class Renderer extends site.page.Renderer {
       '</body><script>',
       "const pref=window.matchMedia('(prefers-color-scheme: dark)');",
       "pref.addEventListener('change',e=>setTheme(e.matches?'dark':'light'));",
-      "document.documentElement.setAttribute('data-theme',pref.matches?'dark':'light');",
       `\n${script}\n</script></html>`,
     ].join('');
     return replace ? replace(rendered) : rendered;
