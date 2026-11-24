@@ -950,6 +950,18 @@ describe('TimeSlicedArenaGame', () => {
     expect(tailOnly.format()).toBe('456789ABCDEF');
   });
 
+  test('BoundedStderrBuffer strips non-whitespace control characters', () => {
+    const buf = new engine.BoundedStderrBuffer({headBytes: 32, tailBytes: 32});
+    buf.append('ok\x00\x01\x1b[31merr\tval\nnext\r\n');
+    expect(buf.format()).toBe('ok[31merr\tval\nnext\r\n');
+  });
+
+  test('truncateDiagnosticLog bounds oversized battle logs on newline boundaries', () => {
+    const log = 'line-one\nline-two\nline-three\n';
+    expect(engine.truncateDiagnosticLog(log, 64)).toBe(log);
+    expect(engine.truncateDiagnosticLog(log, 20)).toBe('line-one\nline-two');
+  });
+
   test('diagnosticWallCapMillis and protocol error classifier handle formats and buckets', () => {
     expect(engine.diagnosticWallCapMillis('gen1ou')).toBe(10 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen3ou')).toBe(8 * 60 * 1000);

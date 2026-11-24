@@ -414,6 +414,22 @@ export class Coordinator {
     }
   }
 
+  private async sendSubmissionStatus(payload: arena.SubmissionStatusPayload): Promise<void> {
+    try {
+      await this.client.reportSubmissionStatus(payload);
+    } catch (err) {
+      // If oversized diagnostic logs/stderr hit `413 Payload Too Large`, retry once with
+      // `diagnostics` stripped so the authoritative submission status never deadlocks the outbox.
+      if (getHttpErrorStatus(err) === 413 && payload.diagnostics?.length) {
+        const stripped = {...payload};
+        delete stripped.diagnostics;
+        await this.client.reportSubmissionStatus(stripped);
+        return;
+      }
+      throw err;
+    }
+  }
+
   async flushOutbox(): Promise<number> {
     const entries = this.stateDb.listOutbox();
     let flushed = 0;
@@ -435,7 +451,7 @@ export class Coordinator {
           }
         } else {
           const payload = JSON.parse(entry.payloadJson) as arena.SubmissionStatusPayload;
-          await this.client.reportSubmissionStatus(payload);
+          await this.sendSubmissionStatus(payload);
         }
         this.stateDb.deleteOutbox(entry.id);
         flushed++;
@@ -718,7 +734,7 @@ export class Coordinator {
             turns: res.turns,
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
-            battleLog: res.omniscientLog,
+            battleLog: engine.truncateDiagnosticLog(res.omniscientLog),
             supportsInfo,
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
@@ -803,7 +819,7 @@ export class Coordinator {
       }
     }
     try {
-      await this.client.reportSubmissionStatus(payload);
+      await this.sendSubmissionStatus(payload);
     } catch (err) {
       if (isPermanentClientError(err)) {
         console.error('Submission status permanently rejected by server:', err);

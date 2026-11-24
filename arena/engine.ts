@@ -45,6 +45,31 @@ function sliceUtf8Suffix(buf: Buffer, maxBytes: number): Buffer {
   return buf.subarray(start);
 }
 
+export const MAX_DIAGNOSTIC_LOG_BYTES = 512 * 1024;
+
+export function truncateDiagnosticLog(log: string, maxBytes = MAX_DIAGNOSTIC_LOG_BYTES): string {
+  const buf = Buffer.from(log, 'utf8');
+  if (buf.length <= maxBytes) return log;
+  const sliced = sliceUtf8Prefix(buf, maxBytes);
+  const lastNl = sliced.lastIndexOf(0x0a);
+  return (lastNl > 0 ? sliced.subarray(0, lastNl) : sliced).toString('utf8');
+}
+
+function stripUnsafeControlChars(chunk: string): string {
+  let clean = '';
+  let start = 0;
+  for (let i = 0; i < chunk.length; i++) {
+    const code = chunk.charCodeAt(i);
+    const unsafe =
+      (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) || code === 0x7f;
+    if (!unsafe) continue;
+    if (i > start) clean += chunk.slice(start, i);
+    start = i + 1;
+  }
+  if (start === 0) return chunk;
+  return start < chunk.length ? clean + chunk.slice(start) : clean;
+}
+
 // Captures bounded UTF-8 stderr with an optional head+tail split so diagnostic runs retain both
 // pre-`/ready` startup logs and late-game tracebacks while bounding memory to O(head + tail).
 export class BoundedStderrBuffer {
@@ -64,7 +89,9 @@ export class BoundedStderrBuffer {
 
   append(chunk: string): void {
     if (!chunk) return;
-    let remaining: Buffer = Buffer.from(chunk, 'utf8');
+    const sanitized = stripUnsafeControlChars(chunk);
+    if (!sanitized) return;
+    let remaining: Buffer = Buffer.from(sanitized, 'utf8');
     if (this.headBuf.length < this.maxHeadBytes) {
       const space = this.maxHeadBytes - this.headBuf.length;
       if (remaining.length <= space) {

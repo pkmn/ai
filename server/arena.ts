@@ -2365,7 +2365,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (!authenticateArena(req, res)) return;
 
     try {
-      const body = await readJsonBody<SubmissionStatusPayload>(req, MAX_MATCH_COMPLETE_BODY_BYTES);
+      const body = await readJsonBody<SubmissionStatusPayload>(req, MAX_GAME_COMPLETE_BODY_BYTES);
       const result = db.applySubmissionStatus({
         ...body,
         smokeError: body.smokeError?.slice(0, 16_384),

@@ -2104,7 +2104,7 @@ export class Coordinator {
             turns: res.turns,
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
-            battleLog: res.omniscientLog,
+            battleLog: engine.truncateDiagnosticLog(res.omniscientLog),
             supportsInfo: battleLogHasAiTelemetry(res.omniscientLog),
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
@@ -2151,7 +2151,7 @@ export class Coordinator {
 
       const smokeDurationMillis = Math.max(1, Date.now() - smokeStart);
       if (smokeError) {
-        await this.client.reportSubmissionStatus({
+        await this.reportSubmissionStatus({
           versionId: sub.versionId,
           smokeStatus: 'failed',
           smokeError,
@@ -2160,7 +2160,7 @@ export class Coordinator {
         continue;
       }
 
-      await this.client.reportSubmissionStatus({
+      await this.reportSubmissionStatus({
         versionId: sub.versionId,
         smokeStatus: 'staged',
         unpackedBytes,
@@ -2176,6 +2176,21 @@ export class Coordinator {
     }
 
     return processed;
+  }
+
+  private async reportSubmissionStatus(payload: arena.SubmissionStatusPayload): Promise<void> {
+    try {
+      await this.client.reportSubmissionStatus(payload);
+    } catch (err) {
+      const status = (err as {status?: unknown} | undefined)?.status;
+      if (status === 413 && payload.diagnostics?.length) {
+        const stripped = {...payload};
+        delete stripped.diagnostics;
+        await this.client.reportSubmissionStatus(stripped);
+        return;
+      }
+      throw err;
+    }
   }
 
   private samplePairForGame(

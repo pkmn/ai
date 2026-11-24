@@ -1265,4 +1265,39 @@ describe('Coordinator', () => {
     expect(negatedVgc.addPerTurnSeconds).toBe(25);
     expect(negatedVgc.timeoutAutoChoose).toBe(false);
   });
+
+  test('flushOutbox strips diagnostics on 413 for submission-status', async () => {
+    const h = createMockCoordHarness('outbox-413');
+    const seen: serverArena.SubmissionStatusPayload[] = [];
+    const origReport = h.coord.client.reportSubmissionStatus.bind(h.coord.client);
+    h.coord.client.reportSubmissionStatus = (payload: serverArena.SubmissionStatusPayload) => {
+      seen.push(payload);
+      if (payload.diagnostics?.length) {
+        return Promise.reject(Object.assign(new Error('Payload Too Large'), {status: 413}));
+      }
+      return origReport(payload);
+    };
+    try {
+      h.stateDb.enqueueOutbox('submission-status', {
+        versionId: 42,
+        smokeStatus: 'staged',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 10,
+          endReason: 'win',
+          durationMillis: 500,
+          battleLog: '|turn|1\n',
+        }],
+      });
+      const flushed = await h.coord.flushOutbox();
+      expect(flushed).toBe(1);
+      expect(h.stateDb.listOutbox()).toHaveLength(0);
+      expect(seen).toHaveLength(2);
+      expect(seen[0].diagnostics).toHaveLength(1);
+      expect(seen[1].diagnostics).toBeUndefined();
+    } finally {
+      h.stateDb.close();
+    }
+  });
 });
