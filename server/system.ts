@@ -117,6 +117,7 @@ export interface VpsSystemInfo {
   hostname: string;
   platform: string;
   nodeVersion: string;
+  gitCommit?: string;
   load: LoadMetrics;
   memory: MemoryMetrics;
   disks: DiskMetrics[];
@@ -134,6 +135,7 @@ export interface ArenaSystemInfo {
   hostname: string;
   platform: string;
   nodeVersion: string;
+  gitCommit?: string;
   load: LoadMetrics;
   memory: MemoryMetrics;
   disks: DiskMetrics[];
@@ -535,6 +537,19 @@ function scanLatestBackup(
   }
 }
 
+const GIT_COMMIT: string | undefined = (() => {
+  try {
+    const out = childProcess.execFileSync(
+      'git',
+      ['rev-parse', '--short=8', 'HEAD'],
+      {cwd: path.resolve(__dirname, '..', '..'), encoding: 'utf8', timeout: 1000}
+    ).trim();
+    return /^[0-9a-f]{7,12}$/i.test(out) ? out.slice(0, 8) : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
 function execTextAsync(
   cmd: string,
   args: string[],
@@ -898,6 +913,7 @@ export class VpsHostMonitor {
       hostname: os.hostname(),
       platform: `${os.type()} ${os.release()} (${os.arch()})`,
       nodeVersion: process.version,
+      ...(GIT_COMMIT ? {gitCommit: GIT_COMMIT} : {}),
       load,
       memory,
       disks,
@@ -1459,6 +1475,7 @@ export class ArenaHostMonitor {
       hostname: os.hostname(),
       platform: `${os.type()} ${os.release()} (${os.arch()})`,
       nodeVersion: process.version,
+      ...(GIT_COMMIT ? {gitCommit: GIT_COMMIT} : {}),
       load,
       memory,
       disks,
