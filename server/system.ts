@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import * as tls from 'tls';
 
 export interface LoadMetrics {
   load1: number;
@@ -613,6 +614,50 @@ function readTlsCertStatus(certPath: string, nowSec: number): TlsCertStatus | un
   }
 }
 
+export function probeTlsCertEndpoint(
+  host: string,
+  port: number,
+  servername: string,
+  nowSec: number,
+  timeoutMillis = PROBE_TIMEOUT_MILLIS
+): Promise<TlsCertStatus | undefined> {
+  return new Promise(resolve => {
+    let settled = false;
+    const finish = (val: TlsCertStatus | undefined) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(val);
+    };
+    const socket = tls.connect({
+      host,
+      port,
+      servername,
+      rejectUnauthorized: false,
+    }, () => {
+      try {
+        const peer = socket.getPeerCertificate(false);
+        const validTo = peer?.raw
+          ? new crypto.X509Certificate(peer.raw).validTo
+          : peer?.valid_to;
+        const expiresAt = validTo ? Math.floor(Date.parse(validTo) / 1000) : NaN;
+        if (!Number.isFinite(expiresAt)) {
+          finish(undefined);
+          return;
+        }
+        const daysRemaining = Math.floor((expiresAt - nowSec) / 86400);
+        finish({expiresAt, daysRemaining, checkedAt: nowSec});
+      } catch {
+        finish(undefined);
+      }
+    });
+    const timer = setTimeout(() => finish(undefined), timeoutMillis);
+    timer.unref?.();
+    socket.on('error', () => finish(undefined));
+  });
+}
+
 interface MinuteBucket {
   minute: number;
   requests: number;
@@ -788,6 +833,7 @@ export interface VpsMonitorOptions {
   traffic?: TrafficTracker;
   backupDir?: string;
   tlsCertPath?: string;
+  tlsProbe?: {host: string; port: number; servername: string};
   now?: () => number;
 }
 
@@ -796,11 +842,13 @@ export class VpsHostMonitor {
   private readonly traffic: TrafficTracker | undefined;
   private readonly backupDir: string;
   private readonly tlsCertPath: string;
+  private readonly tlsProbe: {host: string; port: number; servername: string} | undefined;
   private readonly now: () => number;
   private prevDisk: {atMs: number; sample: ProcDiskSample} | undefined;
   private prevNet: {atMs: number; sample: NetCounterSample} | undefined;
   private cachedExternalProbe: NetworkProbe | undefined;
   private cachedTlsCert: TlsCertStatus | undefined;
+  private tlsChecked: boolean;
   private cachedBackups: BackupStatus | undefined;
   private lastBackupScanAt: number | undefined;
   private cachedMacMem: {usedBytes: number; swapTotalBytes: number; swapUsedBytes: number} |
@@ -813,11 +861,19 @@ export class VpsHostMonitor {
     this.traffic = opts.traffic;
     this.backupDir = opts.backupDir ?? VPS_BACKUP_DIR;
     this.tlsCertPath = opts.tlsCertPath ?? VPS_TLS_CERT_PATH;
+    // `/etc/letsencrypt/{live,archive}` are `0700 root:root` under `User=pkmn`, so Linux prod
+    // falls back to probing local Nginx on loopback `:443` when the PEM file is unreadable.
+    this.tlsProbe = opts.tlsProbe ?? (
+      !opts.tlsCertPath && process.platform === 'linux'
+        ? {host: '127.0.0.1', port: 443, servername: 'pkmn.ai'}
+        : undefined
+    );
     this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
     this.prevDisk = undefined;
     this.prevNet = undefined;
     this.cachedExternalProbe = undefined;
     this.cachedTlsCert = undefined;
+    this.tlsChecked = false;
     this.cachedBackups = undefined;
     this.lastBackupScanAt = undefined;
     this.cachedMacMem = undefined;
@@ -828,13 +884,13 @@ export class VpsHostMonitor {
   start(): void {
     if (this.probeTimer) return;
     this.refreshSlowProbes().catch(() => {});
-    this.refreshTlsCert();
+    this.refreshTlsCert().catch(() => {});
     this.probeTimer = setInterval(() => {
       this.refreshSlowProbes().catch(() => {});
     }, SLOW_PROBE_MILLIS);
     this.probeTimer.unref?.();
     this.tlsTimer = setInterval(() => {
-      this.refreshTlsCert();
+      this.refreshTlsCert().catch(() => {});
     }, TLS_REFRESH_MILLIS);
     this.tlsTimer.unref?.();
   }
@@ -850,8 +906,20 @@ export class VpsHostMonitor {
     }
   }
 
-  private refreshTlsCert(): void {
-    this.cachedTlsCert = readTlsCertStatus(this.tlsCertPath, this.now());
+  async refreshTlsCert(): Promise<TlsCertStatus | undefined> {
+    const nowSec = this.now();
+    let cert = readTlsCertStatus(this.tlsCertPath, nowSec);
+    if (!cert && this.tlsProbe) {
+      cert = await probeTlsCertEndpoint(
+        this.tlsProbe.host,
+        this.tlsProbe.port,
+        this.tlsProbe.servername,
+        nowSec
+      );
+    }
+    this.cachedTlsCert = cert;
+    this.tlsChecked = true;
+    return cert;
   }
 
   private async refreshSlowProbes(): Promise<void> {
@@ -907,7 +975,16 @@ export class VpsHostMonitor {
         rateLimited4291h: 0,
         errors5xx1h: 0,
       };
-    const tlsCert = this.cachedTlsCert ?? readTlsCertStatus(this.tlsCertPath, nowSec);
+    if (!this.tlsChecked) {
+      this.cachedTlsCert = readTlsCertStatus(this.tlsCertPath, nowSec);
+      this.tlsChecked = true;
+    }
+    const tlsCert = this.cachedTlsCert
+      ? {
+        ...this.cachedTlsCert,
+        daysRemaining: Math.floor((this.cachedTlsCert.expiresAt - nowSec) / 86400),
+      }
+      : undefined;
 
     return {
       collectedAt: nowSec,

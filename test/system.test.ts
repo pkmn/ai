@@ -1,7 +1,9 @@
+import * as childProcess from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
 import * as path from 'path';
+import * as tls from 'tls';
 
 import polka from 'polka';
 
@@ -443,6 +445,46 @@ describe('system telemetry parsers & TrafficTracker', () => {
     } finally {
       srv.closeAllConnections();
       await new Promise<void>(resolve => srv.close(() => resolve()));
+    }
+  });
+
+  test('VpsHostMonitor probes loopback TLS cert when PEM file is unreadable', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-tls-probe-'));
+    const keyPath = path.join(dir, 'key.pem');
+    const certPath = path.join(dir, 'cert.pem');
+    childProcess.execFileSync('openssl', [
+      'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+      '-keyout', keyPath, '-out', certPath,
+      '-days', '45', '-subj', '/CN=pkmn.ai',
+    ], {stdio: 'ignore'});
+    const tlsSrv = tls.createServer({
+      key: fs.readFileSync(keyPath),
+      cert: fs.readFileSync(certPath),
+    }, socket => {
+      socket.end();
+    });
+    await new Promise<void>(resolve => tlsSrv.listen(0, '127.0.0.1', resolve));
+    const addr = tlsSrv.address() as {port: number};
+    try {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const monitor = new system.VpsHostMonitor({
+        dbPath: ':memory:',
+        tlsCertPath: path.join(dir, 'missing-fullchain.pem'),
+        tlsProbe: {host: '127.0.0.1', port: addr.port, servername: 'pkmn.ai'},
+        now: () => nowSec,
+      });
+      const cert = await monitor.refreshTlsCert();
+      expect(cert).toBeDefined();
+      expect(cert!.daysRemaining).toBeGreaterThanOrEqual(43);
+      expect(cert!.daysRemaining).toBeLessThanOrEqual(45);
+      const sample = monitor.sampleNow({
+        sse: {battles: 0, tournaments: 0, admin: 0},
+        arenaFaults24h: {matches: 0, faults: 0},
+      });
+      expect(sample.tlsCert?.expiresAt).toBe(cert!.expiresAt);
+    } finally {
+      await new Promise<void>(resolve => tlsSrv.close(() => resolve()));
+      fs.rmSync(dir, {recursive: true, force: true});
     }
   });
 });
