@@ -177,6 +177,51 @@ describe('arena sandbox & tourney-relay', () => {
       expect(res.p1.peakRam).toBeGreaterThan(1);
     });
 
+    test('bills cumulative turn duration after out-of-band /info lines', async () => {
+      const infoAgentScript = path.join(tmpDir, 'info-clock-agent.js');
+      fs.writeFileSync(
+        infoAgentScript,
+        '#!/usr/bin/env node\nconst readline = require("readline");' +
+          'process.stdout.write("/ready\\n");' +
+          'const rl = readline.createInterface({input: process.stdin});' +
+          'rl.on("line", line => {' +
+          '  if (!line.startsWith("|request|")) return;' +
+          '  process.stdout.write("/info {\\"win\\":0.6}\\n");' +
+          '  setTimeout(() => process.stdout.write("default\\n"), 60);' +
+          '});\n',
+        {mode: 0o755}
+      );
+      const res = await new tournament.ConcurrentGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        smokeStopAfterTurn: 1,
+        p1: {
+          spec: {
+            agentId: 'info-p1',
+            displayName: 'Info P1',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [process.execPath, infoAgentScript],
+          },
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {
+            agentId: 'default-p2',
+            displayName: 'Default P2',
+            vmHost: 'localhost',
+            controlSocket: '/tmp/unused',
+            localCommand: relayBin,
+            localArgs: [defaultAgentScript],
+          },
+          teamPacked: TEAM_TWO,
+        },
+      }).run();
+      expect(res.p1.meanTurnMillis).toBeGreaterThanOrEqual(50);
+      expect(res.omniscientLog).toContain('|ai|p1|');
+    });
+
     test('bake-image smoke_test_agent keeps stdin open past tourney-relay 100ms EOF kill', () => {
       const slowAgent = path.join(tmpDir, 'slow-bake-agent.js');
       fs.writeFileSync(

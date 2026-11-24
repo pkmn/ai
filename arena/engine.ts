@@ -457,7 +457,8 @@ export function inspectOmniscientLine(
 
 export interface LineIoState {
   lineQueue: string[];
-  lineResolver: ((line: string | undefined) => void) | undefined;
+  lineSeqQueue?: number[];
+  lineResolver: ((line: string | undefined, lineSeq?: number) => void) | undefined;
 }
 
 export function wakeLineResolver(io: LineIoState | undefined): void {
@@ -610,9 +611,10 @@ export function attachStdoutLineFramer(
   proc: ChildProcessWithoutNullStreams,
   io: LineIoState,
   onOverflow: () => void,
-  onLine?: (line: string) => boolean
+  onLine?: (line: string, lineSeq: number) => boolean
 ): void {
   let stdoutBuf = '';
+  let lineSeq = 0;
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (chunk: string) => {
     stdoutBuf += chunk;
@@ -620,6 +622,7 @@ export function attachStdoutLineFramer(
     while (nl >= 0) {
       const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
       stdoutBuf = stdoutBuf.slice(nl + 1);
+      lineSeq++;
       if (line.length > MAX_STDOUT_LINE_CHARS) {
         stdoutBuf = '';
         try {
@@ -628,16 +631,17 @@ export function attachStdoutLineFramer(
         onOverflow();
         return;
       }
-      if (onLine?.(line)) {
+      if (onLine?.(line, lineSeq)) {
         nl = stdoutBuf.indexOf('\n');
         continue;
       }
       if (io.lineResolver) {
         const resolve = io.lineResolver;
         io.lineResolver = undefined;
-        resolve(line);
+        resolve(line, lineSeq);
       } else if (io.lineQueue.length < MAX_LINE_QUEUE) {
         io.lineQueue.push(line);
+        io.lineSeqQueue?.push(lineSeq);
       }
       nl = stdoutBuf.indexOf('\n');
     }

@@ -161,8 +161,8 @@ interface RemoteTournamentPlayer {
   relay: {
     usesRelay: boolean;
     reqSeq: number;
-    localTurnMillisQueue: number[];
-    turnMillisWaiter: (() => void) | undefined;
+    turnMillisByLine: Map<number, number>;
+    turnMillisWaiter: {lineSeq: number; wake: () => void} | undefined;
   };
   turn: engine.PlayerTurnState;
   errors: engine.ProtocolErrorCounts;
@@ -440,13 +440,14 @@ export class ConcurrentGame {
       proc,
       io: {
         lineQueue: [],
+        lineSeqQueue: [],
         lineResolver: undefined,
         stderrBuf: new engine.BoundedStderrBuffer(this.stderrCapture),
       },
       relay: {
         usesRelay,
         reqSeq: 0,
-        localTurnMillisQueue: [],
+        turnMillisByLine: new Map(),
         turnMillisWaiter: undefined,
       },
       turn: {
@@ -484,7 +485,7 @@ export class ConcurrentGame {
       if (player.relay.turnMillisWaiter) {
         const w = player.relay.turnMillisWaiter;
         player.relay.turnMillisWaiter = undefined;
-        w();
+        w.wake();
       }
       engine.wakeLineResolver(player.io);
     };
@@ -499,20 +500,29 @@ export class ConcurrentGame {
     const handleStderrLine = (errLine: string) => {
       if (errLine.startsWith('ARENA_TURN_MS=')) {
         const rawVal = errLine.slice('ARENA_TURN_MS='.length).trim();
-        const [millisStr, seqStr] = rawVal.split('\t');
+        const [millisStr, seqStr, lineSeqStr] = rawVal.split('\t');
         const millis = Number(millisStr);
         const seq = seqStr !== undefined ? Number(seqStr) : player.relay.reqSeq;
+        const lineSeq = lineSeqStr !== undefined ? Number(lineSeqStr) : NaN;
         if (
           Number.isFinite(millis) &&
           millis >= 0 &&
           seq === player.relay.reqSeq &&
-          player.relay.localTurnMillisQueue.length < MAX_LINE_QUEUE
+          Number.isSafeInteger(lineSeq) &&
+          lineSeq > 0
         ) {
-          player.relay.localTurnMillisQueue.push(millis);
-          if (player.relay.turnMillisWaiter) {
+          if (
+            player.relay.turnMillisByLine.size >= MAX_LINE_QUEUE &&
+            !player.relay.turnMillisByLine.has(lineSeq)
+          ) {
+            const oldestKey = player.relay.turnMillisByLine.keys().next().value;
+            if (oldestKey !== undefined) player.relay.turnMillisByLine.delete(oldestKey);
+          }
+          player.relay.turnMillisByLine.set(lineSeq, millis);
+          if (player.relay.turnMillisWaiter?.lineSeq === lineSeq) {
             const w = player.relay.turnMillisWaiter;
             player.relay.turnMillisWaiter = undefined;
-            w();
+            w.wake();
           }
         }
       } else if (errLine.startsWith('ARENA_PEAK_RAM=')) {
@@ -568,44 +578,58 @@ export class ConcurrentGame {
     return player;
   }
 
+  private consumeTurnMillisForLine(
+    player: RemoteTournamentPlayer,
+    lineSeq: number
+  ): number | undefined {
+    const val = player.relay.turnMillisByLine.get(lineSeq);
+    if (val === undefined) return undefined;
+    for (const key of player.relay.turnMillisByLine.keys()) {
+      if (key <= lineSeq) player.relay.turnMillisByLine.delete(key);
+    }
+    return val;
+  }
+
   private async takeLocalTurnMillis(
     player: RemoteTournamentPlayer,
     line: string | undefined,
+    lineSeq: number | undefined,
     wallMillis: number
   ): Promise<number> {
-    if (line === undefined || player.relay.reqSeq === 0) return wallMillis;
-    if (player.relay.localTurnMillisQueue.length > 0) {
-      return player.relay.localTurnMillisQueue.shift()!;
-    }
+    if (line === undefined || lineSeq === undefined || player.relay.reqSeq === 0) return wallMillis;
+    const immediate = this.consumeTurnMillisForLine(player, lineSeq);
+    if (immediate !== undefined) return immediate;
     if (player.relay.usesRelay && !player.state.exited) {
       await new Promise<void>(resolve => {
+        const waiter = {
+          lineSeq,
+          wake: () => {
+            clearTimeout(t);
+            resolve();
+          },
+        };
         const t = setTimeout(() => {
-          if (player.relay.turnMillisWaiter === wake) player.relay.turnMillisWaiter = undefined;
+          if (player.relay.turnMillisWaiter === waiter) player.relay.turnMillisWaiter = undefined;
           resolve();
         }, 25);
-        const wake = () => {
-          clearTimeout(t);
-          resolve();
-        };
-        player.relay.turnMillisWaiter = wake;
+        player.relay.turnMillisWaiter = waiter;
       });
-      if (player.relay.localTurnMillisQueue.length > 0) {
-        return player.relay.localTurnMillisQueue.shift()!;
-      }
+      const delayed = this.consumeTurnMillisForLine(player, lineSeq);
+      if (delayed !== undefined) return delayed;
     }
     return wallMillis;
   }
 
   private async readLineWithTimeout(
     player: RemoteTournamentPlayer,
-    budgetMillis: number
+    budgetMillis: number,
+    decisionStartNs: bigint = process.hrtime.bigint()
   ): Promise<{line: string | undefined; elapsedMillis: number; timedOut: boolean}> {
-    const startNs = process.hrtime.bigint();
-
     if (player.io.lineQueue.length > 0) {
       const line = player.io.lineQueue.shift()!;
-      const wallMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
-      const elapsedMillis = await this.takeLocalTurnMillis(player, line, wallMillis);
+      const lineSeq = player.io.lineSeqQueue?.shift();
+      const wallMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
+      const elapsedMillis = await this.takeLocalTurnMillis(player, line, lineSeq, wallMillis);
       return {line, elapsedMillis, timedOut: false};
     }
     if (player.state.exited) {
@@ -614,6 +638,7 @@ export class ConcurrentGame {
 
     const raw = await new Promise<{
       line: string | undefined;
+      lineSeq: number | undefined;
       wallMillis: number;
       timedOut: boolean;
     }>(resolve => {
@@ -621,19 +646,28 @@ export class ConcurrentGame {
       const slackMillis = player.spec.localCommand ? 100 : 1500;
       const timer = setTimeout(() => {
         player.io.lineResolver = undefined;
-        resolve({line: undefined, wallMillis: budgetMillis, timedOut: true});
+        const wallMillis = Math.max(
+          budgetMillis,
+          Number(process.hrtime.bigint() - decisionStartNs) / 1e6
+        );
+        resolve({line: undefined, lineSeq: undefined, wallMillis, timedOut: true});
       }, Math.max(1, Math.ceil(budgetMillis + slackMillis)));
 
-      player.io.lineResolver = line => {
+      player.io.lineResolver = (line, lineSeq) => {
         clearTimeout(timer);
-        const wallMillis = Number(process.hrtime.bigint() - startNs) / 1e6;
-        resolve({line, wallMillis, timedOut: false});
+        const wallMillis = Number(process.hrtime.bigint() - decisionStartNs) / 1e6;
+        resolve({line, lineSeq, wallMillis, timedOut: false});
       };
     });
     if (raw.timedOut) {
-      return {line: undefined, elapsedMillis: budgetMillis, timedOut: true};
+      return {line: undefined, elapsedMillis: raw.wallMillis, timedOut: true};
     }
-    const elapsedMillis = await this.takeLocalTurnMillis(player, raw.line, raw.wallMillis);
+    const elapsedMillis = await this.takeLocalTurnMillis(
+      player,
+      raw.line,
+      raw.lineSeq,
+      raw.wallMillis
+    );
     return {line: raw.line, elapsedMillis, timedOut: false};
   }
 
@@ -818,6 +852,7 @@ export class ConcurrentGame {
     let remainingBudgetMillis = totalBudgetMillis;
     let totalElapsedMillis = 0;
     let linesReadThisDecision = 0;
+    const decisionStartNs = process.hrtime.bigint();
     player.state.thinking = true;
     if (wasRetry && !this.ended) {
       this.callbacks?.onClockChange?.(this.buildBroadcastState());
@@ -836,7 +871,7 @@ export class ConcurrentGame {
         const cappedByWall = wallRemaining !== undefined && wallRemaining < remainingBudgetMillis;
         const {line, elapsedMillis, timedOut} = waitMillis <= 0
           ? {line: undefined, elapsedMillis: 0, timedOut: true}
-          : await this.readLineWithTimeout(player, waitMillis);
+          : await this.readLineWithTimeout(player, waitMillis, decisionStartNs);
         if (player.state.spotPreempted || player.state.sshDisconnected) {
           this.abortForSpotPreemption(player.slot);
           return;
@@ -849,7 +884,7 @@ export class ConcurrentGame {
             return;
           }
         }
-        totalElapsedMillis += elapsedMillis;
+        totalElapsedMillis = Math.max(totalElapsedMillis, elapsedMillis);
         remainingBudgetMillis = totalBudgetMillis - totalElapsedMillis;
         if (timedOut || remainingBudgetMillis <= 0) {
           const outcome = engine.applyDecisionTimeout(
@@ -917,7 +952,8 @@ export class ConcurrentGame {
         if (inspected.actionableReqJson) {
           player.relay.reqSeq++;
           player.io.lineQueue.length = 0;
-          player.relay.localTurnMillisQueue.length = 0;
+          player.io.lineSeqQueue!.length = 0;
+          player.relay.turnMillisByLine.clear();
         }
         if (!player.state.exited && player.proc.stdin.writable) {
           player.proc.stdin.write(`${chunk}\n`);
@@ -960,7 +996,8 @@ export class ConcurrentGame {
 
     for (const p of [this.p1, this.p2]) {
       p.io.lineQueue.length = 0;
-      p.relay.localTurnMillisQueue.length = 0;
+      p.io.lineSeqQueue!.length = 0;
+      p.relay.turnMillisByLine.clear();
       p.turn.bankMillis = this.timers.startingBankMillis + this.timers.graceMillis;
       p.turn.turnRemainingMillis = undefined;
       p.telemetry.totalTeamPreviewMillis = 0;

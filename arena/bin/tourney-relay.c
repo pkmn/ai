@@ -8,8 +8,9 @@
 //   2. Each actionable `|request|` (non-wait) line increments `req_seq`
 //      and starts a local monotonic stopwatch (`timer_active = 1`).
 //   3. Forwards stdout lines from agent -> sshd stdout, tagging every newline (including empty
-//      lines) on stderr as `ARENA_TURN_MS=<elapsed_ms>\t<req_seq>\n` so turn-clock queues stay
-//      1-to-1 with stdout lines.
+//      and `/info` lines) on stderr as `ARENA_TURN_MS=<cumulative_ms>\t<req_seq>\t<stdout_seq>\n`
+//      measuring cumulative monotonic elapsed time since the active `|request|` arrival so
+//      out-of-band `/info` interception can never desync or reset turn clock accounting.
 //   4. Places the child in a dedicated session (`setsid()`), closes all inherited FDs >= 3, and
 //      terminates `-child_pgid` with `SIGKILL` immediately if stdout breaks (`POLLHUP`/`POLLERR`)
 //      or within 100ms of stdin EOF so SSH disconnects never orphan GPU processes.
@@ -211,6 +212,7 @@ int main(int argc, char **argv) {
   int timer_active = 0;
   int stdin_eof = 0;
   uint64_t req_seq = 0;
+  uint64_t stdout_seq = 0;
   uint64_t turn_start_ns = 0;
   uint64_t eof_deadline_ns = 0;
 
@@ -318,18 +320,19 @@ int main(int argc, char **argv) {
       char *nl = NULL;
       while ((nl = memchr(out_buf.data, '\n', out_buf.len)) != NULL) {
         size_t line_len = (size_t)(nl - out_buf.data) + 1;
+        stdout_seq++;
         if (timer_active) {
           uint64_t now_ns = monotonic_ns();
           uint64_t elapsed_ns = now_ns > turn_start_ns ? now_ns - turn_start_ns : 1ULL;
           uint64_t elapsed_ms = (elapsed_ns + 999999ULL) / 1000000ULL;
           fprintf(
             stderr,
-            "ARENA_TURN_MS=%llu\t%llu\n",
+            "ARENA_TURN_MS=%llu\t%llu\t%llu\n",
             (unsigned long long)elapsed_ms,
-            (unsigned long long)req_seq
+            (unsigned long long)req_seq,
+            (unsigned long long)stdout_seq
           );
           fflush(stderr);
-          turn_start_ns = now_ns;
         }
         if (write_all(STDOUT_FILENO, out_buf.data, line_len) < 0) goto done;
         memmove(out_buf.data, out_buf.data + line_len, out_buf.len - line_len);
