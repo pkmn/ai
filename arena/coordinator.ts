@@ -140,6 +140,7 @@ interface MirrorHeartbeatSide {
   lastTurnMillis: number;
   meanTurnMillis: number;
   ram: number;
+  cpuCores?: number;
   team?: string;
   info?: arena.PublicAgentInfo;
 }
@@ -1253,6 +1254,7 @@ export class Coordinator {
         lastTurnMillis: frame.p1.lastTurnMillis,
         meanTurnMillis: frame.p1.meanTurnMillis,
         ram: frame.p1.ram,
+        ...(frame.p1.cpuCores !== undefined ? {cpuCores: frame.p1.cpuCores} : {}),
         ...(frame.p1.team ? {team: frame.p1.team} : {}),
         ...(frame.p1.info ? {info: frame.p1.info} : {}),
       },
@@ -1268,6 +1270,7 @@ export class Coordinator {
         lastTurnMillis: frame.p2.lastTurnMillis,
         meanTurnMillis: frame.p2.meanTurnMillis,
         ram: frame.p2.ram,
+        ...(frame.p2.cpuCores !== undefined ? {cpuCores: frame.p2.cpuCores} : {}),
         ...(frame.p2.team ? {team: frame.p2.team} : {}),
         ...(frame.p2.info ? {info: frame.p2.info} : {}),
       },
@@ -1306,6 +1309,7 @@ export class Coordinator {
           : {}),
         meanTurnMillis: Math.round(game1.p1.meanTurnMillis),
         ram: game1.p1.peakRam,
+        ...(game1.p1.cpuCores !== undefined ? {cpuCores: game1.p1.cpuCores} : {}),
         ...(match.p1.teamLabel ? {team: match.p1.teamLabel} : {}),
       },
       p2: {
@@ -1316,6 +1320,7 @@ export class Coordinator {
           : {}),
         meanTurnMillis: Math.round(game1.p2.meanTurnMillis),
         ram: game1.p2.peakRam,
+        ...(game1.p2.cpuCores !== undefined ? {cpuCores: game1.p2.cpuCores} : {}),
         ...(match.p2.teamLabel ? {team: match.p2.teamLabel} : {}),
       },
       ...(game1.p1.pokemon || game1.p2.pokemon
@@ -1363,6 +1368,7 @@ export class Coordinator {
             lastTurnMillis: info.p2.lastTurnMillis,
             meanTurnMillis: info.p2.meanTurnMillis,
             ram: info.p2.ram,
+            ...(info.p2.cpuCores !== undefined ? {cpuCores: info.p2.cpuCores} : {}),
             team: match.p2.teamLabel,
             ...(isRandom && info.p2.info ? {info: info.p2.info} : {}),
           },
@@ -1373,6 +1379,7 @@ export class Coordinator {
             lastTurnMillis: info.p1.lastTurnMillis,
             meanTurnMillis: info.p1.meanTurnMillis,
             ram: info.p1.ram,
+            ...(info.p1.cpuCores !== undefined ? {cpuCores: info.p1.cpuCores} : {}),
             team: match.p1.teamLabel,
             ...(isRandom && info.p1.info ? {info: info.p1.info} : {}),
           },
@@ -1421,6 +1428,7 @@ export class Coordinator {
         lastTurnMillis: g2Res.p2.lastTurnMillis,
         meanTurnMillis: g2Res.p2.meanTurnMillis,
         ram: g2Res.p2.peakRam,
+        ...(g2Res.p2.cpuCores !== undefined ? {cpuCores: g2Res.p2.cpuCores} : {}),
         team: match.p2.teamLabel,
         ...(isRandom && g2Res.p2.info ? {info: g2Res.p2.info} : {}),
       },
@@ -1429,6 +1437,7 @@ export class Coordinator {
         lastTurnMillis: g2Res.p1.lastTurnMillis,
         meanTurnMillis: g2Res.p1.meanTurnMillis,
         ram: g2Res.p1.peakRam,
+        ...(g2Res.p1.cpuCores !== undefined ? {cpuCores: g2Res.p1.cpuCores} : {}),
         team: match.p1.teamLabel,
         ...(isRandom && g2Res.p1.info ? {info: g2Res.p1.info} : {}),
       },
@@ -1500,6 +1509,10 @@ export class Coordinator {
         p1Game2MeanTurnMillis: p1.g2.meanTurnMillis,
         p2Game1MeanTurnMillis: p2.g1.meanTurnMillis,
         p2Game2MeanTurnMillis: p2.g2.meanTurnMillis,
+        ...(p1.g1.cpuCores !== undefined ? {p1Game1CpuCores: p1.g1.cpuCores} : {}),
+        ...(p1.g2.cpuCores !== undefined ? {p1Game2CpuCores: p1.g2.cpuCores} : {}),
+        ...(p2.g1.cpuCores !== undefined ? {p2Game1CpuCores: p2.g1.cpuCores} : {}),
+        ...(p2.g2.cpuCores !== undefined ? {p2Game2CpuCores: p2.g2.cpuCores} : {}),
         ...(p1CpuCores !== undefined ? {p1CpuCores} : {}),
         ...(p2CpuCores !== undefined ? {p2CpuCores} : {}),
         ...(p1Errors ? {p1Errors} : {}),
@@ -1842,6 +1855,7 @@ export class Coordinator {
               lastTurnMillis: info.p1.lastTurnMillis,
               meanTurnMillis: info.p1.meanTurnMillis,
               ram: info.p1.ram,
+              ...(info.p1.cpuCores !== undefined ? {cpuCores: info.p1.cpuCores} : {}),
               team: sampled.t1Label,
               ...(isRandom && info.p1.info ? {info: info.p1.info} : {}),
             },
@@ -1852,6 +1866,7 @@ export class Coordinator {
               lastTurnMillis: info.p2.lastTurnMillis,
               meanTurnMillis: info.p2.meanTurnMillis,
               ram: info.p2.ram,
+              ...(info.p2.cpuCores !== undefined ? {cpuCores: info.p2.cpuCores} : {}),
               team: sampled.t2Label,
               ...(isRandom && info.p2.info ? {info: info.p2.info} : {}),
             },
@@ -1893,6 +1908,7 @@ export class Coordinator {
           lastTurnMillis: g1Res.p1.lastTurnMillis,
           meanTurnMillis: g1Res.p1.meanTurnMillis,
           ram: g1Res.p1.peakRam,
+          ...(g1Res.p1.cpuCores !== undefined ? {cpuCores: g1Res.p1.cpuCores} : {}),
           team: sampled.t1Label,
           ...(isRandom && g1Res.p1.info ? {info: g1Res.p1.info} : {}),
         },
@@ -1901,6 +1917,7 @@ export class Coordinator {
           lastTurnMillis: g1Res.p2.lastTurnMillis,
           meanTurnMillis: g1Res.p2.meanTurnMillis,
           ram: g1Res.p2.peakRam,
+          ...(g1Res.p2.cpuCores !== undefined ? {cpuCores: g1Res.p2.cpuCores} : {}),
           team: sampled.t2Label,
           ...(isRandom && g1Res.p2.info ? {info: g1Res.p2.info} : {}),
         },
@@ -1945,18 +1962,22 @@ export class Coordinator {
         p1: {
           bankSeconds: g1Res.p1.bankSeconds,
           peakRam: g1Res.p1.peakRam,
+          ...(g1Res.p1.cpuCores !== undefined ? {cpuCores: g1Res.p1.cpuCores} : {}),
           initMillis: g1Res.p1.initMillis,
           teamPreviewMillis: g1Res.p1.teamPreviewMillis,
           meanTurnMillis: g1Res.p1.meanTurnMillis,
           pokemon: g1Res.p1.pokemon,
+          ...(g1Res.p1.errors ? {errors: g1Res.p1.errors} : {}),
         },
         p2: {
           bankSeconds: g1Res.p2.bankSeconds,
           peakRam: g1Res.p2.peakRam,
+          ...(g1Res.p2.cpuCores !== undefined ? {cpuCores: g1Res.p2.cpuCores} : {}),
           initMillis: g1Res.p2.initMillis,
           teamPreviewMillis: g1Res.p2.teamPreviewMillis,
           meanTurnMillis: g1Res.p2.meanTurnMillis,
           pokemon: g1Res.p2.pokemon,
+          ...(g1Res.p2.errors ? {errors: g1Res.p2.errors} : {}),
         },
         log: g1Log,
       });

@@ -3045,6 +3045,14 @@ describe('per-ladder qualification & migrations', () => {
         );
         sql = sql.split('\n').filter(line => !addedCols.test(line)).join('\n');
       }
+      if (file === 'matches.sql') {
+        const addedCols = /^\s*(p1|p2)_game[12]_cpu_cores\b/;
+        sql = sql
+          .split('\n')
+          .filter(line => !addedCols.test(line))
+          .join('\n')
+          .replace(/completed_at INTEGER NOT NULL,/, 'completed_at INTEGER NOT NULL');
+      }
       if (file === 'agent-versions.sql') {
         sql = sql.replace(
           "CHECK (smoke_status IN ('pending', 'staged', 'passed', " +
@@ -3814,6 +3822,10 @@ describe('per-ladder qualification & migrations', () => {
             p2Game2MeanTurnMillis: 45,
             p1CpuCores: 6.4,
             p2CpuCores: 1.2,
+            p1Game1CpuCores: 6.1,
+            p1Game2CpuCores: 6.7,
+            p2Game1CpuCores: 1.1,
+            p2Game2CpuCores: 1.3,
             p1Errors: {
               invalidCantMove: 2,
               invalidCantSwitch: 1,
@@ -3836,6 +3848,14 @@ describe('per-ladder qualification & migrations', () => {
         const betaEntries = db.getAgentLadderProfileEntries(beta.id, 'gen1ou20261109');
         expect(betaEntries[0].meanCpuCores).toBeCloseTo(1.2, 5);
         expect(betaEntries[0].invalidChoices).toBe(0);
+
+        const match = db.getMatch('gen1ou-0000001')!;
+        expect(match.p1.cpuCores).toBeCloseTo(6.4, 5);
+        expect(match.p2.cpuCores).toBeCloseTo(1.2, 5);
+        expect(match.games[0].p1.cpuCores).toBeCloseTo(6.1, 5);
+        expect(match.games[1].p1.cpuCores).toBeCloseTo(6.7, 5);
+        expect(match.games[0].p2.cpuCores).toBeCloseTo(1.1, 5);
+        expect(match.games[1].p2.cpuCores).toBeCloseTo(1.3, 5);
       } finally {
         db.close();
       }

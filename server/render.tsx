@@ -731,6 +731,10 @@ export function buildBattleDetailClientJs(): string {
       const meanMillis = Math.round(p.meanTurnMillis || 0);
       const bankSeconds = Math.round(p.bankSeconds || 0);
       const ramStr = Math.round(p.peakRam || 0).toLocaleString('en-US') + ' MiB';
+      const cpuHtml = (typeof p.cpuCores === 'number' && p.cpuCores > 0)
+        ? ' · <span title="Host-measured CPU utilization (effective cores)"><tt>' +
+          p.cpuCores.toFixed(1) + '</tt> CPU</span>'
+        : '';
       const parenParts = [];
       if (p.initMillis !== undefined) {
         parenParts.push('<tt>' + Math.round(p.initMillis) + ' ms</tt> init');
@@ -742,7 +746,8 @@ export function buildBattleDetailClientJs(): string {
         ? ' <span class="muted">(' + parenParts.join(' · ') + ')</span>'
         : '';
       return '<span><tt>' + meanMillis + ' ms/turn</tt>' + parenHtml +
-        ' · Bank <tt>' + bankSeconds + 's</tt> · RAM <tt>' + ramStr + '</tt></span>';
+        ' · Bank <tt>' + bankSeconds + 's</tt> · RAM <tt>' + ramStr + '</tt>' +
+        cpuHtml + '</span>';
     };
 
     const renderMatchDetailHtml = (m, perspectiveSlug) => {
@@ -1234,6 +1239,10 @@ function buildBattlesScript(
         '<span>Bank: <tt>' + Math.round(side.bankSeconds) + 's</tt></span>' +
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
         Math.round(side.ram).toLocaleString('en-US') + ' MiB</tt></span>' +
+        ((typeof side.cpuCores === 'number' && side.cpuCores > 0)
+          ? '<span title="Host-measured CPU utilization (effective cores)"><tt>' +
+            side.cpuCores.toFixed(1) + '</tt> CPU</span>'
+          : '') +
         teamHtml +
         '</div></div>';
     };
@@ -1322,6 +1331,10 @@ function buildBattlesScript(
         '<span>Mean: <tt>' + Math.round(slotData.meanTurnMillis) + ' ms/turn</tt></span>' +
         '<span title="XNU ri_phys_footprint (14 GiB limit)">RAM: <tt>' +
         Math.round(slotData.ram).toLocaleString('en-US') + ' MiB</tt> (' + ramPct + '%)</span>' +
+        ((typeof slotData.cpuCores === 'number' && slotData.cpuCores > 0)
+          ? '<span title="Host-measured CPU utilization (effective cores)"><tt>' +
+            slotData.cpuCores.toFixed(1) + '</tt> CPU</span>'
+          : '') +
         teamHtml +
         '</div>' + aiHtml + '</div>';
     };
@@ -1444,10 +1457,13 @@ function buildBattlesScript(
       const reasons = (isFaultReason(g1.endReason) || isFaultReason(g2.endReason))
         ? ' · End: ' + g1.endReason + '/' + g2.endReason
         : '';
+      const cpuSuffix = (typeof m.p1.cpuCores === 'number' && typeof m.p2.cpuCores === 'number')
+        ? ' · ' + m.p1.cpuCores.toFixed(1) + '/' + m.p2.cpuCores.toFixed(1) + ' CPU'
+        : '';
       const tip = m.category + ' · ' + Math.round(m.p1.meanTurnMillis) + 'ms/' +
         Math.round(m.p2.meanTurnMillis) + 'ms · Bank ' + b1 + 's/' + b2 + 's · RAM ' +
         Math.round(m.p1.peakRam).toLocaleString('en-US') + 'M/' +
-        Math.round(m.p2.peakRam).toLocaleString('en-US') + 'M' + reasons;
+        Math.round(m.p2.peakRam).toLocaleString('en-US') + 'M' + cpuSuffix + reasons;
 
       const tr = document.createElement('tr');
       tr.id = m.id;
@@ -2895,7 +2911,8 @@ function renderLadderHtml(opts: {
                   >
                     <td><strong>{idx + 1}</strong></td>
                     <td>
-                      {renderAgentLink(e.agentName, href, true)} <code>{e.version}</code>
+                      {renderAgentLink(e.agentName, href, true)}{' '}
+                      <code>{e.version}</code>
                     </td>
                     <td className='num muted'>{util.formatUtcDate(e.submittedAt)}</td>
                   </tr>
@@ -3294,7 +3311,8 @@ function renderArenaHubHtml(opts: {
       const wHref = `/projects/${encodeURIComponent(w.slug)}/`;
       leaderCell = (
         <td>
-          {renderAgentLink(w.name, wHref, true)} <code>{w.version}</code>
+          {renderAgentLink(w.name, wHref, true)}{' '}
+          <code>{w.version}</code>
         </td>
       );
     } else {
@@ -3543,6 +3561,11 @@ function renderLiveGame1Side(
         <span title='XNU ri_phys_footprint (14 GiB limit)'>
           RAM: <tt>{ramText}</tt>
         </span>
+        {side.cpuCores !== undefined && side.cpuCores > 0 && (
+          <span title='Host-measured CPU utilization (effective cores)'>
+            <tt>{side.cpuCores.toFixed(1)}</tt> CPU
+          </span>
+        )}
         {renderTeamSpanNode(side.team)}
       </div>
     </div>
@@ -3659,6 +3682,11 @@ function renderLiveSlotCard(
         <span title='XNU ri_phys_footprint (14 GiB limit)'>
           RAM: <tt>{ramText}</tt> ({ramPct}%)
         </span>
+        {slotData.cpuCores !== undefined && slotData.cpuCores > 0 && (
+          <span title='Host-measured CPU utilization (effective cores)'>
+            <tt>{slotData.cpuCores.toFixed(1)}</tt> CPU
+          </span>
+        )}
         {renderTeamSpanNode(slotData.team)}
       </div>
       {(live.p1.info || live.p2.info) && (
@@ -3856,6 +3884,7 @@ export interface GamePlayerTelemetry {
   meanTurnMillis?: number;
   bankSeconds?: number;
   peakRam?: number;
+  cpuCores?: number;
   initMillis?: number;
   teamPreviewMillis?: number;
 }
@@ -3866,6 +3895,7 @@ export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Chil
   const ramStr = `${Math.round(p.peakRam ?? 0).toLocaleString('en-US')} MiB`;
   const hasInit = p.initMillis !== undefined;
   const hasTp = p.teamPreviewMillis !== undefined;
+  const hasCpu = p.cpuCores !== undefined && p.cpuCores > 0;
   return (
     <span>
       <tt>{meanMillis} ms/turn</tt>
@@ -3882,6 +3912,14 @@ export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Chil
         </>
       )}
       {' · '}Bank <tt>{bankSeconds}s</tt> · RAM <tt>{ramStr}</tt>
+      {hasCpu && (
+        <>
+          {' · '}
+          <span title='Host-measured CPU utilization (effective cores)'>
+            <tt>{p.cpuCores!.toFixed(1)}</tt> CPU
+          </span>
+        </>
+      )}
     </span>
   );
 }
@@ -4072,11 +4110,14 @@ function renderBattlesPage(opts: {
         isAbnormalEndReason(g1.endReason) || isAbnormalEndReason(g2.endReason)
           ? ` · End: ${g1.endReason}/${g2.endReason}`
           : '';
+      const cpuSuffix = m.p1.cpuCores !== undefined && m.p2.cpuCores !== undefined
+        ? ` · ${m.p1.cpuCores.toFixed(1)}/${m.p2.cpuCores.toFixed(1)} CPU`
+        : '';
       const tip =
         `${m.category} · ${Math.round(m.p1.meanTurnMillis)}ms/` +
         `${Math.round(m.p2.meanTurnMillis)}ms · Bank ${b1}s/${b2}s · RAM ` +
         `${Math.round(m.p1.peakRam).toLocaleString('en-US')}M/` +
-        `${Math.round(m.p2.peakRam).toLocaleString('en-US')}M${reasonSuffix}`;
+        `${Math.round(m.p2.peakRam).toLocaleString('en-US')}M${cpuSuffix}${reasonSuffix}`;
 
       const rel = formatRelativeTime(nowSec, m.completedAt);
       const detailHtml = battleInlineDetailHtml(m);

@@ -46,6 +46,10 @@ export interface CompletedMatchPayload {
   p1Game2TeamPreviewMillis?: number;
   p2Game1TeamPreviewMillis?: number;
   p2Game2TeamPreviewMillis?: number;
+  p1Game1CpuCores?: number;
+  p1Game2CpuCores?: number;
+  p2Game1CpuCores?: number;
+  p2Game2CpuCores?: number;
   p1CpuCores?: number;
   p2CpuCores?: number;
   p1Errors?: {
@@ -78,6 +82,7 @@ export interface RecentMatchPlayer {
   teamPreviewMillis?: number;
   meanTurnMillis: number;
   peakRam: number;
+  cpuCores?: number;
 }
 
 export interface RecentMatchGameStats {
@@ -86,6 +91,7 @@ export interface RecentMatchGameStats {
   meanTurnMillis: number;
   bankSeconds: number;
   peakRam: number;
+  cpuCores?: number;
 }
 
 export interface RecentMatchGame {
@@ -181,14 +187,30 @@ function resolvePayloadSideTelemetry(m: CompletedMatchPayload, side: 'p1' | 'p2'
   const g2Tp = side === 'p1' ? m.p1Game2TeamPreviewMillis : m.p2Game2TeamPreviewMillis;
   const g1Turn = side === 'p1' ? m.p1Game1MeanTurnMillis : m.p2Game1MeanTurnMillis;
   const g2Turn = side === 'p1' ? m.p1Game2MeanTurnMillis : m.p2Game2MeanTurnMillis;
+  const fallbackCpu = side === 'p1' ? m.p1CpuCores : m.p2CpuCores;
+  const g1Cpu = (side === 'p1' ? m.p1Game1CpuCores : m.p2Game1CpuCores) ?? fallbackCpu;
+  const g2Cpu = (side === 'p1' ? m.p1Game2CpuCores : m.p2Game2CpuCores) ?? fallbackCpu;
   return {
-    g1: {ram: g1Ram, initMillis: g1Init, teamPreviewMillis: g1Tp, meanTurnMillis: g1Turn},
-    g2: {ram: g2Ram, initMillis: g2Init, teamPreviewMillis: g2Tp, meanTurnMillis: g2Turn},
+    g1: {
+      ram: g1Ram,
+      initMillis: g1Init,
+      teamPreviewMillis: g1Tp,
+      meanTurnMillis: g1Turn,
+      cpuCores: g1Cpu,
+    },
+    g2: {
+      ram: g2Ram,
+      initMillis: g2Init,
+      teamPreviewMillis: g2Tp,
+      meanTurnMillis: g2Turn,
+      cpuCores: g2Cpu,
+    },
     peakRam: Math.max(g1Ram, g2Ram),
     meanRam: (g1Ram + g2Ram) / 2,
     initMillis: Math.round((g1Init + g2Init) / 2),
     teamPreviewMillis: meanOptional(g1Tp, g2Tp),
     meanTurnMillis: Math.round((g1Turn + g2Turn) / 2),
+    cpuCores: meanOptional(g1Cpu, g2Cpu),
   };
 }
 
@@ -248,11 +270,13 @@ export function recordCompletedMatch(
         p2_game1_team_preview_millis, p2_game2_team_preview_millis,
         p1_game1_mean_turn_millis, p1_game2_mean_turn_millis,
         p2_game1_mean_turn_millis, p2_game2_mean_turn_millis,
+        p1_game1_cpu_cores, p1_game2_cpu_cores,
+        p2_game1_cpu_cores, p2_game2_cpu_cores,
         completed_at
       )
       VALUES (
         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `).run(
       m.id,
@@ -289,6 +313,10 @@ export function recordCompletedMatch(
       p1.g2.meanTurnMillis,
       p2.g1.meanTurnMillis,
       p2.g2.meanTurnMillis,
+      p1.g1.cpuCores ?? null,
+      p1.g2.cpuCores ?? null,
+      p2.g1.cpuCores ?? null,
+      p2.g2.cpuCores ?? null,
       m.completedAt
     );
 
@@ -452,7 +480,7 @@ export function recordCompletedMatch(
       meanTurnMillis: p1.meanTurnMillis,
       meanRam: p1.meanRam,
       peakRam: p1.peakRam,
-      cpuCores: m.p1CpuCores,
+      cpuCores: p1.cpuCores,
       faults: countSideFaults(
         m.game1Outcome === 'L',
         m.game2Outcome === 'L',
@@ -470,7 +498,7 @@ export function recordCompletedMatch(
       meanTurnMillis: p2.meanTurnMillis,
       meanRam: p2.meanRam,
       peakRam: p2.peakRam,
-      cpuCores: m.p2CpuCores,
+      cpuCores: p2.cpuCores,
       faults: countSideFaults(
         m.game1Outcome === 'W',
         m.game2Outcome === 'W',
@@ -516,12 +544,16 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
   const readGameSide = (side: 'p1' | 'p2', game: 1 | 2) => {
     const prefix = `${side}_game${game}`;
     const teamPreviewMillis = (r[`${prefix}_team_preview_millis`] as number | null) ?? undefined;
+    const cpuCores = (r[`${prefix}_cpu_cores`] as number | null) ?? undefined;
     return {
       initMillis: r[`${prefix}_init_millis`] as number,
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       meanTurnMillis: r[`${prefix}_mean_turn_millis`] as number,
       bankSeconds: r[`${prefix}_bank_seconds`] as number,
       peakRam: r[`${prefix}_peak_ram`] as number,
+      ...(cpuCores !== undefined && cpuCores > 0
+        ? {cpuCores: Math.round(cpuCores * 10) / 10}
+        : {}),
     };
   };
   const g1P1 = readGameSide('p1', 1);
@@ -530,6 +562,8 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
   const g2P2 = readGameSide('p2', 2);
   const p1TeamPreviewMillis = meanOptional(g1P1.teamPreviewMillis, g2P1.teamPreviewMillis);
   const p2TeamPreviewMillis = meanOptional(g1P2.teamPreviewMillis, g2P2.teamPreviewMillis);
+  const p1CpuCores = meanOptional(g1P1.cpuCores, g2P1.cpuCores);
+  const p2CpuCores = meanOptional(g1P2.cpuCores, g2P2.cpuCores);
   const p1TeamLabel = (r.p1_team_label as string | null) ?? undefined;
   const p2TeamLabel = (r.p2_team_label as string | null) ?? undefined;
   return {
@@ -553,6 +587,7 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
         : {}),
       meanTurnMillis: Math.round((g1P1.meanTurnMillis + g2P1.meanTurnMillis) / 2),
       peakRam: Math.max(g1P1.peakRam, g2P1.peakRam),
+      ...(p1CpuCores !== undefined ? {cpuCores: Math.round(p1CpuCores * 10) / 10} : {}),
     },
     p2: {
       slug: r.p2_slug as string,
@@ -565,6 +600,7 @@ function mapRecentMatchRow(r: Record<string, unknown>): RecentMatchView {
         : {}),
       meanTurnMillis: Math.round((g1P2.meanTurnMillis + g2P2.meanTurnMillis) / 2),
       peakRam: Math.max(g1P2.peakRam, g2P2.peakRam),
+      ...(p2CpuCores !== undefined ? {cpuCores: Math.round(p2CpuCores * 10) / 10} : {}),
     },
     games: [
       {
@@ -633,6 +669,10 @@ const RECENT_MATCH_SELECT_SQL = `
     m.p1_game2_peak_ram,
     m.p2_game1_peak_ram,
     m.p2_game2_peak_ram,
+    m.p1_game1_cpu_cores,
+    m.p1_game2_cpu_cores,
+    m.p2_game1_cpu_cores,
+    m.p2_game2_cpu_cores,
     m.completed_at
   FROM matches m
   JOIN ladders l ON l.id = m.ladder_id

@@ -875,6 +875,7 @@ describe('project de-registration', () => {
     const db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
+    forceLadderActive(db, 'gen1ou20261109');
     const meta = db.getAgentBySlug('metamon')!;
     const fp = db.getAgentBySlug('foul-play')!;
     const sha = 'a'.repeat(64);
@@ -896,8 +897,34 @@ describe('project de-registration', () => {
       ladderIds: ['gen1ou20261109'],
       now: DAY_1,
     });
-    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: DAY_1 + 10});
-    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: DAY_1 + 10});
+    db.applySubmissionStatus({
+      versionId: v1.id,
+      smokeStatus: 'passed',
+      diagnostics: [{
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        turns: 10,
+        endReason: 'win',
+        durationMillis: 1500,
+        battleLog: '|turn|1\n|ai|p1|{"win":0.5}\n|win|Metamon',
+        supportsInfo: true,
+      }],
+      now: DAY_1 + 10,
+    });
+    db.applySubmissionStatus({
+      versionId: v2.id,
+      smokeStatus: 'passed',
+      diagnostics: [{
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        turns: 10,
+        endReason: 'win',
+        durationMillis: 1500,
+        battleLog: '|turn|1\n|win|Foul Play',
+        supportsInfo: false,
+      }],
+      now: DAY_1 + 10,
+    });
     db.recordCompletedMatch({
       match: {
         id: 'gen1ou-0000001',
@@ -926,6 +953,10 @@ describe('project de-registration', () => {
         p2Game2MeanTurnMillis: 45,
         p1CpuCores: 6.4,
         p2CpuCores: 1.2,
+        p1Game1CpuCores: 6.1,
+        p1Game2CpuCores: 6.7,
+        p2Game1CpuCores: 1.1,
+        p2Game2CpuCores: 1.3,
         p1Errors: {
           invalidCantMove: 2,
           invalidCantSwitch: 1,
@@ -936,17 +967,88 @@ describe('project de-registration', () => {
         completedAt: DAY_1 + 100,
       },
     });
+    db.db.prepare(
+      'UPDATE ladder_entries SET rank_current = 1, matches = 10, se = 40, settled_at = ? ' +
+      'WHERE version_id = ?'
+    ).run(DAY_1 + 100, v1.id);
     const h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
     try {
       const html = await h.getText('/projects/metamon/');
       expect(html).toContain('>CPU<');
       expect(html).not.toContain('>Faults<');
-      expect(html).toContain('6.4c');
+      expect(html).toContain('6.4 CPU');
+      expect(html).toContain('>6.4<');
+      expect(html).not.toContain('6.4c');
       expect(html).toContain('>Game Faults<');
       expect(html).toContain('>Protocol Errors<');
-      expect(html).toContain('>Invalid-choice forfeits<');
+      expect(html).toContain('>Invalid choice<');
+      expect(html).not.toContain('>Invalid-choice forfeits<');
       expect(html).toContain('>Can&#39;t move<');
       expect(html).toContain('>Unavailable choices (info)<');
+      expect(html).toContain('class="info-dot yes"');
+      expect(html).not.toContain('class="info-dot muted"');
+      expect(html).toContain('<tt>6.1</tt> CPU');
+      expect(html).toContain('<tt>6.7</tt> CPU');
+
+      const fpHtml = await h.getText('/projects/foul-play/');
+      expect(fpHtml).toContain('class="info-dot muted"');
+      expect(fpHtml).not.toContain('class="info-dot yes"');
+
+      const ladderHtml = await h.getText('/arena/ladders/rby/');
+      expect(ladderHtml).not.toContain('class="info-dot');
+
+      const hubHtml = await h.getText('/arena/');
+      expect(hubHtml).not.toContain('class="info-dot');
+
+      h.arenaHandle.setLiveState({
+        stale: false,
+        updatedAt: NOW,
+        live: {
+          heartbeatSeq: 1,
+          matchId: 'gen1ou-0000002',
+          ladderId: 'gen1ou20261109',
+          slot: 'rby',
+          format: 'gen1ou',
+          game: 2,
+          turn: 12,
+          activeSlot: 'p1',
+          turnStartedAt: NOW - 2,
+          turnBudgetSeconds: 60,
+          incrementSeconds: 10,
+          game1Summary: {
+            winnerSlot: 'p1',
+            turns: 20,
+            endReason: 'win',
+            p1: {bankSeconds: 110, meanTurnMillis: 55, ram: 512, cpuCores: 3.1},
+            p2: {bankSeconds: 120, meanTurnMillis: 42, ram: 256, cpuCores: 1.4},
+          },
+          p1: {
+            slug: 'metamon',
+            name: 'Metamon',
+            version: '1.0.0',
+            bankSeconds: 105,
+            lastTurnMillis: 48,
+            meanTurnMillis: 50,
+            ram: 600,
+            cpuCores: 2.9,
+          },
+          p2: {
+            slug: 'foul-play',
+            name: 'Foul Play',
+            version: '1.0.0',
+            bankSeconds: 115,
+            lastTurnMillis: 40,
+            meanTurnMillis: 42,
+            ram: 280,
+            cpuCores: 1.5,
+          },
+        },
+      });
+      const battlesHtml = await h.getText('/arena/battles/');
+      expect(battlesHtml).toContain('<tt>2.9</tt> CPU');
+      expect(battlesHtml).toContain('<tt>3.1</tt> CPU');
+      expect(battlesHtml).toContain('<tt>6.1</tt> CPU');
+      expect(battlesHtml).not.toContain('class="info-dot');
 
       const json = await h.getJson<{
         ladders: Array<{

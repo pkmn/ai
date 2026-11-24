@@ -94,6 +94,7 @@ export interface AgentLadderProfileEntry {
   ladderId: string;
   versionId: number;
   version: string;
+  supportsInfo?: boolean;
   package: 'bundle' | 'oci';
   unpackedBytes?: number;
   submittedAt: number;
@@ -389,7 +390,16 @@ export function getAgentLadderProfileEntries(
       le.invalid_target,
       le.invalid_other,
       le.unavailable_choices,
-      le.settled_at
+      le.settled_at,
+      CASE
+        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
+          THEN (
+            SELECT MAX(sd.supports_info)
+            FROM smoke_diagnostics sd
+            WHERE sd.version_id = le.version_id
+          )
+        ELSE NULL
+      END AS supports_info
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     WHERE av.agent_id = ?
@@ -460,6 +470,9 @@ export function getAgentLadderProfileEntries(
     invalidOther: r.invalid_other as number,
     unavailableChoices: r.unavailable_choices as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
+    ...(r.supports_info === null || r.supports_info === undefined
+      ? {}
+      : {supportsInfo: Number(r.supports_info) === 1}),
   }));
 }
 

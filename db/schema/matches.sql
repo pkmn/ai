@@ -68,7 +68,12 @@ CREATE TABLE IF NOT EXISTS matches (
   p2_game1_mean_turn_millis REAL NOT NULL,
   p2_game2_mean_turn_millis REAL NOT NULL,
   -- Unix timestamp (seconds) when Game 2 finished.
-  completed_at INTEGER NOT NULL
+  completed_at INTEGER NOT NULL,
+  -- Mean host-measured CPU utilization (effective cores) in Game 1 and Game 2, or NULL when unavailable.
+  p1_game1_cpu_cores REAL,
+  p1_game2_cpu_cores REAL,
+  p2_game1_cpu_cores REAL,
+  p2_game2_cpu_cores REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_matches_ladder_completed

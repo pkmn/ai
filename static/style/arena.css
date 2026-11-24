@@ -622,6 +622,14 @@ table.matrix td.diag {
   user-select: none;
 }
 
+.info-dot {
+  display: inline-block;
+  margin-left: 0.45ch;
+  font-size: 0.72em;
+  line-height: 1;
+  vertical-align: 0.08em;
+}
+
 tr.battle-row.expanded .battle-toggle {
   color: var(--fg-accent-color);
   transform: rotate(90deg);
@@ -694,6 +702,10 @@ tr.battle-row.expanded .battle-toggle {
   align-items: baseline;
   justify-content: space-between;
   padding: 0.2rem 0;
+}
+
+.battle-detail-line tt {
+  white-space: nowrap;
 }
 
 .battle-detail-line + .battle-detail-line {

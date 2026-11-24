@@ -128,6 +128,7 @@ export interface LiveSlot {
   lastTurnMillis: number;
   meanTurnMillis: number;
   ram: number;
+  cpuCores?: number;
   team?: string;
   pokemon?: PokemonHealth[];
   info?: PublicAgentInfo;
@@ -139,6 +140,7 @@ export interface LiveGameSummarySide {
   teamPreviewMillis?: number;
   meanTurnMillis: number;
   ram: number;
+  cpuCores?: number;
   team?: string;
   pokemon?: PokemonHealth[];
 }

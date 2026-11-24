@@ -307,6 +307,29 @@ export async function parseJsonResponse<T>(res: Response, label: string): Promis
 
 export const TABLE_PAGE_SIZE = 25;
 
+export function renderInfoDot(supportsInfo?: boolean): Child {
+  if (supportsInfo === undefined) return undefined;
+  return supportsInfo
+    ? (
+      <span
+        className='info-dot yes'
+        title='Emits valid /info search telemetry'
+        aria-label='Supports /info telemetry'
+      >
+        {'\u25cf'}
+      </span>
+    )
+    : (
+      <span
+        className='info-dot muted'
+        title='No valid /info search telemetry emitted'
+        aria-label='Does not emit /info telemetry'
+      >
+        {'\u25cb\ufe0e'}
+      </span>
+    );
+}
+
 export interface TablePagerProps {
   id?: string;
   label: string;

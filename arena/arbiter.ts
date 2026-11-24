@@ -31,6 +31,7 @@ export interface AgentLaunchSpec {
 export interface TurnSlotInfo {
   bankSeconds: number;
   ram: number;
+  cpuCores?: number;
   initMillis?: number;
   teamPreviewMillis?: number;
   lastTurnMillis: number;
@@ -962,6 +963,23 @@ export class TimeSlicedArenaGame {
     }
   }
 
+  private computeCpuCores(
+    player: SandboxedPlayer
+  ): {cpuMillis?: number; cpuCores?: number} {
+    const cpuMillis = this.readCpuMillis(player);
+    const activeWallMillis =
+      player.telemetry.initMillis +
+      player.telemetry.totalTeamPreviewMillis +
+      player.telemetry.totalTurnDecisionMillis;
+    const cpuCores = cpuMillis !== undefined && activeWallMillis > 0
+      ? Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10)
+      : undefined;
+    return {
+      ...(cpuMillis !== undefined ? {cpuMillis} : {}),
+      ...(cpuCores !== undefined && cpuCores > 0 ? {cpuCores} : {}),
+    };
+  }
+
   private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
@@ -969,12 +987,14 @@ export class TimeSlicedArenaGame {
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
+    const {cpuCores} = this.computeCpuCores(player);
     return {
       bankSeconds: Math.max(
         0,
         Math.round(Math.min(player.turn.bankMillis, this.timers.startingBankMillis) / 1000)
       ),
       ram: this.readPeakRam(player),
+      ...(cpuCores !== undefined ? {cpuCores} : {}),
       initMillis: Math.round(player.telemetry.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
@@ -993,14 +1013,7 @@ export class TimeSlicedArenaGame {
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0
       ? Math.round(player.telemetry.totalTeamPreviewMillis / player.telemetry.teamPreviewCount)
       : undefined;
-    const cpuMillis = this.readCpuMillis(player);
-    const activeWallMillis =
-      player.telemetry.initMillis +
-      player.telemetry.totalTeamPreviewMillis +
-      player.telemetry.totalTurnDecisionMillis;
-    const cpuCores = cpuMillis !== undefined && activeWallMillis > 0
-      ? Math.min(10, Math.round((cpuMillis / activeWallMillis) * 10) / 10)
-      : undefined;
+    const {cpuMillis, cpuCores} = this.computeCpuCores(player);
     return {
       bankSeconds: Math.max(
         0,
@@ -1008,7 +1021,7 @@ export class TimeSlicedArenaGame {
       ),
       peakRam: this.readPeakRam(player),
       ...(cpuMillis !== undefined ? {cpuMillis} : {}),
-      ...(cpuCores !== undefined && cpuCores > 0 ? {cpuCores} : {}),
+      ...(cpuCores !== undefined ? {cpuCores} : {}),
       initMillis: Math.round(player.telemetry.initMillis),
       ...(teamPreviewMillis !== undefined ? {teamPreviewMillis} : {}),
       meanTurnMillis: player.telemetry.turnDecisionCount > 0

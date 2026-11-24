@@ -219,7 +219,7 @@ function buildVersionDynamicStats(
         ({initMillis} ms init{hasTp && ` · ${Math.round(entry.meanTeamPreviewMillis!)} ms preview`})
       </span>
       {' · '}RAM {meanRamText} MiB
-      {hasCpu && <>{' · '}CPU {entry.meanCpuCores.toFixed(1)}c</>}
+      {hasCpu && <>{' · '}{entry.meanCpuCores.toFixed(1)} CPU</>}
     </>
   );
 
@@ -620,7 +620,7 @@ function renderVersionsPane(opts: {
               const meanRamText = `${Math.round(e.meanRam).toLocaleString('en-US')} MiB`;
               const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
               const cpuText = e.cpuMatches > 0 && e.meanCpuCores > 0
-                ? `${e.meanCpuCores.toFixed(1)}c`
+                ? e.meanCpuCores.toFixed(1)
                 : '—';
               const totalFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
               const invalidTotal =
@@ -640,6 +640,7 @@ function renderVersionsPane(opts: {
                     {isPrimary
                       ? <code><strong>{e.version}</strong></code>
                       : <code>{e.version}</code>}
+                    {util.renderInfoDot(e.supportsInfo)}
                     {isRetired && <> <span className='muted'>(retired)</span></>}
                   </td>
                   <td className='num'>
@@ -682,7 +683,7 @@ function renderVersionsPane(opts: {
                             <span>{renderCount(e.ooms)}</span>
                           </div>
                           <div className='battle-detail-line'>
-                            <span className='muted'>Invalid-choice forfeits</span>
+                            <span className='muted'>Invalid choice</span>
                             <span>{renderCount(e.invalidChoices)}</span>
                           </div>
                         </div>

@@ -2587,6 +2587,7 @@ export class Runner {
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
           ram: p1Ram,
+          cpuCores: p1Cpu,
           ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
         },
         p2: {
@@ -2597,6 +2598,7 @@ export class Runner {
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
           ram: p2Ram,
+          cpuCores: p2Cpu,
           ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
         },
       });
@@ -2634,6 +2636,7 @@ export class Runner {
               : {}),
             meanTurnMillis: p1TurnMillis,
             ram: p1Ram,
+            cpuCores: p1Cpu,
             ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
           },
           p2: {
@@ -2644,6 +2647,7 @@ export class Runner {
               : {}),
             meanTurnMillis: p2TurnMillis,
             ram: p2Ram,
+            cpuCores: p2Cpu,
             ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
           },
           viewer: {
@@ -2659,6 +2663,7 @@ export class Runner {
           lastTurnMillis: p1TurnMillis,
           meanTurnMillis: p1TurnMillis,
           ram: p1Ram,
+          cpuCores: p1Cpu,
           ...(p2TeamLabel ? {team: p2TeamLabel} : {}),
         },
         p2: {
@@ -2669,11 +2674,13 @@ export class Runner {
           lastTurnMillis: p2TurnMillis,
           meanTurnMillis: p2TurnMillis,
           ram: p2Ram,
+          cpuCores: p2Cpu,
           ...(p1TeamLabel ? {team: p1TeamLabel} : {}),
         },
       });
     }
 
+    const cpuDelta = ((this.state.matchSeq % 3) - 1) * 0.1;
     const matchPayload: db.CompletedMatchPayload = {
       id: matchId,
       ladderId: ladder.id,
@@ -2719,6 +2726,10 @@ export class Runner {
       p2Game2MeanTurnMillis: Math.max(10, p2TurnMillis - 6 + (this.state.matchSeq % 7)),
       p1CpuCores: p1Cpu,
       p2CpuCores: p2Cpu,
+      p1Game1CpuCores: Math.max(0.1, Math.round((p1Cpu + cpuDelta) * 10) / 10),
+      p1Game2CpuCores: Math.max(0.1, Math.round((p1Cpu - cpuDelta) * 10) / 10),
+      p2Game1CpuCores: Math.max(0.1, Math.round((p2Cpu - cpuDelta) * 10) / 10),
+      p2Game2CpuCores: Math.max(0.1, Math.round((p2Cpu + cpuDelta) * 10) / 10),
       ...(p1CantMove > 0 || p1Target > 0 || p1Unavail > 0
         ? {
           p1Errors: {
@@ -3308,6 +3319,7 @@ export class Runner {
                   : {}),
                 meanTurnMillis: 268,
                 ram: Math.max(64, p1Ram - 32),
+                cpuCores: 2.8,
                 ...(p2Team ? {team: p2Team} : {}),
                 pokemon: buildFinishedPokemon(
                   g1Winner === 'p1' ? 'win' : g1Winner === 'p2' ? 'loss' : 'tie'
@@ -3321,6 +3333,7 @@ export class Runner {
                   : {}),
                 meanTurnMillis: 304,
                 ram: Math.max(64, p2Ram - 64),
+                cpuCores: 3.4,
                 ...(p1Team ? {team: p1Team} : {}),
                 pokemon: buildFinishedPokemon(
                   g1Winner === 'p2' ? 'win' : g1Winner === 'p1' ? 'loss' : 'tie'
@@ -3352,6 +3365,7 @@ export class Runner {
           lastTurnMillis: 290,
           meanTurnMillis: 280,
           ram: p1Ram,
+          cpuCores: 2.9,
           ...(p1Team ? {team: p1Team} : {}),
           ...(ladder.team !== 'random' ? {pokemon: buildLivePokemon('p1')} : {}),
         },
@@ -3363,6 +3377,7 @@ export class Runner {
           lastTurnMillis: 340,
           meanTurnMillis: 315,
           ram: p2Ram,
+          cpuCores: 3.5,
           ...(p2Team ? {team: p2Team} : {}),
           ...(ladder.team !== 'random' ? {pokemon: buildLivePokemon('p2')} : {}),
         },

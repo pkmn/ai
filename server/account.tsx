@@ -902,26 +902,7 @@ function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
 }
 
 function renderInfoSupportDot(supportsInfo?: boolean): util.Child {
-  if (supportsInfo === undefined) return undefined;
-  return supportsInfo
-    ? (
-      <span
-        className='info-dot yes'
-        title='Emits valid /info search telemetry'
-        aria-label='Supports /info telemetry'
-      >
-        {'\u25cf'}
-      </span>
-    )
-    : (
-      <span
-        className='info-dot muted'
-        title='No valid /info search telemetry emitted'
-        aria-label='Does not emit /info telemetry'
-      >
-        {'\u25cb\ufe0e'}
-      </span>
-    );
+  return util.renderInfoDot(supportsInfo);
 }
 
 function diagnosticTargetLabel(

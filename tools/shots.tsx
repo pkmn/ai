@@ -814,6 +814,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 0,
               meanTurnMillis: 0,
               ram: 790,
+              cpuCores: 2.1,
               team: base.p2.team,
               pokemon: previewHealth.p1,
             },
@@ -823,6 +824,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 0,
               meanTurnMillis: 0,
               ram: 1810,
+              cpuCores: 3.8,
               team: base.p1.team,
               pokemon: previewHealth.p2,
             },
@@ -861,6 +863,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 265,
               meanTurnMillis: 262,
               ram: 840,
+              cpuCores: 2.9,
               team: base.p2.team,
               pokemon: [
                 {percent: 98, color: 'green'},
@@ -875,6 +878,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 310,
               meanTurnMillis: 298,
               ram: 1860,
+              cpuCores: 4.1,
               team: base.p1.team,
               pokemon: [
                 {percent: 0, color: 'fainted'},
@@ -921,6 +925,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
                 teamPreviewMillis: 520,
                 meanTurnMillis: 3420,
                 ram: 1120,
+                cpuCores: 3.1,
                 pokemon: [
                   {percent: 29, color: 'yellow'},
                   {percent: 0, color: 'fainted'},
@@ -936,6 +941,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
                 teamPreviewMillis: 390,
                 meanTurnMillis: 410,
                 ram: 940,
+                cpuCores: 2.3,
                 pokemon: [
                   {percent: 50, color: 'yellow'},
                   {percent: 0, color: 'fainted'},
@@ -954,6 +960,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 390,
               meanTurnMillis: 415,
               ram: 1090,
+              cpuCores: 2.9,
               pokemon: [
                 {percent: 24, color: 'yellow'},
                 {percent: 100, color: 'green'},
@@ -971,6 +978,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 360,
               meanTurnMillis: 375,
               ram: 920,
+              cpuCores: 2.2,
               pokemon: [
                 {percent: 45, color: 'yellow'},
                 {percent: 0, color: 'fainted'},
@@ -1084,6 +1092,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 260,
               meanTurnMillis: 255,
               ram: 980,
+              cpuCores: 3.4,
               info: {win: 0.634, depth: 6, seldepth: 14, nodes: 142000, nps: 95000},
             },
             p2: {
@@ -1094,6 +1103,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
               lastTurnMillis: 290,
               meanTurnMillis: 280,
               ram: 820,
+              cpuCores: 1.9,
               info: {win: 0.412, nodes: 31500, nps: 52000},
             },
             winHistory: [
