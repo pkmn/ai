@@ -557,7 +557,8 @@ describe('account routes', () => {
       expect(preHtml).toContain('<label>Target<span class="req">*</span></label>');
       expect(preHtml).toContain('placeholder="1.0.0"');
       expect(preHtml).toContain(
-        'placeholder="One-time header for private releases (scrubbed immediately after fetch)"'
+        'placeholder="Private release/registry header ' +
+          '(scrubbed after ladder fetch; keep valid through tournament)"'
       );
       expect(preHtml).toContain(
         'Paste up to 20 teams (one packed team per line or exportable with '

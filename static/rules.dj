@@ -60,8 +60,9 @@ submit an agent with:
   - *`artifact_url`*: direct HTTPS URL to a `.tar.gz`/`.tar.xz`/`.tar.zst` bundle _or_ an OCI
     container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
   - *`sha256`*: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
-  - *`auth_header`* (_optional_): read-only bearer token / header used once by the arena to pull
-    private artifacts.
+  - *`auth_header`* (_optional_): read-only bearer token / header used to pull private artifacts
+    (used once during ladder diagnostic fetch and scrubbed immediately afterward; for tournaments,
+    both the OCI image and any auth token must remain valid until the tournament completes).
   - *`ladders`* / *`tournaments`*: non-empty subsets of the ladders or tournaments to enter your
     agent in.
 
@@ -131,17 +132,17 @@ turn passes). While running, the submitting project can watch live `/info` stats
 viewer privately on [account](/account); afterward, the full replay (with `/info` telemetry and an
 indicator of whether valid `/info` output was detected) and up to 64 KiB of `stderr` per side
 (16 KiB head + 48 KiB tail, including pre-`/ready` output; excess is truncated without failing) are
-available privately on [account](/account). Diagnostic artifacts are deleted immediately after the
-run and never saved or archived on disk. Passing transitions the build to *staged* rather than
-entering matchmaking automatically: the developer reviews the replay and `stderr` log and explicitly
-clicks *Activate* (pulling and archiving the final artifact, reserving the version string, entering
-the ladder/tournament, and starting the 14-day ladder cooldown) or *Discard* (leaving ladders
-untouched, freeing the version string for reuse, and restoring any staged VGC team paste back to
-saved). Neither failed nor discarded diagnostic tests trigger the 14-day cooldown, but
-each project is limited to at most *3 failed or discarded diagnostic tests per 24 hours* (tracked
-separately for ladders and tournaments). If 2 versions are already active on a ladder when a new
-version is activated, the weaker is automatically retired, leaving the *strongest version and the
-latest submission*.
+available privately on [account](/account). Failed diagnostic artifacts are deleted immediately and
+never archived. Passing transitions the build to *staged* (held locally on the ladder runner,
+unarchived) rather than entering matchmaking automatically: the developer reviews the replay and
+`stderr` log and explicitly clicks *Activate* (archiving the artifact, reserving the version string,
+entering the ladder/tournament, and starting the 14-day ladder cooldown) or *Discard* (deleting the
+staged build, leaving ladders untouched, freeing the version string for reuse, and restoring any
+staged VGC team paste back to saved). Neither failed nor discarded diagnostic tests trigger the
+14-day cooldown, but each project is limited to at most *3 failed or discarded diagnostic tests per
+24 hours* (tracked separately for ladders and tournaments). If 2 versions are already active on a
+ladder when a new version is activated, the weaker is automatically retired, leaving the *strongest
+version and the latest submission*.
 
 ### Format
 

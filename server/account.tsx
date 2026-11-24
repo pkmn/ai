@@ -1135,9 +1135,9 @@ function renderStagedSection(opts: {
             </div>
             <div className='staged-meta muted'>
               Review the diagnostic replay and <tt>STDERR</tt> log in History below before putting
-              this version live. Activating saves and archives the artifact and starts the 14-day
-              ladder cooldown; discarding frees the version label and counts toward the 3-per-24h
-              retry limit.
+              this version live. Activating archives the artifact and starts the 14-day ladder
+              cooldown; discarding deletes the staged build, frees the version label, and counts
+              toward the 3-per-24h retry limit.
             </div>
             {renderDiagnosticLinks(v.diagnostics, opts.ladderNameById)}
             <div className='staged-feedback hide' />
@@ -1580,7 +1580,8 @@ export function renderAccountPage(opts: {
                 type='password'
                 autocomplete='off'
                 placeholder={
-                  'One-time header for private releases (scrubbed immediately after fetch)'
+                  'Private release/registry header ' +
+                  '(scrubbed after ladder fetch; keep valid through tournament)'
                 }
               />
 
