@@ -45,8 +45,33 @@ export interface Config {
 // other provider's claim.
 export interface Session {
   github?: {id: number; login: string};
-  discord?: {id: string; username: string};
+  discord?: {id: string; username: string; avatar?: string};
   exp: number;
+}
+
+export interface Profile {
+  authenticated: boolean;
+  username?: string;
+  avatarUrl?: string;
+}
+
+export function githubAvatarUrl(githubId: number): string {
+  return `https://avatars.githubusercontent.com/u/${githubId}?s=64`;
+}
+
+export function sanitizeDiscordAvatarHash(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return /^(?:a_)?[0-9a-f]{1,64}$/i.test(trimmed) ? trimmed : undefined;
+}
+
+export function discordAvatarUrl(discordId: string, avatar?: string): string {
+  const hash = sanitizeDiscordAvatarHash(avatar);
+  if (hash) {
+    return `https://cdn.discordapp.com/avatars/${discordId}/${hash}.png?size=64`;
+  }
+  const index = Number((BigInt(discordId) >> 22n) % 6n);
+  return `https://cdn.discordapp.com/embed/avatars/${index}.png`;
 }
 
 interface OAuthStatePayload {
@@ -340,6 +365,30 @@ export class Auth {
     return this.isDiscordGuildMember(session.discord.id) ? 'authorized' : 'forbidden';
   }
 
+  getProfile(req: http.IncomingMessage): Profile {
+    const session = this.getSession(req);
+    if (!session?.github && !session?.discord) {
+      return {authenticated: false};
+    }
+    const ghLogin = this.getGitHubUser(req);
+    if (ghLogin && session.github) {
+      const githubId = this.db?.getDeveloperByGitHub(ghLogin)?.githubId ?? session.github.id;
+      return {
+        authenticated: true,
+        username: ghLogin,
+        ...(githubId > 0 ? {avatarUrl: githubAvatarUrl(githubId)} : {}),
+      };
+    }
+    if (session.discord && /^\d+$/.test(session.discord.id)) {
+      return {
+        authenticated: true,
+        username: session.discord.username,
+        avatarUrl: discordAvatarUrl(session.discord.id, session.discord.avatar),
+      };
+    }
+    return {authenticated: false};
+  }
+
   issueSessionCookie(session: Omit<Session, 'exp'>): string {
     const cfg = this.getConfig();
     if (!cfg) throw new Error('SESSION_SECRET is not configured');
@@ -371,6 +420,7 @@ export class Auth {
 
         const github = typeof req.query.github === 'string' ? req.query.github.trim() : '';
         const discord = typeof req.query.discord === 'string' ? req.query.discord.trim() : '';
+        const avatar = sanitizeDiscordAvatarHash(req.query.avatar);
         const username = typeof req.query.username === 'string' && req.query.username.trim()
           ? req.query.username.trim()
           : (github || 'dev');
@@ -410,7 +460,7 @@ export class Auth {
             ? {github: {id: devRow?.githubId ?? 1, login: github}}
             : existing?.github ? {github: existing.github} : {}),
           ...(discord
-            ? {discord: {id: discord, username}}
+            ? {discord: {id: discord, username, ...(avatar ? {avatar} : {})}}
             : existing?.discord ? {discord: existing.discord} : {}),
         });
         redirect(res, returnTo, 302, [cookie]);
@@ -637,10 +687,15 @@ export class Auth {
           signal: AbortSignal.timeout(15_000),
         });
         if (!userRes.ok) throw new Error(`Discord user fetch failed (${userRes.status})`);
-        const userData = await userRes.json() as {id?: string; username?: string};
+        const userData = await userRes.json() as {
+          id?: string;
+          username?: string;
+          avatar?: string | null;
+        };
         if (!userData.id || !/^\d+$/.test(userData.id) || !userData.username) {
           throw new Error('Invalid user profile returned by Discord');
         }
+        const avatar = sanitizeDiscordAvatarHash(userData.avatar);
 
         const existing = this.getSession(req);
         if (saved.intent === 'link') {
@@ -665,7 +720,11 @@ export class Auth {
 
         const sessionCookie = this.issueSessionCookie({
           ...(existing?.github ? {github: existing.github} : {}),
-          discord: {id: userData.id, username: userData.username},
+          discord: {
+            id: userData.id,
+            username: userData.username,
+            ...(avatar ? {avatar} : {}),
+          },
         });
         redirect(res, sanitizeReturnTo(saved.returnTo, '/'), 302, [sessionCookie, clearState]);
       } catch (err) {
@@ -704,6 +763,14 @@ export class Auth {
         return;
       }
       redirect(res, '/account/', 303);
+    });
+
+    app.get('/api/me', (req, res) => {
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': 'private, no-store',
+      });
+      res.end(JSON.stringify(this.getProfile(req)));
     });
 
     app.post('/auth/logout', (req, res) => {

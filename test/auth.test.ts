@@ -169,7 +169,7 @@ describe('server/auth.ts routes', () => {
   };
 
   const mockDiscordUser = (
-    profile: {id: string; username: string},
+    profile: {id: string; username: string; avatar?: string | null},
     onTokenBody?: (body: string) => void
   ) => {
     globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
@@ -674,4 +674,92 @@ describe('server/auth.ts routes', () => {
     expect(res.status).toBe(200);
     expect((await res.text()).trim()).toBe(newer);
   });
+
+  test('resolves /api/me with GitHub avatar first and Discord avatar for Discord-only sessions',
+    async () => {
+      expect(auth.githubAvatarUrl(117249)).toBe(
+        'https://avatars.githubusercontent.com/u/117249?s=64'
+      );
+      expect(auth.sanitizeDiscordAvatarHash('a_0123abcd')).toBe('a_0123abcd');
+      expect(auth.sanitizeDiscordAvatarHash('../evil')).toBeUndefined();
+      expect(auth.discordAvatarUrl('513513270670262284', 'a_0123abcd')).toBe(
+        'https://cdn.discordapp.com/avatars/513513270670262284/a_0123abcd.png?size=64'
+      );
+      const defaultIdx = Number((BigInt('513513270670262284') >> 22n) % 6n);
+      expect(auth.discordAvatarUrl('513513270670262284')).toBe(
+        `https://cdn.discordapp.com/embed/avatars/${defaultIdx}.png`
+      );
+
+      const anonRes = await realFetch(`${baseUrl}/api/me`);
+      expect(anonRes.status).toBe(200);
+      expect(anonRes.headers.get('cache-control')).toBe('private, no-store');
+      expect(await anonRes.json()).toEqual({authenticated: false});
+
+      // GitHub-only session uses GitHub avatar even without linked Discord
+      const preGhToken = signSession({github: {id: 10, login: 'pre'}});
+      const ghOnlyRes = await realFetch(`${baseUrl}/api/me`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`},
+      });
+      expect(await ghOnlyRes.json()).toEqual({
+        authenticated: true,
+        username: 'pre',
+        avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
+      });
+
+      // Linking Discord still prefers GitHub avatar when signed into both GitHub and Discord,
+      // while capturing the Discord avatar hash in the session cookie
+      const {state, stateCookie} = await beginDiscordLink(preGhToken);
+      mockDiscordUser({id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'});
+      const linkCb = await realFetch(
+        `${baseUrl}/auth/discord/callback?code=dc-av&state=${encodeURIComponent(state)}`,
+        {
+          headers: {
+            Cookie: [
+              `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`,
+              `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+            ].join('; '),
+          },
+          redirect: 'manual',
+        }
+      );
+      expect(linkCb.status).toBe(302);
+      const mergedCookie = extractCookieMap(linkCb)[auth.SESSION_COOKIE];
+      const mergedSession = auth.verifyToken<auth.Session>(mergedCookie, AUTH_CFG.sessionSecret)!;
+      expect(mergedSession.discord?.avatar).toBe('deadbeef01');
+
+      const bothRes = await realFetch(`${baseUrl}/api/me`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(mergedCookie)}`},
+      });
+      expect(await bothRes.json()).toEqual({
+        authenticated: true,
+        username: 'pre',
+        avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
+      });
+
+      // Discord-only session (no GitHub) uses session Discord avatar hash or default embed avatar
+      const discordCustomToken = signSession({
+        discord: {id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'},
+      });
+      const discordCustomRes = await realFetch(`${baseUrl}/api/me`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(discordCustomToken)}`},
+      });
+      expect(await discordCustomRes.json()).toEqual({
+        authenticated: true,
+        username: 'scheibo',
+        avatarUrl: 'https://cdn.discordapp.com/avatars/513513270670262284/deadbeef01.png?size=64',
+      });
+
+      const discordDefaultToken = signSession({
+        discord: {id: '999999999999999999', username: 'outsider'},
+      });
+      const discordDefaultRes = await realFetch(`${baseUrl}/api/me`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(discordDefaultToken)}`},
+      });
+      const outsiderIdx = Number((BigInt('999999999999999999') >> 22n) % 6n);
+      expect(await discordDefaultRes.json()).toEqual({
+        authenticated: true,
+        username: 'outsider',
+        avatarUrl: `https://cdn.discordapp.com/embed/avatars/${outsiderIdx}.png`,
+      });
+    });
 });
