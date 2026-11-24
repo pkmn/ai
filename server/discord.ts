@@ -38,6 +38,34 @@ export const COMMANDS = [
       },
     ],
   },
+  {
+    type: 1,
+    name: 'watch',
+    description: 'Get a one-shot DM when an agent or matchup goes live',
+    options: [
+      {
+        type: 3,
+        name: 'agent',
+        description: 'Agent to watch (omit to list your active watches)',
+        required: false,
+        autocomplete: true,
+      },
+      {
+        type: 3,
+        name: 'opponent',
+        description: 'Optional opponent for a specific matchup',
+        required: false,
+        autocomplete: true,
+      },
+      {
+        type: 3,
+        name: 'event',
+        description: 'Optional ladder or tournament filter',
+        required: false,
+        autocomplete: true,
+      },
+    ],
+  },
 ];
 
 export interface Config {
@@ -144,10 +172,28 @@ export interface Command {
   options?: CommandOption[];
 }
 
+export interface ButtonComponent {
+  type: 2;
+  style: 1 | 2 | 3 | 4 | 5;
+  label: string;
+  custom_id?: string;
+  url?: string;
+  disabled?: boolean;
+}
+
+export interface ActionRowComponent {
+  type: 1;
+  components: ButtonComponent[];
+}
+
 export interface Interaction {
   type: number;
+  member?: {user?: User};
+  user?: User;
   data?: {
     name?: string;
+    custom_id?: string;
+    component_type?: number;
     options?: Array<{
       name: string;
       type?: number;
@@ -155,6 +201,32 @@ export interface Interaction {
       focused?: boolean;
     }>;
   };
+}
+
+export interface LiveMatchSnapshot {
+  matchId: string;
+  ladderId: string;
+  format: string;
+  p1: {slug: string; name: string; version: string};
+  p2: {slug: string; name: string; version: string};
+}
+
+export interface LiveTournamentGameSnapshot {
+  tournamentId: string;
+  tournamentName?: string;
+  table: number;
+  label?: string;
+  gameId?: string;
+  stage?: db.TournamentGameStage;
+  p1: {slug: string; name: string; version?: string};
+  p2: {slug: string; name: string; version?: string};
+}
+
+export interface InteractionContext {
+  db?: db.Database;
+  getLiveMatch?: () => LiveMatchSnapshot | undefined;
+  getLiveTournamentGames?: () => LiveTournamentGameSnapshot[];
+  nowSeconds?: () => number;
 }
 
 interface RawPartnerLeader {
@@ -625,7 +697,7 @@ export async function sendDirectMessage(
   recipientId: string,
   content: string,
   state?: Map<string, string | undefined>,
-  options?: {suppressEmbeds?: boolean}
+  options?: {suppressEmbeds?: boolean; components?: ActionRowComponent[]}
 ): Promise<'sent' | 'blocked'> {
   const cacheKey = `dm-channel:${recipientId}`;
   let channelId = state?.get(cacheKey);
@@ -649,9 +721,16 @@ export async function sendDirectMessage(
   }
 
   try {
-    const payload: {content: string; flags?: number} = options?.suppressEmbeds === false
+    const payload: {
+      content: string;
+      flags?: number;
+      components?: ActionRowComponent[];
+    } = options?.suppressEmbeds === false
       ? {content}
       : {content, flags: 4};
+    if (options?.components?.length) {
+      payload.components = options.components;
+    }
     await discordRequest(token, `/channels/${channelId}/messages`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -2136,6 +2215,643 @@ export function autocompleteGlossary(
   return choices;
 }
 
+const WATCH_ARM_PREFIX = 'watch:arm:';
+const WATCH_CANCEL_PREFIX = 'watch:cancel:';
+const WATCH_CLEAR_ID = 'watch:clear';
+const WATCH_ARM_RE = /^watch:arm:(\d+):(\d+):(any|l:[^:\s]+|t:[^:\s]+)$/;
+const WATCH_CANCEL_RE = /^watch:cancel:(\d+)$/;
+
+export function formatWatchArmCustomId(watch: {
+  agentId: number;
+  opponentId?: number;
+  ladderId?: string;
+  tournamentId?: string;
+}): string {
+  const scope = watch.ladderId
+    ? `l:${watch.ladderId}`
+    : watch.tournamentId
+      ? `t:${watch.tournamentId}`
+      : 'any';
+  return `${WATCH_ARM_PREFIX}${watch.agentId}:${watch.opponentId ?? 0}:${scope}`;
+}
+
+function parseWatchArmCustomId(customId: string): {
+  agentId: number;
+  opponentId?: number;
+  ladderId?: string;
+  tournamentId?: string;
+} | undefined {
+  const match = WATCH_ARM_RE.exec(customId);
+  if (!match) return undefined;
+  const agentId = Number(match[1]);
+  const rawOpp = Number(match[2]);
+  if (!Number.isSafeInteger(agentId) || agentId <= 0) return undefined;
+  if (!Number.isSafeInteger(rawOpp) || rawOpp < 0) return undefined;
+  const opponentId = rawOpp > 0 ? rawOpp : undefined;
+  if (opponentId === agentId) return undefined;
+  const scope = match[3];
+  if (scope === 'any') return {agentId, opponentId};
+  if (scope.startsWith('l:')) return {agentId, opponentId, ladderId: scope.slice(2)};
+  if (scope.startsWith('t:')) return {agentId, opponentId, tournamentId: scope.slice(2)};
+  return undefined;
+}
+
+export function formatWatchLabel(watch: {
+  agentName: string;
+  opponentName?: string;
+  ladderName?: string;
+  tournamentName?: string;
+}): string {
+  const agents = watch.opponentName
+    ? `**${watch.agentName}** vs **${watch.opponentName}**`
+    : `**${watch.agentName}**`;
+  if (watch.ladderName) return `${agents} on **${watch.ladderName}**`;
+  if (watch.tournamentName) return `${agents} in **${watch.tournamentName}**`;
+  return agents;
+}
+
+export function autocompleteWatchAgents(
+  query: string,
+  database: db.Database,
+  exclude?: string
+): Array<{name: string; value: string}> {
+  const agents = database.listWatchableAgents();
+  const excludedAgent = exclude?.trim() ? resolveWatchAgent(database, exclude) : undefined;
+  const q = query.trim();
+  const lower = q.toLowerCase();
+  const id = util.toID(q);
+
+  const choices: Array<{name: string; value: string}> = [];
+  const seen = new Set<string>();
+  const add = (a: db.WatchableAgent) => {
+    if (excludedAgent?.id === a.id) return;
+    if (seen.has(a.slug) || choices.length >= 25) return;
+    seen.add(a.slug);
+    const label = a.active ? a.name : `${a.name} (inactive)`;
+    choices.push({name: label.slice(0, 100), value: a.slug});
+  };
+
+  if (!q) {
+    for (const a of agents) add(a);
+    return choices;
+  }
+
+  for (const a of agents) {
+    if (
+      a.name.toLowerCase().startsWith(lower) ||
+      a.slug.toLowerCase().startsWith(lower) ||
+      Boolean(id && util.toID(a.name).startsWith(id))
+    ) {
+      add(a);
+    }
+  }
+  for (const a of agents) {
+    if (
+      a.name.toLowerCase().includes(lower) ||
+      a.slug.toLowerCase().includes(lower) ||
+      Boolean(id && util.toID(a.name).includes(id))
+    ) {
+      add(a);
+    }
+  }
+  return choices;
+}
+
+export function autocompleteWatchEvents(
+  query: string,
+  database: db.Database
+): Array<{name: string; value: string}> {
+  const ladders = database.getLadders().filter(l => l.status !== 'archived');
+  const tournaments = database.getTournaments().filter(t => t.status !== 'completed');
+
+  interface EventChoice {
+    label: string;
+    value: string;
+    keys: string[];
+    priority: number;
+  }
+  const items: EventChoice[] = [];
+  for (const t of tournaments) {
+    const badge = t.status === 'running' ? 'live' : 'scheduled';
+    items.push({
+      label: `${t.name} (${badge})`,
+      value: `tournament:${t.id}`,
+      keys: [t.name, t.id, t.format, `tournament ${t.id}`, `t#${t.id}`],
+      priority: t.status === 'running' ? 0 : 2,
+    });
+  }
+  for (const l of ladders) {
+    const suffix = l.status === 'upcoming' ? `${l.format} · upcoming` : l.format;
+    items.push({
+      label: `${l.name} (${suffix})`,
+      value: `ladder:${l.id}`,
+      keys: [l.name, l.id, l.slot, l.format],
+      priority: l.status === 'active' || l.status === 'settling' ? 1 : 3,
+    });
+  }
+  items.sort((a, b) => a.priority - b.priority || a.label.localeCompare(b.label));
+
+  const q = query.trim();
+  const lower = q.toLowerCase();
+  const id = util.toID(q);
+  const choices: Array<{name: string; value: string}> = [];
+  const seen = new Set<string>();
+  const add = (item: EventChoice) => {
+    if (seen.has(item.value) || choices.length >= 25) return;
+    seen.add(item.value);
+    choices.push({name: item.label.slice(0, 100), value: item.value});
+  };
+
+  if (!q) {
+    for (const item of items) add(item);
+    return choices;
+  }
+  for (const item of items) {
+    if (
+      item.keys.some(k => k.toLowerCase().startsWith(lower)) ||
+      (Boolean(id) && item.keys.some(k => util.toID(k).startsWith(id)))
+    ) {
+      add(item);
+    }
+  }
+  for (const item of items) {
+    if (
+      item.keys.some(k => k.toLowerCase().includes(lower)) ||
+      (Boolean(id) && item.keys.some(k => util.toID(k).includes(id)))
+    ) {
+      add(item);
+    }
+  }
+  return choices;
+}
+
+function resolveWatchAgent(database: db.Database, raw: string): db.AgentRow | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const bySlug = database.getAgentBySlug(trimmed.toLowerCase());
+  if (bySlug && bySlug.status !== 'disabled') return bySlug;
+
+  const lower = trimmed.toLowerCase();
+  const targetId = util.toID(trimmed);
+  const all = database.getAllAgents().filter(a => a.status !== 'disabled');
+  return (
+    all.find(a => a.name.toLowerCase() === lower) ??
+    (targetId ? all.find(a => util.toID(a.name) === targetId) : undefined)
+  );
+}
+
+function resolveWatchEvent(
+  database: db.Database,
+  raw: string
+): {ladder?: db.LadderRow; tournament?: db.TournamentRow; error?: string} {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+
+  if (trimmed.startsWith('ladder:')) {
+    const id = trimmed.slice('ladder:'.length);
+    const ladder = database.getLadder(id);
+    if (!ladder) return {error: `Unknown ladder: \`${id.slice(0, 60)}\`.`};
+    if (ladder.status === 'archived') {
+      return {error: `Ladder **${ladder.name}** is archived and no longer runs live matches.`};
+    }
+    return {ladder};
+  }
+  if (trimmed.startsWith('tournament:')) {
+    const id = trimmed.slice('tournament:'.length);
+    const tournament = database.getTournament(id);
+    if (!tournament) return {error: `Unknown tournament: \`${id.slice(0, 60)}\`.`};
+    if (tournament.status === 'completed') {
+      return {error: `Tournament **${tournament.name}** has already completed.`};
+    }
+    return {tournament};
+  }
+
+  const lower = trimmed.toLowerCase();
+  const targetId = util.toID(trimmed);
+  const ladders = database.getLadders().filter(l => l.status !== 'archived');
+  const matchedLadder =
+    ladders.find(l => l.id.toLowerCase() === lower) ??
+    ladders.find(l => l.name.toLowerCase() === lower || l.slot.toLowerCase() === lower) ??
+    ladders.find(l => l.format.toLowerCase() === lower) ??
+    (targetId ? ladders.find(l => util.toID(l.name) === targetId) : undefined);
+  if (matchedLadder) return {ladder: matchedLadder};
+
+  const tournaments = database.getTournaments().filter(t => t.status !== 'completed');
+  const matchedTournament =
+    tournaments.find(t => t.id.toLowerCase() === lower) ??
+    tournaments.find(t => t.name.toLowerCase() === lower) ??
+    (targetId ? tournaments.find(t => util.toID(t.name) === targetId) : undefined);
+  if (matchedTournament) return {tournament: matchedTournament};
+
+  const safe = trimmed.replace(/[`\r\n]+/g, ' ').slice(0, 80);
+  return {error: `Unknown or inactive event: \`${safe}\`.`};
+}
+
+export function formatLiveMatchWatchDm(
+  database: db.Database,
+  match: LiveMatchSnapshot
+): {content: string; url: string} {
+  const ladder = database.getLadder(match.ladderId);
+  const ladderLabel = ladder?.name ?? match.ladderId;
+  const modeNote = ladder && ladder.team !== 'random' ? ' (live telemetry)' : '';
+  const url = 'https://pkmn.ai/arena/battles/';
+  return {
+    url,
+    content:
+      `**${match.p1.name}** (\`${match.p1.version}\`) vs ` +
+      `**${match.p2.name}** (\`${match.p2.version}\`) ` +
+      `is live on **${ladderLabel}**${modeNote} — <${url}>`,
+  };
+}
+
+export function formatLiveTournamentWatchDm(
+  database: db.Database,
+  game: LiveTournamentGameSnapshot
+): {content: string; url: string} {
+  const tournament = database.getTournament(game.tournamentId);
+  const tourneyName = game.tournamentName ?? tournament?.name ?? `Tournament #${game.tournamentId}`;
+  const url =
+    `https://pkmn.ai/arena/tournaments/${encodeURIComponent(game.tournamentId)}/` +
+    `#table=${game.table}`;
+  const p1Ver = game.p1.version ? ` (\`${game.p1.version}\`)` : '';
+  const p2Ver = game.p2.version ? ` (\`${game.p2.version}\`)` : '';
+  const stagePart = game.stage ? ` (${game.stage})` : '';
+  return {
+    url,
+    content:
+      `**${game.p1.name}**${p1Ver} vs **${game.p2.name}**${p2Ver} ` +
+      `is live on **Table ${game.table}** of **${tourneyName}**${stagePart} — <${url}>`,
+  };
+}
+
+function watchSpecificity(w: db.DiscordWatchView): number {
+  return (w.opponentId !== undefined ? 2 : 0) + (w.ladderId || w.tournamentId ? 1 : 0);
+}
+
+async function dispatchWatchDms(
+  token: string,
+  consumed: db.DiscordWatchView[],
+  message: {content: string; url: string},
+  state: Map<string, string | undefined>
+): Promise<number> {
+  if (consumed.length === 0) return 0;
+  // Dedupe per recipient so a user watching both sides (or both broad + matchup) receives one DM,
+  // preserving their most specific watch on the "Watch next match" re-arm button.
+  const bestByUser = new Map<string, db.DiscordWatchView>();
+  for (const w of consumed) {
+    const prev = bestByUser.get(w.discordId);
+    if (!prev || watchSpecificity(w) > watchSpecificity(prev)) {
+      bestByUser.set(w.discordId, w);
+    }
+  }
+
+  let sent = 0;
+  for (const [discordId, watch] of bestByUser) {
+    const components: ActionRowComponent[] = [
+      {
+        type: 1,
+        components: [
+          {type: 2, style: 5, label: 'Watch Live', url: message.url},
+          {
+            type: 2,
+            style: 2,
+            label: 'Watch next match',
+            custom_id: formatWatchArmCustomId(watch),
+          },
+        ],
+      },
+    ];
+    try {
+      const outcome = await sendDirectMessage(token, discordId, message.content, state, {
+        components,
+      });
+      if (outcome === 'sent') sent++;
+    } catch (err) {
+      console.error(`Error sending live watch DM to ${discordId}:`, err);
+    }
+  }
+  return sent;
+}
+
+export async function notifyLiveMatch(
+  database: db.Database,
+  token: string,
+  match: LiveMatchSnapshot,
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  const p1Agent = database.getAgentBySlug(match.p1.slug);
+  const p2Agent = database.getAgentBySlug(match.p2.slug);
+  if (!p1Agent || !p2Agent) return 0;
+  const consumed = database.consumeMatchingDiscordWatches({
+    p1AgentId: p1Agent.id,
+    p2AgentId: p2Agent.id,
+    ladderId: match.ladderId,
+  });
+  if (consumed.length === 0) return 0;
+  return dispatchWatchDms(token, consumed, formatLiveMatchWatchDm(database, match), state);
+}
+
+export async function notifyLiveTournamentGame(
+  database: db.Database,
+  token: string,
+  game: LiveTournamentGameSnapshot,
+  state = new Map<string, string | undefined>()
+): Promise<number> {
+  const p1Agent = database.getAgentBySlug(game.p1.slug);
+  const p2Agent = database.getAgentBySlug(game.p2.slug);
+  if (!p1Agent || !p2Agent) return 0;
+  const consumed = database.consumeMatchingDiscordWatches({
+    p1AgentId: p1Agent.id,
+    p2AgentId: p2Agent.id,
+    tournamentId: game.tournamentId,
+  });
+  if (consumed.length === 0) return 0;
+  return dispatchWatchDms(token, consumed, formatLiveTournamentWatchDm(database, game), state);
+}
+
+function getInteractionUserId(interaction: Interaction): string | undefined {
+  return interaction.member?.user?.id ?? interaction.user?.id;
+}
+
+function ephemeralReply(
+  content: string,
+  components?: ActionRowComponent[]
+): {status: number; headers: Record<string, string>; body: string} {
+  return {
+    status: 200,
+    headers: {'content-type': 'application/json; charset=utf-8'},
+    body: JSON.stringify({
+      type: 4,
+      data: {
+        content,
+        flags: 68,
+        ...(components?.length ? {components} : {}),
+      },
+    }),
+  };
+}
+
+function slugsMatchWatch(
+  p1Slug: string,
+  p2Slug: string,
+  agentSlug: string,
+  opponentSlug?: string
+): boolean {
+  if (!opponentSlug) return p1Slug === agentSlug || p2Slug === agentSlug;
+  return (
+    (p1Slug === agentSlug && p2Slug === opponentSlug) ||
+    (p1Slug === opponentSlug && p2Slug === agentSlug)
+  );
+}
+
+function findCurrentLiveMatchForWatch(
+  database: db.Database,
+  ctx: InteractionContext,
+  target: {
+    agent: db.AgentRow;
+    opponent?: db.AgentRow;
+    ladder?: db.LadderRow;
+    tournament?: db.TournamentRow;
+  }
+): {content: string; url: string} | undefined {
+  if (!target.tournament) {
+    const live = ctx.getLiveMatch?.();
+    if (
+      live &&
+      (!target.ladder || live.ladderId === target.ladder.id) &&
+      slugsMatchWatch(live.p1.slug, live.p2.slug, target.agent.slug, target.opponent?.slug)
+    ) {
+      return formatLiveMatchWatchDm(database, live);
+    }
+  }
+  if (!target.ladder) {
+    for (const game of ctx.getLiveTournamentGames?.() ?? []) {
+      if (target.tournament && game.tournamentId !== target.tournament.id) continue;
+      if (slugsMatchWatch(game.p1.slug, game.p2.slug, target.agent.slug, target.opponent?.slug)) {
+        return formatLiveTournamentWatchDm(database, game);
+      }
+    }
+  }
+  return undefined;
+}
+
+function armWatchReply(
+  database: db.Database,
+  discordId: string,
+  input: {
+    agentId: number;
+    opponentId?: number;
+    ladderId?: string;
+    tournamentId?: string;
+    now?: number;
+  }
+): {status: number; headers: Record<string, string>; body: string} {
+  const res = database.addDiscordWatch({discordId, ...input});
+  if (res.status === 'limit') {
+    return ephemeralReply(
+      `You already have ${res.limit} active watches (maximum). ` +
+      'Run `/watch` to view them or clear them below.',
+      [
+        {
+          type: 1,
+          components: [{type: 2, style: 4, label: 'Clear all watches', custom_id: WATCH_CLEAR_ID}],
+        },
+      ]
+    );
+  }
+  const watch = res.watch!;
+  const label = formatWatchLabel(watch);
+  const cancelRow: ActionRowComponent[] = [
+    {
+      type: 1,
+      components: [
+        {type: 2, style: 2, label: 'Cancel watch', custom_id: `${WATCH_CANCEL_PREFIX}${watch.id}`},
+      ],
+    },
+  ];
+  if (res.status === 'exists') {
+    return ephemeralReply(
+      `Already watching ${label} — I'll DM you once when the next match goes live.`,
+      cancelRow
+    );
+  }
+  return ephemeralReply(
+    `Watching ${label} — I'll DM you once when the next match goes live ` +
+    '(make sure DMs from this server are enabled).',
+    cancelRow
+  );
+}
+
+function handleWatchCommand(
+  interaction: Interaction,
+  ctx: InteractionContext
+): {status: number; headers: Record<string, string>; body?: string} {
+  const database = ctx.db;
+  const userId = getInteractionUserId(interaction);
+  if (!database || !userId) {
+    return ephemeralReply('Match watches are temporarily unavailable.');
+  }
+
+  const opts = interaction.data?.options ?? [];
+  const agentRaw = opts.find(o => o.name === 'agent')?.value?.trim() ?? '';
+  const opponentRaw = opts.find(o => o.name === 'opponent')?.value?.trim() ?? '';
+  const eventRaw = opts.find(o => o.name === 'event')?.value?.trim() ?? '';
+
+  if (!agentRaw) {
+    if (opponentRaw || eventRaw) {
+      return ephemeralReply(
+        'Specify an `agent` to watch (or omit all options to list your active watches).'
+      );
+    }
+    const watches = database.listDiscordWatchesForUser(userId);
+    if (watches.length === 0) {
+      return ephemeralReply(
+        'You have no active match watches. Use `/watch agent:<name>` to get a one-shot DM ' +
+        'when an agent or matchup goes live.'
+      );
+    }
+    const lines = watches.map((w, idx) => `${idx + 1}. ${formatWatchLabel(w)}`);
+    const cancelButtons: ButtonComponent[] = watches.slice(0, 5).map((w, idx) => ({
+      type: 2,
+      style: 2,
+      label: watches.length === 1 ? 'Cancel watch' : `Cancel #${idx + 1}`,
+      custom_id: `${WATCH_CANCEL_PREFIX}${w.id}`,
+    }));
+    const rows: ActionRowComponent[] = [{type: 1, components: cancelButtons}];
+    if (watches.length > 1) {
+      rows.push({
+        type: 1,
+        components: [{type: 2, style: 4, label: 'Clear all', custom_id: WATCH_CLEAR_ID}],
+      });
+    }
+    return ephemeralReply(`**Your active match watches:**\n${lines.join('\n')}`, rows);
+  }
+
+  const agent = resolveWatchAgent(database, agentRaw);
+  if (!agent) {
+    const safe = agentRaw.replace(/[`\r\n]+/g, ' ').slice(0, 80);
+    return ephemeralReply(`Unknown agent: \`${safe}\`.`);
+  }
+
+  let opponent: db.AgentRow | undefined;
+  if (opponentRaw) {
+    opponent = resolveWatchAgent(database, opponentRaw);
+    if (!opponent) {
+      const safe = opponentRaw.replace(/[`\r\n]+/g, ' ').slice(0, 80);
+      return ephemeralReply(`Unknown opponent: \`${safe}\`.`);
+    }
+    if (opponent.id === agent.id) {
+      return ephemeralReply(
+        'Specify a different `opponent`, or omit `opponent` to watch all matches for ' +
+        `**${agent.name}**.`
+      );
+    }
+  }
+
+  const eventRes = resolveWatchEvent(database, eventRaw);
+  if (eventRes.error) {
+    return ephemeralReply(eventRes.error);
+  }
+
+  const liveNow = findCurrentLiveMatchForWatch(database, ctx, {
+    agent,
+    opponent,
+    ladder: eventRes.ladder,
+    tournament: eventRes.tournament,
+  });
+  if (liveNow) {
+    const canonical = opponent && opponent.id < agent.id
+      ? {agentId: opponent.id, opponentId: agent.id}
+      : {agentId: agent.id, opponentId: opponent?.id};
+    const armId = formatWatchArmCustomId({
+      ...canonical,
+      ladderId: eventRes.ladder?.id,
+      tournamentId: eventRes.tournament?.id,
+    });
+    return ephemeralReply(liveNow.content, [
+      {
+        type: 1,
+        components: [
+          {type: 2, style: 5, label: 'Watch Live', url: liveNow.url},
+          {type: 2, style: 2, label: 'Watch next match', custom_id: armId},
+        ],
+      },
+    ]);
+  }
+
+  return armWatchReply(database, userId, {
+    agentId: agent.id,
+    opponentId: opponent?.id,
+    ladderId: eventRes.ladder?.id,
+    tournamentId: eventRes.tournament?.id,
+    now: ctx.nowSeconds?.(),
+  });
+}
+
+function handleWatchComponent(
+  interaction: Interaction,
+  ctx: InteractionContext
+): {status: number; headers: Record<string, string>; body?: string} {
+  const database = ctx.db;
+  const userId = getInteractionUserId(interaction);
+  const customId = interaction.data?.custom_id ?? '';
+  if (!database || !userId) {
+    return ephemeralReply('Match watches are temporarily unavailable.');
+  }
+
+  if (customId === WATCH_CLEAR_ID) {
+    const cleared = database.clearDiscordWatchesForUser(userId);
+    if (cleared === 0) {
+      return ephemeralReply('You have no active match watches.');
+    }
+    return ephemeralReply(`Cleared ${cleared} active ${cleared === 1 ? 'watch' : 'watches'}.`);
+  }
+
+  const cancelMatch = WATCH_CANCEL_RE.exec(customId);
+  if (cancelMatch) {
+    const watchId = Number(cancelMatch[1]);
+    if (!Number.isSafeInteger(watchId) || watchId <= 0) {
+      return ephemeralReply('Invalid watch reference.');
+    }
+    const deleted = database.deleteDiscordWatchForUser(userId, watchId);
+    return ephemeralReply(
+      deleted ? 'Watch cancelled.' : 'That watch was already triggered or cancelled.'
+    );
+  }
+
+  const arm = parseWatchArmCustomId(customId);
+  if (arm) {
+    const agent = database.getAgentById(arm.agentId);
+    if (!agent || agent.status === 'disabled') {
+      return ephemeralReply('That agent is no longer active.');
+    }
+    if (arm.opponentId !== undefined) {
+      const opp = database.getAgentById(arm.opponentId);
+      if (!opp || opp.status === 'disabled') {
+        return ephemeralReply('That opponent is no longer active.');
+      }
+    }
+    if (arm.ladderId) {
+      const ladder = database.getLadder(arm.ladderId);
+      if (!ladder || ladder.status === 'archived') {
+        return ephemeralReply('That ladder has already been archived.');
+      }
+    }
+    if (arm.tournamentId) {
+      const tourney = database.getTournament(arm.tournamentId);
+      if (!tourney || tourney.status === 'completed') {
+        return ephemeralReply('That tournament has already completed.');
+      }
+    }
+    return armWatchReply(database, userId, {
+      ...arm,
+      now: ctx.nowSeconds?.(),
+    });
+  }
+
+  return {status: 400, headers: {}};
+}
+
 export function verifySignature(
   body: string,
   signature: string | undefined,
@@ -2165,7 +2881,8 @@ export function handleInteraction(
   body: string,
   reqHeaders: http.IncomingHttpHeaders,
   verifyKey: string | undefined,
-  glossary: Record<string, string>
+  glossary: Record<string, string>,
+  ctx: InteractionContext = {}
 ): {status: number; headers: Record<string, string>; body?: string} {
   const sig = reqHeaders['x-signature-ed25519'];
   const ts = reqHeaders['x-signature-timestamp'];
@@ -2190,11 +2907,37 @@ export function handleInteraction(
     return {status: 200, headers: jsonHeaders, body: JSON.stringify({type: 1})};
   }
 
+  if (interaction.type === 3 && interaction.data?.custom_id?.startsWith('watch:')) {
+    return handleWatchComponent(interaction, ctx);
+  }
+
   const cmd = interaction.data?.name;
   const termOpt = interaction.data?.options?.find(o => o.name === 'term')?.value ?? '';
 
   if (interaction.type === 4 && cmd === 'define') {
     const choices = autocompleteGlossary(termOpt, glossary);
+    return {
+      status: 200,
+      headers: jsonHeaders,
+      body: JSON.stringify({type: 8, data: {choices}}),
+    };
+  }
+
+  if (interaction.type === 4 && cmd === 'watch') {
+    const focused = interaction.data?.options?.find(o => o.focused);
+    const query = focused?.value ?? '';
+    let choices: Array<{name: string; value: string}> = [];
+    if (ctx.db) {
+      if (focused?.name === 'agent') {
+        const oppVal = interaction.data?.options?.find(o => o.name === 'opponent')?.value;
+        choices = autocompleteWatchAgents(query, ctx.db, oppVal);
+      } else if (focused?.name === 'opponent') {
+        const agentVal = interaction.data?.options?.find(o => o.name === 'agent')?.value;
+        choices = autocompleteWatchAgents(query, ctx.db, agentVal);
+      } else if (focused?.name === 'event') {
+        choices = autocompleteWatchEvents(query, ctx.db);
+      }
+    }
     return {
       status: 200,
       headers: jsonHeaders,
@@ -2229,6 +2972,10 @@ export function handleInteraction(
         },
       }),
     };
+  }
+
+  if (interaction.type === 2 && cmd === 'watch') {
+    return handleWatchCommand(interaction, ctx);
   }
 
   return {status: 400, headers: {}};
@@ -2302,6 +3049,8 @@ export interface Options {
   vgcToken?: string;
   verifyKey?: string;
   getArenaLastContactAt?: () => number | undefined;
+  getLiveMatch?: () => LiveMatchSnapshot | undefined;
+  getLiveTournamentGames?: () => LiveTournamentGameSnapshot[];
 }
 
 export interface Handle {
@@ -2310,6 +3059,8 @@ export interface Handle {
   notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
   notifyStaffAlert: (alert: StaffAlert) => Promise<number>;
   resolveStaffAlert: (alert: {key: string; message?: string}) => Promise<number>;
+  notifyLiveMatch: (match: LiveMatchSnapshot) => Promise<number>;
+  notifyLiveTournamentGame: (game: LiveTournamentGameSnapshot) => Promise<number>;
 }
 
 export interface SyncOnceOptions {
@@ -2391,6 +3142,12 @@ export async function syncOnce(
   } catch (err) {
     console.error('Error syncing submission DMs:', err);
     await trackSyncTaskFailure(token, config, state, 'Submission DM sync', err);
+  }
+
+  try {
+    db.pruneExpiredDiscordWatches();
+  } catch (err) {
+    console.error('Error pruning expired Discord watches:', err);
   }
 
   if (config.channel) {
@@ -2507,7 +3264,11 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
     try {
       if (!verifyKey) await verifyKeyReady;
-      const result = handleInteraction(rawBody, req.headers, verifyKey, glossary);
+      const result = handleInteraction(rawBody, req.headers, verifyKey, glossary, {
+        db: options.db,
+        getLiveMatch: options.getLiveMatch,
+        getLiveTournamentGames: options.getLiveTournamentGames,
+      });
       res.writeHead(result.status, result.headers);
       res.end(result.body);
     } catch (err) {
@@ -2537,6 +3298,14 @@ export function register(app: polka.Polka, options: Options): Handle {
     resolveStaffAlert: async alert => {
       if (stopped || !token) return 0;
       return resolveStaffAlert(token, loadConfig(), alert, state);
+    },
+    notifyLiveMatch: async match => {
+      if (stopped || !token) return 0;
+      return notifyLiveMatch(options.db, token, match, state);
+    },
+    notifyLiveTournamentGame: async game => {
+      if (stopped || !token) return 0;
+      return notifyLiveTournamentGame(options.db, token, game, state);
     },
   };
 }

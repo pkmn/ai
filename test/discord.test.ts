@@ -2211,3 +2211,484 @@ describe('announce and mention resolution', () => {
     }
   });
 });
+
+describe('live match watches (/watch)', () => {
+  const {publicKey, privateKey} = crypto.generateKeyPairSync('ed25519');
+  const verifyKey = publicKey.export({type: 'spki', format: 'der'}).subarray(12).toString('hex');
+
+  function signedInteraction(payload: object, timestamp = '1700000000') {
+    const body = JSON.stringify(payload);
+    const sig = crypto
+      .sign(undefined, Buffer.from(`${timestamp}${body}`), privateKey)
+      .toString('hex');
+    return {
+      body,
+      headers: {
+        'x-signature-ed25519': sig,
+        'x-signature-timestamp': timestamp,
+      },
+    };
+  }
+
+  function seedWatchDb(): Database {
+    const db = new Database(':memory:', {now: 1_700_000_000});
+    db.syncLaddersFromYaml(`
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: active
+- name: RAND
+  format: gen9randombattle
+  id: gen9randombattle20261109
+  team: random
+  status: active
+- name: ADV
+  format: gen3ou
+  id: gen3ou20250101
+  team: harvested
+  status: archived
+`, 1_700_000_000);
+    db.syncProjectsFromYaml(`
+- name: Foul Play
+  arena:
+    owners:
+      dev1: '1001'
+- name: 0-Error
+  arena:
+    owners:
+      dev2: '1002'
+- name: IdleAgent
+  arena:
+    owners:
+      dev3: '1003'
+`, undefined, 1_700_000_000);
+    db.upsertTournament({
+      id: '2',
+      name: 'VGC Spring',
+      format: 'gen9championsvgc2026regmc',
+      version: '0.11.0',
+      gamesPerMatchup: 2,
+      parallelTables: 2,
+      hardware: 'L4',
+      status: 'running',
+      startsAt: 1_700_000_000,
+    });
+    const fp = db.getAgentBySlug('foul-play')!;
+    db.setAgentLadders(fp.id, ['rby', 'rand'], 1_700_000_000);
+    const ver = db.createSubmission({
+      agentId: fp.id,
+      version: '1.2',
+      package: 'bundle',
+      url: 'https://example.com/fp-1.2.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109', 'gen9randombattle20261109'],
+      now: 1_700_000_000,
+    });
+    db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'passed', now: 1_700_000_010});
+    return db;
+  }
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('autocompletes agents (excluding selected counterpart) and active events', () => {
+    const db = seedWatchDb();
+    try {
+      const agentAuto = signedInteraction({
+        type: 4,
+        data: {name: 'watch', options: [{name: 'agent', value: '', focused: true}]},
+      });
+      const resA = discord.handleInteraction(agentAuto.body, agentAuto.headers, verifyKey, {}, {
+        db,
+      });
+      expect(resA.status).toBe(200);
+      const parsedA = JSON.parse(resA.body!) as {
+        type: number;
+        data: {choices: Array<{name: string; value: string}>};
+      };
+      expect(parsedA.type).toBe(8);
+      // Active agent appears first without "(inactive)" suffix.
+      expect(parsedA.data.choices[0]).toEqual({name: 'Foul Play', value: 'foul-play'});
+      expect(parsedA.data.choices.some(c => c.value === '0-error')).toBe(true);
+
+      // Opponent autocomplete excludes the already-selected agent.
+      const oppAuto = signedInteraction({
+        type: 4,
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: 'foul-play'},
+            {name: 'opponent', value: '', focused: true},
+          ],
+        },
+      });
+      const resO = discord.handleInteraction(oppAuto.body, oppAuto.headers, verifyKey, {}, {db});
+      const parsedO = JSON.parse(resO.body!) as {
+        data: {choices: Array<{name: string; value: string}>};
+      };
+      expect(parsedO.data.choices.some(c => c.value === 'foul-play')).toBe(false);
+      expect(parsedO.data.choices.some(c => c.value === '0-error')).toBe(true);
+
+      // Event autocomplete prioritizes running tournaments and omits archived ladders.
+      const evAuto = signedInteraction({
+        type: 4,
+        data: {name: 'watch', options: [{name: 'event', value: '', focused: true}]},
+      });
+      const resE = discord.handleInteraction(evAuto.body, evAuto.headers, verifyKey, {}, {db});
+      const parsedE = JSON.parse(resE.body!) as {
+        data: {choices: Array<{name: string; value: string}>};
+      };
+      expect(parsedE.data.choices[0]).toEqual({
+        name: 'VGC Spring (live)',
+        value: 'tournament:2',
+      });
+      expect(parsedE.data.choices.some(c => c.value === 'ladder:gen1ou20261109')).toBe(true);
+      expect(parsedE.data.choices.some(c => c.value.includes('gen3ou20250101'))).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('arms, lists, cancels, and clears watches ephemerally via /watch and buttons', () => {
+    const db = seedWatchDb();
+    try {
+      const ctx: discord.InteractionContext = {db, nowSeconds: () => 1_700_000_100};
+
+      // Empty list
+      const listEmpty = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {name: 'watch', options: []},
+      });
+      const rEmpty = discord.handleInteraction(
+        listEmpty.body,
+        listEmpty.headers,
+        verifyKey,
+        {},
+        ctx
+      );
+      const dEmpty = JSON.parse(rEmpty.body!) as {data: {content: string; flags: number}};
+      expect(dEmpty.data.flags).toBe(68);
+      expect(dEmpty.data.content).toContain('no active match watches');
+
+      // Arm matchup watch scoped to RAND
+      const arm = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: 'Foul Play'},
+            {name: 'opponent', value: '0-Error'},
+            {name: 'event', value: 'RAND'},
+          ],
+        },
+      });
+      const rArm = discord.handleInteraction(arm.body, arm.headers, verifyKey, {}, ctx);
+      const dArm = JSON.parse(rArm.body!) as {
+        data: {content: string; flags: number; components: discord.ActionRowComponent[]};
+      };
+      expect(dArm.data.flags).toBe(68);
+      expect(dArm.data.content).toContain('Watching **Foul Play** vs **0-Error** on **RAND**');
+      const cancelId = dArm.data.components[0].components[0].custom_id!;
+      expect(cancelId).toMatch(/^watch:cancel:\d+$/);
+
+      // Re-arming same pair in reverse order reports already watching
+      const dup = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: '0-error'},
+            {name: 'opponent', value: 'foul-play'},
+            {name: 'event', value: 'ladder:gen9randombattle20261109'},
+          ],
+        },
+      });
+      const rDup = discord.handleInteraction(dup.body, dup.headers, verifyKey, {}, ctx);
+      expect(JSON.parse(rDup.body!).data.content).toContain('Already watching');
+
+      // Self-opponent and archived event are rejected ephemerally
+      const selfOpp = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: 'foul-play'},
+            {name: 'opponent', value: 'foul-play'},
+          ],
+        },
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(selfOpp.body, selfOpp.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toContain('different `opponent`');
+
+      const archivedEv = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: 'foul-play'},
+            {name: 'event', value: 'ladder:gen3ou20250101'},
+          ],
+        },
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(archivedEv.body, archivedEv.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toContain('archived');
+
+      // Second watch + list returns per-watch cancel + Clear all buttons
+      const arm2 = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {name: 'watch', options: [{name: 'agent', value: 'idleagent'}]},
+      });
+      discord.handleInteraction(arm2.body, arm2.headers, verifyKey, {}, ctx);
+      const rList = discord.handleInteraction(
+        listEmpty.body,
+        listEmpty.headers,
+        verifyKey,
+        {},
+        ctx
+      );
+      const dList = JSON.parse(rList.body!) as {
+        data: {content: string; components: discord.ActionRowComponent[]};
+      };
+      expect(dList.data.content).toContain('1. **Foul Play** vs **0-Error** on **RAND**');
+      expect(dList.data.content).toContain('2. **IdleAgent**');
+      expect(dList.data.components).toHaveLength(2);
+      expect(dList.data.components[1].components[0].custom_id).toBe('watch:clear');
+
+      // Another user cannot cancel u1's watch
+      const otherCancel = signedInteraction({
+        type: 3,
+        user: {id: 'u2', username: 'bob'},
+        data: {custom_id: cancelId, component_type: 2},
+      });
+      const rOtherCancel = discord.handleInteraction(
+        otherCancel.body,
+        otherCancel.headers,
+        verifyKey,
+        {},
+        ctx
+      );
+      expect(JSON.parse(rOtherCancel.body!).data.content).toContain(
+        'already triggered or cancelled'
+      );
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(2);
+
+      // Owner cancels watch #1, then clears remaining
+      const ownCancel = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {custom_id: cancelId, component_type: 2},
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(ownCancel.body, ownCancel.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toBe('Watch cancelled.');
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(1);
+
+      const clearAll = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {custom_id: 'watch:clear', component_type: 2},
+      });
+      expect(
+        JSON.parse(
+          discord.handleInteraction(clearAll.body, clearAll.headers, verifyKey, {}, ctx).body!
+        ).data.content
+      ).toBe('Cleared 1 active watch.');
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('reports already-live matches immediately and lets users arm for the next match', () => {
+    const db = seedWatchDb();
+    try {
+      const ctx: discord.InteractionContext = {
+        db,
+        nowSeconds: () => 1_700_000_200,
+        getLiveTournamentGames: () => [
+          {
+            tournamentId: '2',
+            tournamentName: 'VGC Spring',
+            table: 2,
+            stage: 'Round Robin',
+            p1: {slug: 'foul-play', name: 'Foul Play', version: '1.2'},
+            p2: {slug: '0-error', name: '0-Error', version: '2.0'},
+          },
+        ],
+      };
+
+      const cmd = signedInteraction({
+        type: 2,
+        member: {user: {id: 'u1', username: 'alice'}},
+        data: {
+          name: 'watch',
+          options: [
+            {name: 'agent', value: 'foul-play'},
+            {name: 'event', value: 'tournament:2'},
+          ],
+        },
+      });
+      const res = discord.handleInteraction(cmd.body, cmd.headers, verifyKey, {}, ctx);
+      const parsed = JSON.parse(res.body!) as {
+        data: {content: string; components: discord.ActionRowComponent[]};
+      };
+      expect(parsed.data.content).toContain('Table 2');
+      expect(parsed.data.content).toContain('https://pkmn.ai/arena/tournaments/2/#table=2');
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(0);
+
+      // Clicking "Watch next match" arms the watch for the subsequent match.
+      const rearmId = parsed.data.components[0].components[1].custom_id!;
+      const btn = signedInteraction({
+        type: 3,
+        user: {id: 'u1', username: 'alice'},
+        data: {custom_id: rearmId, component_type: 2},
+      });
+      const btnRes = discord.handleInteraction(btn.body, btn.headers, verifyKey, {}, ctx);
+      expect(JSON.parse(btnRes.body!).data.content).toContain(
+        'Watching **Foul Play** in **VGC Spring**'
+      );
+      expect(db.listDiscordWatchesForUser('u1')).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('dispatches deduped one-shot DMs with Watch Live and Watch next match buttons', async () => {
+    const db = seedWatchDb();
+    const dmPosts: Array<{
+      channel: string;
+      body: {content: string; flags?: number; components?: discord.ActionRowComponent[]};
+    }> = [];
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const target = String(url);
+      const rawBody = typeof init?.body === 'string' ? init.body : '{}';
+      if (target.endsWith('/users/@me/channels')) {
+        const parsed = JSON.parse(rawBody) as {recipient_id: string};
+        if (parsed.recipient_id === 'blocked-user') {
+          return Promise.resolve({
+            status: 403,
+            ok: false,
+            text: () => Promise.resolve('Cannot send messages to this user'),
+          });
+        }
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: `dm-${parsed.recipient_id}`}),
+        });
+      }
+      const chMatch = /\/channels\/([^/]+)\/messages$/.exec(target);
+      if (chMatch) {
+        dmPosts.push({
+          channel: chMatch[1],
+          body: JSON.parse(rawBody) as {
+            content: string;
+            flags?: number;
+            components?: discord.ActionRowComponent[];
+          },
+        });
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'msg-1'}),
+        });
+      }
+      return Promise.resolve({status: 404, ok: false, text: () => Promise.resolve('not found')});
+    }) as unknown as typeof fetch;
+
+    const warnSpy = console.warn;
+    console.warn = () => {};
+    try {
+      const fp = db.getAgentBySlug('foul-play')!;
+      const ze = db.getAgentBySlug('0-error')!;
+
+      // u1 has BOTH a broad watch on Foul Play and a specific Foul Play vs 0-Error watch on RBY:
+      // should receive ONE DM, with the specific watch preserved on "Watch next match".
+      db.addDiscordWatch({discordId: 'u1', agentId: fp.id, now: 1_700_000_000});
+      db.addDiscordWatch({
+        discordId: 'u1',
+        agentId: fp.id,
+        opponentId: ze.id,
+        ladderId: 'gen1ou20261109',
+        now: 1_700_000_001,
+      });
+      // blocked-user has DMs disabled: should fail gracefully without blocking u1.
+      db.addDiscordWatch({discordId: 'blocked-user', agentId: ze.id, now: 1_700_000_002});
+
+      const sentLadder = await discord.notifyLiveMatch(db, 'bot-tok', {
+        matchId: 'm-1',
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        p1: {slug: 'foul-play', name: 'Foul Play', version: '1.2'},
+        p2: {slug: '0-error', name: '0-Error', version: '2.0'},
+      });
+      expect(sentLadder).toBe(1);
+      expect(dmPosts).toHaveLength(1);
+      expect(dmPosts[0].channel).toBe('dm-u1');
+      expect(dmPosts[0].body.content).toContain(
+        '**Foul Play** (`1.2`) vs **0-Error** (`2.0`) is live on **RBY** (live telemetry)'
+      );
+      expect(dmPosts[0].body.content).toContain('https://pkmn.ai/arena/battles/');
+      const buttons = dmPosts[0].body.components![0].components;
+      expect(buttons[0]).toEqual({
+        type: 2,
+        style: 5,
+        label: 'Watch Live',
+        url: 'https://pkmn.ai/arena/battles/',
+      });
+      expect(buttons[1].custom_id).toBe(
+        `watch:arm:${Math.min(fp.id, ze.id)}:${Math.max(fp.id, ze.id)}:l:gen1ou20261109`
+      );
+      // All matched watches were atomically consumed (including blocked-user).
+      expect(db.listDiscordWatchesForUser('u1')).toEqual([]);
+      expect(db.listDiscordWatchesForUser('blocked-user')).toEqual([]);
+
+      // Tournament DM includes deep-linked #table=N URL and stage.
+      db.addDiscordWatch({
+        discordId: 'u2',
+        agentId: fp.id,
+        tournamentId: '2',
+        now: 1_700_000_010,
+      });
+      const sentTourney = await discord.notifyLiveTournamentGame(db, 'bot-tok', {
+        tournamentId: '2',
+        tournamentName: 'VGC Spring',
+        table: 2,
+        gameId: 't2-g1',
+        stage: 'Superfinal',
+        p1: {slug: 'foul-play', name: 'Foul Play', version: '1.2'},
+        p2: {slug: '0-error', name: '0-Error', version: '2.0'},
+      });
+      expect(sentTourney).toBe(1);
+      expect(dmPosts).toHaveLength(2);
+      expect(dmPosts[1].channel).toBe('dm-u2');
+      expect(dmPosts[1].body.content).toContain(
+        'is live on **Table 2** of **VGC Spring** (Superfinal)'
+      );
+      expect(dmPosts[1].body.content).toContain('https://pkmn.ai/arena/tournaments/2/#table=2');
+      expect(dmPosts[1].body.components![0].components[0].url).toBe(
+        'https://pkmn.ai/arena/tournaments/2/#table=2'
+      );
+      expect(db.listDiscordWatchesForUser('u2')).toEqual([]);
+    } finally {
+      console.warn = warnSpy;
+      db.close();
+    }
+  });
+});
