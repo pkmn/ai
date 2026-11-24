@@ -98,9 +98,11 @@ Site admins (`ADMINS` in `server/auth.ts`) can inspect and moderate registered p
 (or `/admin.json`): live VPS & Arena host system telemetry (updated over `/api/admin/stream` SSE
 whenever the Arena heartbeats — load, RAM/swap, internal & `/Volumes/Archive` disk usage/I/O,
 network health, traffic/SSE viewers, error rates, backups/GCS archive sync, and pending OS updates),
-runner health, smoke queue, ladder readiness, linked Discord/Smogon standing, inline per-ladder
-qualification toggles, cooldowns, and version stderr logs, plus direct actions (refund cooldown,
-retire an active version on a ladder, quarantine/unquarantine a version).
+runner health, smoke queue & staged counts, ladder readiness, linked Discord/Smogon standing, inline
+per-ladder qualification toggles, cooldowns, `/info` telemetry status dots, CPU/fault/protocol-error
+aggregates, and inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, plus
+direct actions (refund cooldown, discard a staged version, retire an active version on a ladder,
+quarantine/unquarantine a version).
 
 ```sh
 npm run pkmn -- quarantine foul-play 1.2.0 --reason "Repeated protocol framing timeouts on SV"

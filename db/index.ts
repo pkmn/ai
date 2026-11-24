@@ -639,6 +639,10 @@ export class Database extends SqliteDatabase {
     return versions.createSubmission(this.db, this.txRunner, input);
   }
 
+  countStagedVersions(): number {
+    return versions.countStagedVersions(this.db);
+  }
+
   getPendingSubmissions(): versions.PendingSubmissionRow[] {
     return versions.getPendingSubmissions(this.db);
   }

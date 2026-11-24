@@ -1813,6 +1813,75 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       githubUser: 'scheibo',
       click: 'tr[data-agent-row="0-error"] .row-toggle',
     },
+    {
+      name: 'admin-diagnostic',
+      section: 'account',
+      title: 'Admin (Diagnostic)',
+      path: '/admin/',
+      githubUser: 'scheibo',
+      setup: fixture => withSavepoint(fixture, raw => {
+        const agentRow = raw.prepare("SELECT id FROM agents WHERE slug = '0-error'").get() as {
+          id: number;
+        };
+        const res = raw.prepare(
+          `INSERT INTO agent_versions (
+            agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+            unpacked_bytes, smoke_status, smoke_duration_millis, smoke_init_millis,
+            smoke_turn_millis, smoke_peak_ram, submitted_at, notified
+          ) VALUES (?, '1.3.0', 'bundle',
+            'https://github.com/pkmn/0-ERROR/releases/download/v1.3.0/agent.tar.zst',
+            ?, ?, '[]', 214000000, 'staged', 14200, 128, 38, 612, ?, 1)`
+        ).run(
+          agentRow.id,
+          'c'.repeat(64),
+          JSON.stringify([SV_LADDER_ID]),
+          NOW_SECONDS - 120
+        );
+        const versionId = Number(res.lastInsertRowid);
+        const log = [
+          '|player|p1|0 ERROR (P1)|1|',
+          '|player|p2|0 ERROR (P2)|1|',
+          '|gametype|singles',
+          '|gen|9',
+          '|tier|[Gen 9] OU',
+          '|start',
+          '|switch|p1a: Great Tusk|Great Tusk|371/371',
+          '|switch|p2a: Dragapult|Dragapult|317/317',
+          '|turn|1',
+          '|ai|p1|{"win":0.54,"depth":10,"nodes":18400,"nps":420000}',
+          '|ai|p2|{"win":0.47,"depth":9,"nodes":16100,"nps":395000}',
+          '|move|p2a: Dragapult|Draco Meteor|p1a: Great Tusk',
+          '|-damage|p1a: Great Tusk|128/371',
+          '|move|p1a: Great Tusk|Knock Off|p2a: Dragapult',
+          '|-damage|p2a: Dragapult|0 fnt',
+          '|faint|p2a: Dragapult',
+          '|switch|p2a: Corviknight|Corviknight|400/400',
+          '|turn|2',
+          '|ai|p1|{"win":0.61,"depth":11,"nodes":24500,"nps":450000}',
+          '|ai|p2|{"win":0.39,"depth":10,"nodes":21200,"nps":410000}',
+          '|win|0 ERROR (P1)',
+        ].join('\n');
+        raw.prepare(
+          `INSERT INTO smoke_diagnostics (
+            version_id, ladder_id, format, turns, end_reason, duration_millis,
+            battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
+            p1_peak_ram, p2_peak_ram, supports_info, created_at
+          ) VALUES (?, ?, 'gen9ou', 2, 'win', 14200, ?, 'init ok\nsearch depth=11',
+            'init ok\nsearch depth=10', 3.4, 3.3, 612, 598, 1, ?)`
+        ).run(versionId, SV_LADDER_ID, log, NOW_SECONDS - 90);
+      }),
+      act: async page => {
+        await page.locator('tr[data-agent-row="0-error"] .row-toggle').click();
+        const diagCell = page
+          .locator('tr[data-detail-for="0-error"] tr.battle-row[data-diag-ids] td:first-child')
+          .first();
+        await diagCell.waitFor({state: 'visible', timeout: 5000});
+        await diagCell.click();
+        await page
+          .locator('tr[data-detail-for="0-error"] .diag-replay-row iframe.replay-viewer-frame')
+          .waitFor({state: 'visible', timeout: 5000});
+      },
+    },
 
     // =========================================================================
     // 7. Wiki

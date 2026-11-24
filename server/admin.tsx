@@ -8,8 +8,10 @@ import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import * as util from '../static/util';
 
+import * as account from './account';
 import type * as arena from './arena';
 import {Auth, isAdmin, isCrossSiteRequest} from './auth';
+import {buildAiPanelClientJs} from './render';
 import * as system from './system';
 import {formatTournamentName} from './tournaments';
 
@@ -86,6 +88,7 @@ export interface AdminSnapshot {
   health: {
     runner: RunnerHealth;
     pendingSubmissions: AdminPendingItem[];
+    stagedCount: number;
     unsentDmCount: number;
     discordMemberCount: number;
   };
@@ -137,6 +140,8 @@ const ADMIN_SCRIPT = `
       if (m) return m[1] + ' cooldown remaining.';
       m = /^Active version (\\S+) on (\\S+) has not settled \\((.+)\\)\\.$/.exec(reason);
       if (m) return 'Unsettled ' + m[2] + ' ' + m[1] + ' (' + m[3] + ').';
+      m = /^Version (\\S+) passed diagnostic testing; activate or discard/.exec(reason);
+      if (m) return 'Staged ' + m[1] + ' awaiting activation.';
       if (reason === 'Project qualification is pending staff review.') {
         return 'Pending staff review.';
       }
@@ -336,6 +341,253 @@ const ADMIN_SCRIPT = `
 
         group.appendChild(confirmBtn);
         group.appendChild(cancelBtn);
+      });
+    });
+
+    document.querySelectorAll('button[data-action="discard"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = btn.closest('.action-group');
+        if (!group || group.querySelector('.confirm-discard')) return;
+        btn.classList.add('hide');
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'btn-sm btn-danger confirm-discard';
+        confirmBtn.textContent = 'Confirm discard';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-sm';
+        cancelBtn.textContent = 'Cancel';
+
+        const cleanup = () => {
+          confirmBtn.remove();
+          cancelBtn.remove();
+          btn.classList.remove('hide');
+        };
+
+        cancelBtn.addEventListener('click', cleanup);
+        confirmBtn.addEventListener('click', async () => {
+          confirmBtn.disabled = true;
+          cancelBtn.disabled = true;
+          try {
+            await postJson(
+              '/api/admin/versions/' + encodeURIComponent(btn.dataset.versionId) + '/discard',
+              {}
+            );
+            window.location.reload();
+          } catch (err) {
+            cleanup();
+            showFeedback(err.message || 'Failed discarding staged version.', true);
+          }
+        });
+
+        group.appendChild(confirmBtn);
+        group.appendChild(cancelBtn);
+      });
+    });
+
+    ${buildAiPanelClientJs()}
+
+    const SPEED_KEY = 'pkmn-viewer-speed';
+    const VALID_SPEEDS = {slow: 1, normal: 1, fast: 1, hyperfast: 1};
+
+    const postToFrame = (frameEl, msg) => {
+      if (frameEl && frameEl.contentWindow) {
+        frameEl.contentWindow.postMessage(msg, '*');
+      }
+    };
+
+    const syncFramePrefs = frameEl => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      postToFrame(frameEl, {type: 'theme', dark});
+      try {
+        const saved = localStorage.getItem(SPEED_KEY);
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_SPEEDS, saved)) {
+          postToFrame(frameEl, {type: 'speed', speed: saved});
+        }
+      } catch {}
+    };
+
+    new MutationObserver(() => {
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      document.querySelectorAll('iframe.replay-viewer-frame').forEach(f => {
+        postToFrame(f, {type: 'theme', dark});
+      });
+    }).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']});
+
+    const renderDiagReplayAi = (slot, activeTurn) => {
+      const panel = slot && slot.querySelector('.replay-ai-panel');
+      if (!panel) return;
+      const tele = Array.isArray(slot._aiTelemetry) ? slot._aiTelemetry : [];
+      if (tele.length === 0) {
+        panel.innerHTML = '';
+        panel.classList.add('hide');
+        return;
+      }
+      let snap = tele[0];
+      const target = typeof activeTurn === 'number' ? activeTurn : tele[0].turn;
+      for (let i = 0; i < tele.length; i++) {
+        if (tele[i].turn <= target) snap = tele[i];
+      }
+      const winHistory = [];
+      for (let i = 0; i < tele.length; i++) {
+        const p1w = tele[i].p1 && typeof tele[i].p1.win === 'number' ? tele[i].p1.win : undefined;
+        const p2w = tele[i].p2 && typeof tele[i].p2.win === 'number' ? tele[i].p2.win : undefined;
+        if (p1w !== undefined || p2w !== undefined) {
+          winHistory.push({turn: tele[i].turn, p1: p1w, p2: p2w});
+        }
+      }
+      const html = renderAiPanelHtml(
+        slot._p1Name || 'P1',
+        slot._p2Name || 'P2',
+        snap.p1,
+        snap.p2,
+        winHistory,
+        {activeTurn: snap.turn, interactive: true}
+      );
+      panel.innerHTML = html;
+      panel.classList.toggle('hide', !html);
+    };
+
+    window.addEventListener('message', ev => {
+      const data = ev.data;
+      if (!data || typeof data !== 'object') return;
+      const frames = document.querySelectorAll('iframe.replay-viewer-frame');
+      let fromViewer = false;
+      for (let i = 0; i < frames.length; i++) {
+        if (ev.source === frames[i].contentWindow) {
+          fromViewer = true;
+          break;
+        }
+      }
+      if (!fromViewer) return;
+      if (
+        data.type === 'speed' &&
+        typeof data.speed === 'string' &&
+        Object.prototype.hasOwnProperty.call(VALID_SPEEDS, data.speed)
+      ) {
+        try {
+          localStorage.setItem(SPEED_KEY, data.speed);
+        } catch {}
+        return;
+      }
+      if (data.type === 'playback' && typeof data.turn === 'number') {
+        document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+          const f = slot.querySelector('iframe.replay-viewer-frame');
+          if (f && ev.source === f.contentWindow) renderDiagReplayAi(slot, data.turn);
+        });
+        return;
+      }
+      if (data.type !== 'ready') return;
+      document.querySelectorAll('.diag-replay-wrap').forEach(slot => {
+        const f = slot.querySelector('iframe.replay-viewer-frame');
+        if (f && ev.source === f.contentWindow) {
+          slot._viewerReady = true;
+          syncFramePrefs(f);
+          if (Array.isArray(slot._pendingLines) && slot._pendingLines.length > 0) {
+            postToFrame(f, {
+              type: 'load',
+              lines: slot._pendingLines,
+              live: false,
+              side: 'p1',
+            });
+          }
+        }
+      });
+    });
+
+    const loadDiagReplayInto = async (wrap, diagId, allIds, allLabels) => {
+      wrap.innerHTML = '<div class="muted">Loading diagnostic replay…</div>';
+      try {
+        const res = await fetch('/api/admin/diagnostics/' + diagId + '/log', {
+          headers: {Accept: 'application/json'},
+        });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        const lines = Array.isArray(data.lines) ? data.lines : [];
+        wrap._pendingLines = lines;
+        wrap._p1Name = data.p1Name || 'P1';
+        wrap._p2Name = data.p2Name || 'P2';
+        wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
+        const tabsHtml = allIds.length > 1
+          ? '<div class="diag-tabs">' + allIds.map((id, i) => (
+            '<button type="button" class="link-btn diag-tab-btn' +
+              (id === diagId ? ' active' : '') + '" data-diag-id="' + escAi(id) + '">' +
+              escAi(allLabels[i] || ('Game ' + (i + 1))) + '</button>'
+          )).join('<span class="muted">·</span>') + '</div>'
+          : '';
+        wrap.innerHTML =
+          tabsHtml +
+          '<div class="ai-panel replay-ai-panel hide"></div>' +
+          '<div class="viewer-wrap">' +
+            '<iframe class="viewer-frame replay-viewer-frame" src="/arena/viewer/" ' +
+              'title="Diagnostic replay viewer" sandbox="allow-scripts"></iframe>' +
+          '</div>';
+        wrap.querySelectorAll('.diag-tab-btn').forEach(tabBtn => {
+          tabBtn.addEventListener('click', () => {
+            const nextId = tabBtn.getAttribute('data-diag-id');
+            if (nextId && nextId !== diagId) {
+              void loadDiagReplayInto(wrap, nextId, allIds, allLabels);
+            }
+          });
+        });
+        renderDiagReplayAi(wrap, 0);
+      } catch {
+        wrap.innerHTML = '<div class="no">Failed to load diagnostic replay.</div>';
+      }
+    };
+
+    const toggleDiagRow = (row) => {
+      const rawIds = row.getAttribute('data-diag-ids') || '';
+      const allIds = rawIds.split(',').filter(Boolean);
+      if (!allIds.length || !row.parentNode) return;
+      const allLabels = (row.getAttribute('data-diag-labels') || '').split('|');
+      const existing = row.nextElementSibling;
+      if (existing && existing.classList.contains('diag-replay-row')) {
+        existing.remove();
+        row.classList.remove('expanded');
+        row.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      row.classList.add('expanded');
+      row.setAttribute('aria-expanded', 'true');
+      const detailRow = document.createElement('tr');
+      detailRow.className = 'diag-replay-row';
+      const td = document.createElement('td');
+      td.colSpan = 6;
+      const wrap = document.createElement('div');
+      wrap.className = 'diag-replay-wrap';
+      wrap.addEventListener('click', wev => {
+        const hit = wev.target && wev.target.closest
+          ? wev.target.closest('[data-seek-turn]')
+          : null;
+        if (!hit) return;
+        const turn = Number(hit.getAttribute('data-seek-turn'));
+        if (!Number.isFinite(turn)) return;
+        const f = wrap.querySelector('iframe.replay-viewer-frame');
+        if (f) postToFrame(f, {type: 'seek', turn});
+        renderDiagReplayAi(wrap, turn);
+      });
+      td.appendChild(wrap);
+      detailRow.appendChild(td);
+      row.parentNode.insertBefore(detailRow, row.nextSibling);
+      void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
+    };
+
+    document.querySelectorAll('tr.battle-row[data-diag-ids]').forEach(row => {
+      row.addEventListener('click', ev => {
+        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+          return;
+        }
+        toggleDiagRow(row);
+      });
+      row.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter' || ev.key === ' ') {
+          if (ev.target && ev.target.closest && ev.target.closest('a,button,input')) return;
+          ev.preventDefault();
+          toggleDiagRow(row);
+        }
       });
     });
 
@@ -551,18 +803,50 @@ function formatAdminReason(reason?: string): string {
   if (m) return `${m[1]} cooldown remaining.`;
   m = /^Active version (\S+) on (\S+) has not settled \((.+)\)\.$/.exec(reason);
   if (m) return `Unsettled ${m[2]} ${m[1]} (${m[3]}).`;
+  m = /^Version (\S+) passed diagnostic testing; activate or discard/.exec(reason);
+  if (m) return `Staged ${m[1]} awaiting activation.`;
   if (reason === 'Project qualification is pending staff review.') {
     return 'Pending staff review.';
   }
   return reason;
 }
 
-function formatFaultCounts(crashes: number, timeouts: number, ooms: number): string[] {
+function formatFaultCounts(
+  crashes: number,
+  timeouts: number,
+  ooms: number,
+  invalidChoices = 0
+): string[] {
   const out: string[] = [];
   if (crashes > 0) out.push(`${crashes} ${crashes === 1 ? 'crash' : 'crashes'}`);
   if (timeouts > 0) out.push(`${timeouts} ${timeouts === 1 ? 'timeout' : 'timeouts'}`);
   if (ooms > 0) out.push(`${ooms} ${ooms === 1 ? 'OOM' : 'OOMs'}`);
+  if (invalidChoices > 0) out.push(`${invalidChoices} invalid choice`);
   return out;
+}
+
+function totalProtocolErrors(e: db.AdminEntryView): number {
+  return e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther;
+}
+
+function formatEntryFaultTooltip(e: db.AdminEntryView): string | undefined {
+  const gameParts: string[] = [];
+  if (e.crashes > 0) gameParts.push(`Crashes: ${e.crashes}`);
+  if (e.timeouts > 0) gameParts.push(`Timeouts: ${e.timeouts}`);
+  if (e.ooms > 0) gameParts.push(`OOMs: ${e.ooms}`);
+  if (e.invalidChoices > 0) gameParts.push(`Invalid choice: ${e.invalidChoices}`);
+  const protoParts: string[] = [];
+  if (e.invalidCantMove > 0) protoParts.push(`Can't move: ${e.invalidCantMove}`);
+  if (e.invalidCantSwitch > 0) protoParts.push(`Can't switch: ${e.invalidCantSwitch}`);
+  if (e.invalidTarget > 0) protoParts.push(`Invalid target: ${e.invalidTarget}`);
+  if (e.invalidOther > 0) protoParts.push(`Other invalid: ${e.invalidOther}`);
+  if (e.unavailableChoices > 0) {
+    protoParts.push(`Unavailable choices (info): ${e.unavailableChoices}`);
+  }
+  const sections: string[] = [];
+  if (gameParts.length > 0) sections.push(`Game faults — ${gameParts.join(' · ')}`);
+  if (protoParts.length > 0) sections.push(`Protocol errors — ${protoParts.join(' · ')}`);
+  return sections.length > 0 ? sections.join('\n') : undefined;
 }
 
 function diskPct(d: system.DiskMetrics): number | undefined {
@@ -769,6 +1053,7 @@ function renderLoadRow(load: system.LoadMetrics): util.Child {
 
 interface SystemCardExtras {
   pendingQueue: number;
+  stagedCount: number;
   unsentDms: number;
 }
 
@@ -1048,6 +1333,17 @@ function renderSystemCards(
                 >
                   Queue {extras.pendingQueue} pending
                 </span>
+                {extras.stagedCount > 0 && (
+                  <>
+                    {' · '}
+                    <span
+                      className='warn'
+                      title='Diagnostic smoke runs awaiting owner activation or discard'
+                    >
+                      {extras.stagedCount} staged
+                    </span>
+                  </>
+                )}
                 {' · '}
                 <span
                   className={arenaSys.outboxPending > 0 ? 'warn' : 'muted'}
@@ -1234,6 +1530,11 @@ export function buildAdminSnapshot(
       : {}),
   };
 
+  const stagedCount = agents.reduce(
+    (sum, item) => sum + item.versions.filter(v => v.smokeStatus === 'staged').length,
+    0
+  );
+
   return {
     generatedAt: now,
     admin: adminLogin,
@@ -1241,6 +1542,7 @@ export function buildAdminSnapshot(
     health: {
       runner: computeRunnerHealth(arenaHandle, now),
       pendingSubmissions,
+      stagedCount,
       unsentDmCount: database.getPendingVersionDms().length,
       discordMemberCount: database.countDiscordMembers(),
     },
@@ -1367,12 +1669,16 @@ function renderProjectDetailPanel(
                     e.se <= SETTLED_MAX_SE && e.matches >= SETTLED_MIN_MATCHES
                   );
                   const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
-                  const faults = formatFaultCounts(e.crashes, e.timeouts, e.ooms);
+                  const gameFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
+                  const protoErrs = totalProtocolErrors(e);
+                  const faultTip = formatEntryFaultTooltip(e) ?? 'No recorded faults';
+                  const hasCpu = e.cpuMatches > 0 && e.meanCpuCores > 0;
                   return (
                     <tr>
                       <td><strong>{e.ladderName}</strong></td>
                       <td>
                         <code>{e.version}</code>
+                        {util.renderInfoDot(e.smokeSupportsInfo)}
                         {e.role === 'quarantined' && (
                           <> <span className='no'>(quarantined)</span></>
                         )}
@@ -1390,12 +1696,15 @@ function renderProjectDetailPanel(
                       </td>
                       <td className='num'>
                         {Math.round(e.meanTurnMillis)}ms · {Math.round(e.peakRam)} MiB
+                        {hasCpu && <> · {e.meanCpuCores.toFixed(1)} CPU</>}
                       </td>
-                      <td className='num'>
-                        {faults.length > 0 ? (
-                          <span className='no'>{faults.join(', ')}</span>
+                      <td className='num' title={faultTip}>
+                        {gameFaults > 0 ? (
+                          <span className='no'>{gameFaults}</span>
+                        ) : protoErrs > 0 ? (
+                          <span className='warn'>0</span>
                         ) : (
-                          <span className='muted'>—</span>
+                          <span className='muted'>0</span>
                         )}
                       </td>
                       <td>
@@ -1546,14 +1855,49 @@ function renderProjectDetailPanel(
                     ...v.ladders.map(id => ladderNameById.get(id) ?? id),
                     ...(v.tournamentNames ?? []).map(formatTournamentName),
                   ];
-                  // TODO(bot_debug_diagnostic_matches): surface smoke logs, replay link,
-                  // diagnostics, and full stderr for each version once rebased.
+                  const statsText = account.formatSmokeStatsText(v);
+                  const diagLinks = account.renderDiagnosticLinks(
+                    v.diagnostics,
+                    ladderNameById,
+                    '/api/admin/diagnostics'
+                  );
+                  const playableDiags = (v.diagnostics ?? []).filter(d => d.hasLog);
+                  const isTournamentOnly =
+                    v.ladders.length === 0 && (v.tournamentNames?.length ?? 0) > 0;
+                  const isRetired =
+                    v.smokeStatus === 'passed' &&
+                    !isTournamentOnly &&
+                    v.activeLadderNames.length === 0;
+
                   let smokeEl: util.Child;
                   if (v.smokeStatus === 'pending') {
                     smokeEl = <span className='warn'>PENDING</span>;
-                  } else if (v.smokeStatus === 'passed') {
-                    smokeEl = <span className='yes'>PASS</span>;
+                  } else if (v.smokeStatus === 'staged') {
+                    smokeEl = (
+                      <>
+                        <span className='yes'>PASS</span>{' '}
+                        <span className='warn'>(staged)</span>{' '}
+                        <span className={v.notified ? 'muted' : 'warn'}>
+                          ({v.notified ? 'DM sent' : 'DM unsent'})
+                        </span>
+                        {statsText && <> <span className='muted'>({statsText})</span></>}
+                        {diagLinks}
+                      </>
+                    );
+                  } else if (v.smokeStatus === 'passed' || v.smokeStatus === 'discarded') {
+                    smokeEl = (
+                      <>
+                        {isRetired || v.smokeStatus === 'discarded'
+                          ? <span>PASS</span>
+                          : <span className='yes'>PASS</span>}
+                        {statsText && <> <span className='muted'>({statsText})</span></>}
+                        {diagLinks}
+                      </>
+                    );
                   } else {
+                    const showInlineError = Boolean(v.smokeError) && (
+                      v.smokeStatus === 'quarantined' || !v.diagnostics?.length
+                    );
                     smokeEl = (
                       <>
                         <span className='no'>
@@ -1562,32 +1906,71 @@ function renderProjectDetailPanel(
                         <span className={v.notified ? 'muted' : 'warn'}>
                           ({v.notified ? 'DM sent' : 'DM unsent'})
                         </span>
-                        {v.smokeError && (
-                          <details className='smoke-log'>
-                            <summary>stderr</summary>
-                            <pre><code>{v.smokeError}</code></pre>
-                          </details>
+                        {showInlineError && (
+                          <div className='smoke-error muted'>{v.smokeError}</div>
                         )}
+                        {diagLinks}
                       </>
                     );
                   }
-                  const stateText = v.smokeStatus === 'pending'
-                    ? 'Pending'
-                    : v.smokeStatus === 'failed'
-                      ? 'Rejected'
-                      : v.smokeStatus === 'quarantined'
-                        ? 'Quarantined'
-                        : v.activeLadderNames.length > 0
-                          ? `Active (${v.activeLadderNames.join(', ')})`
-                          : (v.tournamentNames?.length ?? 0) > 0 && v.ladders.length === 0
-                            ? 'Entered'
-                            : 'Retired';
+
+                  let stateEl: util.Child;
+                  if (v.smokeStatus === 'pending') {
+                    stateEl = <span className='muted'>Pending</span>;
+                  } else if (v.smokeStatus === 'staged') {
+                    stateEl = (
+                      <span
+                        className='warn'
+                        title='Passed diagnostic smoke test; awaiting owner activation or discard'
+                      >
+                        Staged
+                      </span>
+                    );
+                  } else if (v.smokeStatus === 'discarded') {
+                    stateEl = <span className='muted'>Discarded</span>;
+                  } else if (v.smokeStatus === 'failed') {
+                    stateEl = <span className='muted'>Rejected</span>;
+                  } else if (v.smokeStatus === 'quarantined') {
+                    stateEl = <span className='no'>Quarantined</span>;
+                  } else {
+                    const activatedAttrs = v.activatedAt !== undefined
+                      ? buildLocalizedTitle([{prefix: 'Activated ', epoch: v.activatedAt}])
+                      : {};
+                    const label = v.activeLadderNames.length > 0
+                      ? `Active (${v.activeLadderNames.join(', ')})`
+                      : isTournamentOnly
+                        ? 'Entered'
+                        : 'Retired';
+                    stateEl = <span {...activatedAttrs}>{label}</span>;
+                  }
+
+                  const rowClasses: string[] = [];
+                  if (playableDiags.length > 0) rowClasses.push('battle-row');
+                  if (isRetired || v.smokeStatus === 'discarded') rowClasses.push('secondary');
                   return (
-                    <tr>
-                      <td><code>{v.version}</code></td>
+                    <tr
+                      className={rowClasses.length > 0 ? rowClasses.join(' ') : undefined}
+                      data-diag-ids={playableDiags.length > 0
+                        ? playableDiags.map(d => String(d.id)).join(',')
+                        : undefined}
+                      data-diag-labels={playableDiags.length > 0
+                        ? playableDiags
+                          .map(d => account.diagnosticTargetLabel(d, ladderNameById))
+                          .join('|')
+                        : undefined}
+                      tabIndex={playableDiags.length > 0 ? 0 : undefined}
+                      aria-expanded={playableDiags.length > 0 ? 'false' : undefined}
+                    >
+                      <td>
+                        {playableDiags.length > 0 && (
+                          <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
+                        )}
+                        <code>{v.version}</code>
+                        {util.renderInfoDot(v.smokeSupportsInfo)}
+                      </td>
                       <td className='wrap'><tt>{targets.join(', ') || '—'}</tt></td>
                       <td className='wrap'>{smokeEl}</td>
-                      <td>{stateText}</td>
+                      <td>{stateEl}</td>
                       <td className='num muted'>
                         <time
                           data-epoch={String(v.submittedAt)}
@@ -1599,6 +1982,19 @@ function renderProjectDetailPanel(
                       </td>
                       <td>
                         <span className='action-group'>
+                          {v.smokeStatus === 'staged' && (
+                            <button
+                              type='button'
+                              className='btn-sm btn-danger'
+                              data-action='discard'
+                              data-version-id={String(v.id)}
+                              data-agent={agent.slug}
+                              data-version={v.version}
+                              title={`Discard staged version ${v.version}`}
+                            >
+                              Discard
+                            </button>
+                          )}
                           {v.smokeStatus === 'passed' && (
                             <button
                               type='button'
@@ -1642,7 +2038,7 @@ export function renderAdminPage(opts: {
 }): string {
   const {snapshot, allLadders, liveTournament} = opts;
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
-  const {pendingSubmissions, unsentDmCount} = snapshot.health;
+  const {pendingSubmissions, stagedCount, unsentDmCount} = snapshot.health;
 
   const content = (
     <>
@@ -1650,6 +2046,7 @@ export function renderAdminPage(opts: {
 
       {renderSystemSection(snapshot.system, snapshot.generatedAt, {
         pendingQueue: pendingSubmissions.length,
+        stagedCount,
         unsentDms: unsentDmCount,
       })}
       {renderLaddersSection(snapshot.ladders)}
@@ -1681,6 +2078,7 @@ export function renderAdminPage(opts: {
                   const hasCooldown = submissionStatus.nextEligibleAt !== undefined;
                   const activeEntries = item.entries.filter(e => e.role !== 'quarantined');
                   const quarantinedEntries = item.entries.filter(e => e.role === 'quarantined');
+                  const stagedVersions = item.versions.filter(v => v.smokeStatus === 'staged');
                   const linkedDiscord = developers.filter(
                     d => Boolean(d.discordId && d.discordUsername)
                   );
@@ -1807,6 +2205,7 @@ export function renderAdminPage(opts: {
                         <td className='wrap'>
                           {activeEntries.length === 0 &&
                             quarantinedEntries.length === 0 &&
+                            stagedVersions.length === 0 &&
                             item.tournaments.length === 0 ? (
                               <span className='muted'>—</span>
                             ) : (
@@ -1815,7 +2214,8 @@ export function renderAdminPage(opts: {
                                   const faults = formatFaultCounts(
                                     e.crashes,
                                     e.timeouts,
-                                    e.ooms
+                                    e.ooms,
+                                    e.invalidChoices
                                   );
                                   const tip = faults.length > 0
                                     ? `${e.ladderName} ${e.version} ` +
@@ -1836,6 +2236,17 @@ export function renderAdminPage(opts: {
                                     title={`Quarantined on ${e.ladderName}`}
                                   >
                                     {e.ladderName} {e.version} [Q]
+                                  </span>
+                                ))}
+                                {stagedVersions.map(v => (
+                                  <span
+                                    className='chip chip-warn'
+                                    title={
+                                      `Staged version ${v.version} awaiting owner activation ` +
+                                      'or discard'
+                                    }
+                                  >
+                                    {v.version} [staged]
                                   </span>
                                 ))}
                                 {item.tournaments.map(t => {
@@ -1934,6 +2345,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const sys = collectSystemSnapshot(now);
     const runner = computeRunnerHealth(arenaHandle, now);
     const pendingQueue = db.getPendingSubmissions().length;
+    const stagedCount = db.countStagedVersions();
     const unsentDms = db.getPendingVersionDms().length;
     return {
       generatedAt: now,
@@ -1941,7 +2353,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       runner,
       vps: sys.vps,
       ...(sys.arena ? {arena: sys.arena} : {}),
-      cardsHtml: renderSystemCards(sys, now, {pendingQueue, unsentDms}).toString(),
+      cardsHtml: renderSystemCards(sys, now, {pendingQueue, stagedCount, unsentDms}).toString(),
     };
   };
 
@@ -2039,6 +2451,13 @@ export function register(app: polka.Polka, options: Options): Handle {
             unpackedBytes: v.unpackedBytes,
             smokeStatus: v.smokeStatus,
             smokeError: v.smokeError,
+            smokeDurationMillis: v.smokeDurationMillis,
+            smokeInitMillis: v.smokeInitMillis,
+            smokeTeamPreviewMillis: v.smokeTeamPreviewMillis,
+            smokeTurnMillis: v.smokeTurnMillis,
+            smokePeakRam: v.smokePeakRam,
+            smokeSupportsInfo: v.smokeSupportsInfo,
+            diagnostics: v.diagnostics,
             submittedAt: v.submittedAt,
             activatedAt: v.activatedAt,
             notified: v.notified,
@@ -2133,6 +2552,74 @@ export function register(app: polka.Polka, options: Options): Handle {
     } catch (err: any) {
       const status = /not found/i.test(String(err?.message)) ? 404 : 400;
       sendJson(res, status, {error: err?.message || 'Failed refunding cooldown.'});
+    }
+  });
+
+  const parsePositiveIntParam = (raw: string | string[] | undefined): number | undefined => {
+    const val = Array.isArray(raw) ? raw[0] : raw;
+    if (!val || !/^\d+$/.test(val)) return undefined;
+    const n = Number(val);
+    return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+  };
+
+  app.get('/api/admin/diagnostics/:id/log', (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const id = parsePositiveIntParam(req.params.id);
+    if (id === undefined) {
+      sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
+      return;
+    }
+    const diag = db.getSmokeDiagnosticById(id);
+    if (!diag) {
+      sendJson(res, 404, {error: 'Diagnostic log not found.'});
+      return;
+    }
+    const agent = db.getAgentById(diag.agentId);
+    if (!agent) {
+      sendJson(res, 404, {error: 'Project not found.'});
+      return;
+    }
+    account.sendDiagnosticLogResponse(req, res, diag, agent);
+  });
+
+  app.get('/api/admin/diagnostics/:id/stderr', (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const id = parsePositiveIntParam(req.params.id);
+    if (id === undefined) {
+      sendJson(res, 400, {error: 'Invalid diagnostic ID.'});
+      return;
+    }
+    const diag = db.getSmokeDiagnosticById(id);
+    if (!diag) {
+      sendJson(res, 404, {error: 'Diagnostic stderr not found.'});
+      return;
+    }
+    const agent = db.getAgentById(diag.agentId);
+    if (!agent) {
+      sendJson(res, 404, {error: 'Project not found.'});
+      return;
+    }
+    account.sendDiagnosticStderrResponse(req, res, diag, agent);
+  });
+
+  app.post('/api/admin/versions/:id/discard', (req, res) => {
+    if (!requireAdminMutation(req, res)) return;
+    const versionId = parsePositiveIntParam(req.params.id);
+    if (versionId === undefined) {
+      sendJson(res, 400, {error: 'Invalid version ID.'});
+      return;
+    }
+    const ver = db.getVersionById(versionId);
+    if (!ver) {
+      sendJson(res, 404, {error: `Unknown versionId ${versionId}`});
+      return;
+    }
+    try {
+      const updated = db.discardStagedVersion({versionId, agentId: ver.agentId});
+      sendJson(res, 200, {ok: true, version: updated});
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      sendJson(res, status, {error: err?.message || 'Failed discarding staged version.'});
     }
   });
 

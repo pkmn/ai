@@ -1559,6 +1559,7 @@ export interface AdminEntryView {
   ladderStatus: LadderStatus;
   versionId: number;
   version: string;
+  smokeSupportsInfo?: boolean;
   role: 'champion' | 'challenger' | 'quarantined';
   isAnchor: boolean;
   elo: number;
@@ -1575,9 +1576,17 @@ export interface AdminEntryView {
   settledAt?: number;
   meanTurnMillis: number;
   peakRam: number;
+  meanCpuCores: number;
+  cpuMatches: number;
   crashes: number;
   timeouts: number;
   ooms: number;
+  invalidChoices: number;
+  invalidCantMove: number;
+  invalidCantSwitch: number;
+  invalidTarget: number;
+  invalidOther: number;
+  unavailableChoices: number;
 }
 
 export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntryView[]> {
@@ -1590,6 +1599,15 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       l.status AS ladder_status,
       le.version_id,
       av.version,
+      CASE
+        WHEN EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = le.version_id)
+          THEN (
+            SELECT MAX(sd.supports_info)
+            FROM smoke_diagnostics sd
+            WHERE sd.version_id = le.version_id
+          )
+        ELSE NULL
+      END AS smoke_supports_info,
       le.role,
       le.is_anchor,
       le.elo,
@@ -1606,9 +1624,17 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       le.settled_at,
       le.mean_turn_millis,
       le.peak_ram,
+      le.mean_cpu_cores,
+      le.cpu_matches,
       le.crashes,
       le.timeouts,
-      le.ooms
+      le.ooms,
+      le.invalid_choices,
+      le.invalid_cant_move,
+      le.invalid_cant_switch,
+      le.invalid_target,
+      le.invalid_other,
+      le.unavailable_choices
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
@@ -1637,6 +1663,9 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       ladderStatus: r.ladder_status as LadderStatus,
       versionId: r.version_id as number,
       version: r.version as string,
+      ...(r.smoke_supports_info === null || r.smoke_supports_info === undefined
+        ? {}
+        : {smokeSupportsInfo: Number(r.smoke_supports_info) === 1}),
       role: r.role as 'champion' | 'challenger' | 'quarantined',
       isAnchor: (r.is_anchor as number) === 1,
       elo: r.elo as number,
@@ -1653,9 +1682,17 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       settledAt: (r.settled_at as number | null) ?? undefined,
       meanTurnMillis: r.mean_turn_millis as number,
       peakRam: r.peak_ram as number,
+      meanCpuCores: r.mean_cpu_cores as number,
+      cpuMatches: r.cpu_matches as number,
       crashes: r.crashes as number,
       timeouts: r.timeouts as number,
       ooms: r.ooms as number,
+      invalidChoices: r.invalid_choices as number,
+      invalidCantMove: r.invalid_cant_move as number,
+      invalidCantSwitch: r.invalid_cant_switch as number,
+      invalidTarget: r.invalid_target as number,
+      invalidOther: r.invalid_other as number,
+      unavailableChoices: r.unavailable_choices as number,
     });
   }
   return out;

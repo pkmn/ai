@@ -872,6 +872,13 @@ export function createSubmission(
   });
 }
 
+export function countStagedVersions(db: DatabaseSync): number {
+  const row = db.prepare(
+    "SELECT COUNT(*) AS count FROM agent_versions WHERE smoke_status = 'staged'"
+  ).get() as {count: number};
+  return row.count;
+}
+
 export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] {
   const rows = db.prepare(`
     SELECT av.*, a.slug AS agent_slug, a.name AS agent_name

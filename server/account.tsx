@@ -881,7 +881,7 @@ function renderLiveDiagnosticSection(
   );
 }
 
-function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
+export function formatSmokeStatsText(v: db.VersionHistoryView): string | undefined {
   const statsParts: string[] = [];
   if (v.smokeDurationMillis !== undefined) {
     statsParts.push(`${(v.smokeDurationMillis / 1000).toFixed(1)}s`);
@@ -905,18 +905,19 @@ function renderInfoSupportDot(supportsInfo?: boolean): util.Child {
   return util.renderInfoDot(supportsInfo);
 }
 
-function diagnosticTargetLabel(
+export function diagnosticTargetLabel(
   d: db.SmokeDiagnosticSummary,
-  ladderNameById: Map<string, string>
+  ladderNameById: ReadonlyMap<string, string>
 ): string {
   if (d.ladderId) return ladderNameById.get(d.ladderId) ?? d.ladderId;
   if (d.tournamentId) return `T#${d.tournamentId}`;
   return d.format;
 }
 
-function renderDiagnosticLinks(
+export function renderDiagnosticLinks(
   diagnostics: db.SmokeDiagnosticSummary[] | undefined,
-  ladderNameById: Map<string, string>
+  ladderNameById: ReadonlyMap<string, string>,
+  apiPrefix = '/api/account/diagnostics'
 ): util.Child {
   if (!diagnostics?.length) return undefined;
   const multi = diagnostics.length > 1;
@@ -925,14 +926,90 @@ function renderDiagnosticLinks(
       {diagnostics.map(d => (
         <span>
           {multi && <><tt>{diagnosticTargetLabel(d, ladderNameById)}</tt>: </>}
-          <a href={`/api/account/diagnostics/${d.id}/stderr`}>STDERR</a>
+          <a href={`${apiPrefix}/${d.id}/stderr`}>STDERR</a>
           {d.hasLog && (
-            <> · <a href={`/api/account/diagnostics/${d.id}/log?download=1`}>log</a></>
+            <> · <a href={`${apiPrefix}/${d.id}/log?download=1`}>log</a></>
           )}
         </span>
       ))}
     </div>
   );
+}
+
+const safeAttachmentToken = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '-');
+
+export function sendDiagnosticLogResponse(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  diag: db.SmokeDiagnosticRow,
+  agent: {slug: string; name: string}
+) {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  if (url.searchParams.get('download') === '1') {
+    const filename = [
+      safeAttachmentToken(agent.slug),
+      safeAttachmentToken(diag.version),
+      safeAttachmentToken(diag.format),
+    ].join('-') + '.log';
+    res.writeHead(200, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Cache-Control': 'private, no-store',
+    });
+    res.end(diag.battleLog);
+    return;
+  }
+  sendJson(res, 200, {
+    id: diag.id,
+    versionId: diag.versionId,
+    version: diag.version,
+    format: diag.format,
+    turns: diag.turns,
+    endReason: diag.endReason,
+    durationMillis: diag.durationMillis,
+    p1Name: `${agent.name} (P1)`,
+    p2Name: `${agent.name} (P2)`,
+    lines: diag.battleLog.split('\n').filter(Boolean),
+    ...(diag.p1CpuCores !== undefined ? {p1CpuCores: diag.p1CpuCores} : {}),
+    ...(diag.p2CpuCores !== undefined ? {p2CpuCores: diag.p2CpuCores} : {}),
+    ...(diag.p1PeakRam !== undefined ? {p1PeakRam: diag.p1PeakRam} : {}),
+    ...(diag.p2PeakRam !== undefined ? {p2PeakRam: diag.p2PeakRam} : {}),
+  });
+}
+
+export function sendDiagnosticStderrResponse(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  diag: db.SmokeDiagnosticRow,
+  agent: {slug: string}
+) {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const slot = url.searchParams.get('slot');
+  let body: string;
+  let slotSuffix = '';
+  if (slot === 'p1') {
+    body = diag.p1Stderr ?? '';
+    slotSuffix = '-p1';
+  } else if (slot === 'p2') {
+    body = diag.p2Stderr ?? '';
+    slotSuffix = '-p2';
+  } else {
+    const sections: string[] = [];
+    if (diag.p1Stderr) sections.push(`=== P1 stderr ===\n${diag.p1Stderr}`);
+    if (diag.p2Stderr) sections.push(`=== P2 stderr ===\n${diag.p2Stderr}`);
+    body = sections.join('\n\n');
+  }
+  const filename = [
+    safeAttachmentToken(agent.slug),
+    safeAttachmentToken(diag.version),
+    safeAttachmentToken(diag.format),
+  ].join('-') + `${slotSuffix}-stderr.txt`;
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Cache-Control': 'private, no-store',
+  });
+  res.end(body);
 }
 
 function renderStagedSection(opts: {
@@ -2001,8 +2078,6 @@ export function register(app: polka.Polka, options: Options) {
     return Number.isSafeInteger(n) && n > 0 ? n : undefined;
   };
 
-  const safeAttachmentToken = (s: string) => s.replace(/[^A-Za-z0-9._-]+/g, '-');
-
   app.get('/api/account/diagnostic/stream', (req, res) => {
     const session = requireAccountSession(req, res);
     if (!session) return;
@@ -2037,37 +2112,7 @@ export function register(app: polka.Polka, options: Options) {
       sendJson(res, 403, {error: 'Forbidden.'});
       return;
     }
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    if (url.searchParams.get('download') === '1') {
-      const filename = [
-        safeAttachmentToken(session.agent.slug),
-        safeAttachmentToken(diag.version),
-        safeAttachmentToken(diag.format),
-      ].join('-') + '.log';
-      res.writeHead(200, {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      });
-      res.end(diag.battleLog);
-      return;
-    }
-    sendJson(res, 200, {
-      id: diag.id,
-      versionId: diag.versionId,
-      version: diag.version,
-      format: diag.format,
-      turns: diag.turns,
-      endReason: diag.endReason,
-      durationMillis: diag.durationMillis,
-      p1Name: `${session.agent.name} (P1)`,
-      p2Name: `${session.agent.name} (P2)`,
-      lines: diag.battleLog.split('\n').filter(Boolean),
-      ...(diag.p1CpuCores !== undefined ? {p1CpuCores: diag.p1CpuCores} : {}),
-      ...(diag.p2CpuCores !== undefined ? {p2CpuCores: diag.p2CpuCores} : {}),
-      ...(diag.p1PeakRam !== undefined ? {p1PeakRam: diag.p1PeakRam} : {}),
-      ...(diag.p2PeakRam !== undefined ? {p2PeakRam: diag.p2PeakRam} : {}),
-    });
+    sendDiagnosticLogResponse(req, res, diag, session.agent);
   });
 
   app.get('/api/account/diagnostics/:id/stderr', (req, res) => {
@@ -2087,33 +2132,7 @@ export function register(app: polka.Polka, options: Options) {
       sendJson(res, 403, {error: 'Forbidden.'});
       return;
     }
-    const url = new URL(req.url ?? '/', 'http://localhost');
-    const slot = url.searchParams.get('slot');
-    let body: string;
-    let slotSuffix = '';
-    if (slot === 'p1') {
-      body = diag.p1Stderr ?? '';
-      slotSuffix = '-p1';
-    } else if (slot === 'p2') {
-      body = diag.p2Stderr ?? '';
-      slotSuffix = '-p2';
-    } else {
-      const sections: string[] = [];
-      if (diag.p1Stderr) sections.push(`=== P1 stderr ===\n${diag.p1Stderr}`);
-      if (diag.p2Stderr) sections.push(`=== P2 stderr ===\n${diag.p2Stderr}`);
-      body = sections.join('\n\n');
-    }
-    const filename = [
-      safeAttachmentToken(session.agent.slug),
-      safeAttachmentToken(diag.version),
-      safeAttachmentToken(diag.format),
-    ].join('-') + `${slotSuffix}-stderr.txt`;
-    res.writeHead(200, {
-      'Content-Type': 'text/plain; charset=utf-8',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Cache-Control': 'private, no-store',
-    });
-    res.end(body);
+    sendDiagnosticStderrResponse(req, res, diag, session.agent);
   });
 
   app.post('/api/account/versions/:id/activate', (req, res) => {

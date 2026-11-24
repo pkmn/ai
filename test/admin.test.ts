@@ -217,7 +217,8 @@ describe('/admin dashboard & API', () => {
       db.setLadderAnchor('gen1ou20261109', '0-error', '1.0.0', now + 6);
 
       // Cooldown is active right after 1.0.0 passes; refund it via admin API.
-      expect(db.computeAgentSubmissionStatus(zero.id, now + 10).nextEligibleAt).toBeDefined();
+      now += 10;
+      expect(db.computeAgentSubmissionStatus(zero.id, now).nextEligibleAt).toBeDefined();
       const refundRes = await fetch(`${baseUrl}/api/admin/agents/0-error/refund-cooldown`, {
         method: 'POST',
         headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
@@ -229,7 +230,7 @@ describe('/admin dashboard & API', () => {
       // Settle v1 so v2 can be submitted.
       db.db.prepare(
         'UPDATE ladder_entries SET settled_at = ?, matches = 25, se = 20 WHERE version_id = ?'
-      ).run(now + 10, v1.id);
+      ).run(now, v1.id);
       const v2 = db.createSubmission({
         agentId: zero.id,
         version: '1.1.0',
@@ -237,9 +238,9 @@ describe('/admin dashboard & API', () => {
         url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
         sha256: SHA_B,
         ladderIds: ['gen1ou20261109'],
-        now: now + 20,
+        now: now + 10,
       });
-      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: now + 25});
+      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: now + 15});
 
       // 3. Quarantine & unquarantine v2 via admin API.
       const qRes = await fetch(`${baseUrl}/api/admin/versions/0-error/1.1.0/quarantine`, {
@@ -438,6 +439,258 @@ describe('/admin dashboard & API', () => {
       const liveText = await (await fetch(`${baseUrl}/api/live.json`)).text();
       expect(liveText).not.toContain('arena-mini');
       expect(liveText).not.toContain('/Volumes/Archive');
+    }
+  );
+
+  test(
+    'surfaces diagnostics, /info dots, CPU/faults, staged discard, and admin log endpoints',
+    async () => {
+      const adminCookie = cookieFor('scheibo');
+      const nonAdminCookie = cookieFor('pmariglia', 2002);
+      const zero = db.getAgentBySlug('0-error')!;
+      const fp = db.getAgentBySlug('foul-play')!;
+
+      const v1 = db.createSubmission({
+        agentId: zero.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now,
+      });
+      db.applySubmissionStatus({
+        versionId: v1.id,
+        smokeStatus: 'passed',
+        smokeDurationMillis: 12000,
+        smokeInitMillis: 180,
+        smokeTurnMillis: 45,
+        smokePeakRam: 512,
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 14,
+          endReason: 'win',
+          durationMillis: 12000,
+          battleLog: '|turn|1\n|ai|p1|{"win":0.62}\n|win|0 ERROR',
+          p1Stderr: 'p1 ok',
+          p2Stderr: 'p2 ok',
+          p1CpuCores: 3.2,
+          p2CpuCores: 3.1,
+          p1PeakRam: 512,
+          p2PeakRam: 490,
+          supportsInfo: true,
+        }],
+        now: now + 5,
+      });
+
+      const fpV1 = db.createSubmission({
+        agentId: fp.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pmariglia/fp-1.0.0.tar.zst',
+        sha256: SHA_B,
+        ladderIds: ['gen1ou20261109'],
+        now,
+      });
+      db.applySubmissionStatus({
+        versionId: fpV1.id,
+        smokeStatus: 'passed',
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 10,
+          endReason: 'win',
+          durationMillis: 8000,
+          battleLog: '|turn|1\n|win|Foul Play',
+          p1Stderr: 'fp p1 stderr',
+          supportsInfo: false,
+        }],
+        now: now + 5,
+      });
+
+      // Record a match with CPU + invalid-choice forfeit + protocol errors.
+      db.recordCompletedMatch({
+        match: {
+          id: 'gen1ou-0000001',
+          ladderId: 'gen1ou20261109',
+          p1VersionId: v1.id,
+          p2VersionId: fpV1.id,
+          seed: '1,2,3,4',
+          game1Outcome: 'L',
+          game2Outcome: 'W',
+          category: 'LW',
+          game1Turns: 8,
+          game2Turns: 18,
+          game1EndReason: 'invalid-choice',
+          game2EndReason: 'win',
+          p1Game1PeakRam: 512,
+          p1Game2PeakRam: 640,
+          p2Game1PeakRam: 256,
+          p2Game2PeakRam: 300,
+          p1Game1BankSeconds: 100,
+          p1Game2BankSeconds: 110,
+          p2Game1BankSeconds: 120,
+          p2Game2BankSeconds: 130,
+          p1Game1MeanTurnMillis: 50,
+          p1Game2MeanTurnMillis: 60,
+          p2Game1MeanTurnMillis: 40,
+          p2Game2MeanTurnMillis: 45,
+          p1CpuCores: 4.8,
+          p2CpuCores: 1.5,
+          p1Errors: {
+            invalidCantMove: 2,
+            invalidCantSwitch: 1,
+            invalidTarget: 0,
+            invalidOther: 0,
+            unavailableChoices: 3,
+          },
+          completedAt: now + 20,
+        },
+      });
+
+      // Settle v1, refund cooldown, and stage v2 for 0-error.
+      now += 30;
+      db.refundCooldown('0-error', now);
+      db.db.prepare(
+        'UPDATE ladder_entries SET settled_at = ?, matches = 25, se = 20 WHERE version_id = ?'
+      ).run(now, v1.id);
+      const staged = db.createSubmission({
+        agentId: zero.id,
+        version: '1.1.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
+        sha256: SHA_B,
+        ladderIds: ['gen1ou20261109'],
+        now: now + 5,
+      });
+      db.applySubmissionStatus({
+        versionId: staged.id,
+        smokeStatus: 'staged',
+        smokeDurationMillis: 9500,
+        smokeInitMillis: 140,
+        smokeTurnMillis: 32,
+        smokePeakRam: 420,
+        diagnostics: [{
+          ladderId: 'gen1ou20261109',
+          format: 'gen1ou',
+          turns: 12,
+          endReason: 'win',
+          durationMillis: 9500,
+          battleLog: '|turn|1\n|ai|p1|{"win":0.58}\n|win|0 ERROR',
+          p1Stderr: 'staged p1 stderr',
+          p2Stderr: 'staged p2 stderr',
+          p1CpuCores: 2.9,
+          p2CpuCores: 2.8,
+          p1PeakRam: 420,
+          p2PeakRam: 410,
+          supportsInfo: true,
+        }],
+        now: now + 10,
+      });
+      const stagedDiag = db.getSmokeDiagnosticsForVersion(staged.id)[0];
+
+      // 1. HTML renders /info dots, CPU telemetry, invalid-choice + proto err, staged state, links.
+      const html = await (await fetch(`${baseUrl}/admin/`, {
+        headers: {Cookie: adminCookie},
+      })).text();
+      expect(html).toContain('class="info-dot yes"');
+      expect(html).toContain('class="info-dot muted"');
+      expect(html).toContain('4.8 CPU');
+      expect(html).toContain('Invalid choice: 1');
+      expect(html).toContain('Can&#39;t move: 2');
+      expect(html).toContain('Can&#39;t switch: 1');
+      expect(html).toContain('<span class="no">1</span>');
+      expect(html).toContain('1.1.0 [staged]');
+      expect(html).toContain('PASS</span> <span class="warn">(staged)</span>');
+      expect(html).toContain('data-action="discard"');
+      expect(html).toContain(`/api/admin/diagnostics/${stagedDiag.id}/stderr`);
+      expect(html).toContain(`/api/admin/diagnostics/${stagedDiag.id}/log?download=1`);
+
+      // 2. /admin.json includes stagedCount, entry CPU/faults, and version diagnostic summaries.
+      const snap = await (await fetch(`${baseUrl}/admin.json`, {
+        headers: {Cookie: adminCookie},
+      })).json() as admin.AdminSnapshot;
+      expect(snap.health.stagedCount).toBe(1);
+      const zeroSnap = snap.agents.find(a => a.agent.slug === '0-error')!;
+      expect(zeroSnap.entries[0].meanCpuCores).toBeCloseTo(4.8, 5);
+      expect(zeroSnap.entries[0].invalidChoices).toBe(1);
+      expect(zeroSnap.entries[0].invalidCantMove).toBe(2);
+      expect(zeroSnap.entries[0].smokeSupportsInfo).toBe(true);
+      const stagedVer = zeroSnap.versions.find(v => v.id === staged.id)!;
+      expect(stagedVer.smokeStatus).toBe('staged');
+      expect(stagedVer.smokeSupportsInfo).toBe(true);
+      expect(stagedVer.diagnostics).toHaveLength(1);
+
+      // 3. Diagnostic log/stderr endpoints enforce admin auth and serve JSON / attachments.
+      expect((await fetch(`${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/log`)).status).toBe(
+        401
+      );
+      expect((await fetch(`${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/log`, {
+        headers: {Cookie: nonAdminCookie},
+      })).status).toBe(403);
+      expect((await fetch(`${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/stderr`, {
+        headers: {Cookie: nonAdminCookie},
+      })).status).toBe(403);
+
+      const logJson = await (await fetch(`${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/log`, {
+        headers: {Cookie: adminCookie},
+      })).json() as {id: number; lines: string[]; p1CpuCores?: number};
+      expect(logJson.id).toBe(stagedDiag.id);
+      expect(logJson.lines).toContain('|ai|p1|{"win":0.58}');
+      expect(logJson.p1CpuCores).toBe(2.9);
+
+      const logDownload = await fetch(
+        `${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/log?download=1`,
+        {headers: {Cookie: adminCookie}}
+      );
+      expect(logDownload.status).toBe(200);
+      expect(logDownload.headers.get('content-disposition')).toContain('0-error-1.1.0-gen1ou.log');
+      expect(await logDownload.text()).toContain('|win|0 ERROR');
+
+      const stderrRes = await fetch(
+        `${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/stderr`,
+        {headers: {Cookie: adminCookie}}
+      );
+      expect(stderrRes.status).toBe(200);
+      const stderrText = await stderrRes.text();
+      expect(stderrText).toContain('staged p1 stderr');
+      expect(stderrText).toContain('staged p2 stderr');
+
+      // 4. Discard endpoint enforces admin + CSRF, transitions staged -> discarded, frees label.
+      expect((await fetch(`${baseUrl}/api/admin/versions/${staged.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: nonAdminCookie, 'Content-Type': 'application/json'},
+      })).status).toBe(403);
+      expect((await fetch(`${baseUrl}/api/admin/versions/${staged.id}/discard`, {
+        method: 'POST',
+        headers: {
+          Cookie: adminCookie,
+          'Content-Type': 'application/json',
+          'Sec-Fetch-Site': 'cross-site',
+        },
+      })).status).toBe(403);
+
+      const discardRes = await fetch(`${baseUrl}/api/admin/versions/${staged.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      });
+      expect(discardRes.status).toBe(200);
+      expect(db.getVersionById(staged.id)?.smokeStatus).toBe('discarded');
+      expect(db.isVersionClaimed(zero.id, '1.1.0')).toBe(false);
+
+      // Re-discarding a non-staged version fails with 409.
+      const againRes = await fetch(`${baseUrl}/api/admin/versions/${staged.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      });
+      expect(againRes.status).toBe(409);
+
+      const afterHtml = await (await fetch(`${baseUrl}/admin/`, {
+        headers: {Cookie: adminCookie},
+      })).text();
+      expect(afterHtml).toContain('Discarded');
+      expect(afterHtml).not.toContain('1.1.0 [staged]');
     }
   );
 });
