@@ -538,6 +538,22 @@ function finalizeArchivedLadderEntries(db: DatabaseSync, ladderId: string, now: 
       r.agent_id as number
     );
   }
+
+  db.prepare(`
+    UPDATE agent_versions
+    SET auth_token_encoding = NULL
+    WHERE auth_token_encoding IS NOT NULL
+      AND smoke_status = 'passed'
+      AND id IN (SELECT version_id FROM ladder_entries WHERE ladder_id = ?)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM ladder_entries le
+        JOIN ladders l ON l.id = le.ladder_id
+        WHERE le.version_id = agent_versions.id
+          AND le.role IN ('champion', 'challenger')
+          AND l.status IN ('upcoming', 'active', 'settling')
+      )
+  `).run(ladderId);
 }
 
 export function setLadderStatus(

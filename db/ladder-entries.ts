@@ -1876,6 +1876,22 @@ export function retireLadderEntry(
       WHERE ladder_id = ? AND version_id = ?
     `).run(now, ladderId, versionId);
 
+    db.prepare(`
+      UPDATE agent_versions
+      SET auth_token_encoding = NULL
+      WHERE id = ?
+        AND auth_token_encoding IS NOT NULL
+        AND smoke_status = 'passed'
+        AND NOT EXISTS (
+          SELECT 1
+          FROM ladder_entries le
+          JOIN ladders l ON l.id = le.ladder_id
+          WHERE le.version_id = agent_versions.id
+            AND le.role IN ('champion', 'challenger')
+            AND l.status IN ('upcoming', 'active', 'settling')
+        )
+    `).run(versionId);
+
     if (ladder.status !== 'archived') {
       recomputeLadderRatings(db, ladderId, now, undefined, formatUtcDate(now));
     }

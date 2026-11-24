@@ -316,6 +316,9 @@ function applyResolvedProjects(
         const rows = selectActiveLadders.all(agentId) as Array<{ladder_id: string}>;
         for (const r of rows) affectedLadders.add(r.ladder_id);
         retireAgentEntries.run(now, agentId);
+        db.prepare(
+          'UPDATE agent_versions SET auth_token_encoding = NULL WHERE agent_id = ?'
+        ).run(agentId);
       }
 
       const dayUtc = util.formatUtcDate(now);

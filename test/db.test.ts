@@ -4334,4 +4334,117 @@ describe('discord watches', () => {
       db.close();
     }
   });
+
+  test('scrubs auth_token_encoding when tournament-only submission enters staged', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.upsertTournament({
+        id: 't-scrub',
+        name: 'Scrub Cup',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: '1× A100',
+        startsAt: 1_700_100_000,
+      });
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:1.0',
+        sha256: 'a'.repeat(64),
+        authTokenEncoding: 'enc:secret-token',
+        ladderIds: [],
+        tournamentIds: ['t-scrub'],
+        now: 1_700_000_000,
+      });
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBe('enc:secret-token');
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('scrubs auth_token_encoding when retiring last active ladder entry', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'b'.repeat(64),
+        authTokenEncoding: 'enc:ladder-token',
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      db.activateStagedVersion({versionId: ver.id, agentId: alpha.id, now: 1_700_000_020});
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBe('enc:ladder-token');
+      db.retireLadderEntry('gen1ou20261109', alpha.slug, '1.0', 1_700_000_030);
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('scrubs auth_token_encoding when archiving last active ladder', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'c'.repeat(64),
+        authTokenEncoding: 'enc:archive-token',
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      db.activateStagedVersion({versionId: ver.id, agentId: alpha.id, now: 1_700_000_020});
+      db.setLadderStatus('gen1ou20261109', 'archived', 1_700_000_030);
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
+  test('scrubs auth_token_encoding when disabling an agent', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const ver = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'd'.repeat(64),
+        authTokenEncoding: 'enc:disable-token',
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: ver.id, smokeStatus: 'staged', now: 1_700_000_010});
+      db.syncProjectsFromYaml('[]\n', undefined, 1_700_000_020);
+      expect(db.getVersionById(ver.id)?.authTokenEncoding).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
 });

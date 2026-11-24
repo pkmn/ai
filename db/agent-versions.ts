@@ -1035,7 +1035,9 @@ const VALID_TRANSITIONS: Record<SmokeStatus, ReadonlySet<Exclude<SmokeStatus, 'p
 };
 
 // Applies smoke-test or quarantine outcomes from the Arena runner:
-//   - Always scrubs `auth_token_encoding = NULL` so private pull tokens never persist at rest.
+//   - Scrubs `auth_token_encoding = NULL` on every terminal/failed/quarantined/discarded status
+//     and on tournament-only `'staged'` builds; ladder `'staged'` builds retain the encrypted token
+//     only until `POST /api/arena/artifacts/:id/archived` (or retirement/disablement/archival).
 //   - Persists any attached private diagnostic replays/stderr into `smoke_diagnostics`.
 //   - On `'staged'`: records diagnostic results and resets `notified = 0` so `server/discord.ts`
 //     notifies the developer to review and explicitly activate or discard the build on `/account/`.
@@ -1060,7 +1062,7 @@ export function applySubmissionStatus(
       throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
     }
     const agent = getAgentById(db, prev.agentId)!;
-    const scrubAuth = input.smokeStatus !== 'staged';
+    const scrubAuth = input.smokeStatus !== 'staged' || prev.ladders.length === 0;
     if (prev.smokeStatus === input.smokeStatus) {
       db.prepare(`
         UPDATE agent_versions
@@ -1278,10 +1280,11 @@ export function activateStagedVersion(
     db.prepare(`
       UPDATE agent_versions
       SET smoke_status = 'passed',
+          auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
           activated_at = ?,
           notified = 1
       WHERE id = ?
-    `).run(now, prev.id);
+    `).run(openLadderIds.length === 0 ? 1 : 0, now, prev.id);
 
     const retiredByLadder = enrollActivatedVersion(
       db,
