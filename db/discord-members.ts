@@ -49,3 +49,8 @@ export function isDiscordMember(db: DatabaseSync, discordId: string | undefined)
   const row = db.prepare('SELECT 1 FROM discord_members WHERE id = ?').get(discordId);
   return row !== undefined;
 }
+
+export function countDiscordMembers(db: DatabaseSync): number {
+  const row = db.prepare('SELECT COUNT(*) AS count FROM discord_members').get() as {count: number};
+  return row.count;
+}

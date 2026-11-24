@@ -34,6 +34,7 @@ const USAGE = [
   'Commands:',
   '  quarantine <agent-slug> <version> [--reason "..."]',
   '  unquarantine <agent-slug> <version>',
+  '  retire <ladder_id> <agent-slug> <version>',
   '  refund-cooldown <agent-slug>',
   '  set-smoke-cadence <per-cycle> [--every <cycles>]',
   '  set-ladders <agent-slug> <slot...|all|none>',
@@ -66,6 +67,7 @@ const BOOLEAN_FLAGS = new Set(['help', 'offline', 'none', 'dry-run']);
 const ALLOWED_FLAGS_BY_CMD: Record<string, ReadonlySet<string>> = {
   quarantine: new Set(['reason']),
   unquarantine: new Set(),
+  retire: new Set(),
   'refund-cooldown': new Set(),
   'set-smoke-cadence': new Set(['every']),
   'set-ladders': new Set(),
@@ -426,6 +428,15 @@ export async function runPkmnCli(argv: string[], options: Options = {}): Promise
         }
         const ver = database.unquarantineVersion(slug, version, now);
         log(`Unquarantined ${slug} version ${ver.version}`);
+        return;
+      }
+      case 'retire': {
+        const [ladderId, slug, version] = positional.slice(1);
+        if (!ladderId || !slug || !version) {
+          throw new Error('Usage: pkmn retire <ladder_id> <agent-slug> <version>');
+        }
+        database.retireLadderEntry(ladderId, slug, version, now);
+        log(`Retired ${slug} version ${version} on ${ladderId}`);
         return;
       }
       case 'refund-cooldown': {

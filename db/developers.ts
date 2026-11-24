@@ -89,6 +89,23 @@ export function getDevelopersForAgent(db: DatabaseSync, agentId: number): Develo
   return rows.map(mapDeveloperRow);
 }
 
+export function getDevelopersByAgent(db: DatabaseSync): Map<number, DeveloperRow[]> {
+  const rows = db.prepare(
+    'SELECT * FROM developers ORDER BY agent_id ASC, github_login ASC'
+  ).all() as unknown as RawDeveloperRow[];
+  const out = new Map<number, DeveloperRow[]>();
+  for (const raw of rows) {
+    const dev = mapDeveloperRow(raw);
+    let list = out.get(dev.agentId);
+    if (!list) {
+      list = [];
+      out.set(dev.agentId, list);
+    }
+    list.push(dev);
+  }
+  return out;
+}
+
 // Returns Discord Snowflakes of all owners belonging to qualified Arena agents so
 // `server/discord.ts` can synchronize the @Arena Competitor role.
 export function getCompetitorDiscordIds(db: DatabaseSync): string[] {

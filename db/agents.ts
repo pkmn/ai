@@ -562,6 +562,21 @@ export function getAllActiveAgents(db: DatabaseSync): AgentRow[] {
   return rows.map(mapAgentRow);
 }
 
+export function getAllAgents(db: DatabaseSync): AgentRow[] {
+  const rows = db.prepare(`
+    SELECT *
+    FROM agents
+    ORDER BY
+      CASE status
+        WHEN 'qualified' THEN 0
+        WHEN 'pending' THEN 1
+        ELSE 2
+      END ASC,
+      slug ASC
+  `).all() as unknown as RawAgentRow[];
+  return rows.map(mapAgentRow);
+}
+
 export function refundCooldown(
   db: DatabaseSync,
   agentSlug: string,

@@ -2,6 +2,12 @@ import {DatabaseSync} from 'node:sqlite';
 
 export type TeamPoolStatus = 'saved' | 'pending' | 'active';
 
+export interface TeamPoolCounts {
+  saved: number;
+  pending: number;
+  active: number;
+}
+
 export interface LadderRosterEntry {
   agentId: number;
   agentSlug: string;
@@ -176,4 +182,35 @@ export function deletePendingTeams(db: DatabaseSync, ladderIds: string[], agentI
   for (const ladderId of ladderIds) {
     del.run(ladderId, agentId);
   }
+}
+
+export function getTeamPoolCountsByAgent(
+  db: DatabaseSync
+): Map<number, Map<string, TeamPoolCounts>> {
+  const rows = db.prepare(`
+    SELECT agent_id, ladder_id, status, COUNT(*) AS count
+    FROM agent_ladder_teams
+    GROUP BY agent_id, ladder_id, status
+  `).all() as Array<{
+    agent_id: number;
+    ladder_id: string;
+    status: TeamPoolStatus;
+    count: number;
+  }>;
+
+  const out = new Map<number, Map<string, TeamPoolCounts>>();
+  for (const r of rows) {
+    let byLadder = out.get(r.agent_id);
+    if (!byLadder) {
+      byLadder = new Map();
+      out.set(r.agent_id, byLadder);
+    }
+    let counts = byLadder.get(r.ladder_id);
+    if (!counts) {
+      counts = {saved: 0, pending: 0, active: 0};
+      byLadder.set(r.ladder_id, counts);
+    }
+    counts[r.status] = r.count;
+  }
+  return out;
 }

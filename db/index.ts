@@ -526,6 +526,10 @@ export class Database extends SqliteDatabase {
     return developers.getDevelopersForAgent(this.db, agentId);
   }
 
+  getDevelopersByAgent(): Map<number, developers.DeveloperRow[]> {
+    return developers.getDevelopersByAgent(this.db);
+  }
+
   getCompetitorDiscordIds(): string[] {
     return developers.getCompetitorDiscordIds(this.db);
   }
@@ -562,6 +566,10 @@ export class Database extends SqliteDatabase {
     return discordMembers.isDiscordMember(this.db, discordId);
   }
 
+  countDiscordMembers(): number {
+    return discordMembers.countDiscordMembers(this.db);
+  }
+
   hasActiveLadderTeams(ladderId: string, agentId: number): boolean {
     return teams.hasActiveLadderTeams(this.db, ladderId, agentId);
   }
@@ -586,6 +594,10 @@ export class Database extends SqliteDatabase {
 
   getActiveRosterForLadder(ladderId: string): teams.LadderRosterEntry[] {
     return teams.getActiveRosterForLadder(this.db, ladderId);
+  }
+
+  getTeamPoolCountsByAgent(): Map<number, Map<string, teams.TeamPoolCounts>> {
+    return teams.getTeamPoolCountsByAgent(this.db);
   }
 
   getVersionById(versionId: number): versions.AgentVersionRow | undefined {
@@ -678,6 +690,25 @@ export class Database extends SqliteDatabase {
     entries.setLadderAnchor(this.db, this.txRunner, ladderId, ver.id, now);
   }
 
+  retireLadderEntry(ladderId: string, agentSlug: string, version: string, now?: number) {
+    const ver = this.getVersionBySlugAndLabel(agentSlug, version);
+    if (!ver) {
+      throw Object.assign(
+        new Error(`Version "${version}" not found for agent "${agentSlug}"`),
+        {status: 404}
+      );
+    }
+    entries.retireLadderEntry(this.db, this.txRunner, ladderId, ver.id, now);
+  }
+
+  getAdminEntriesByAgent(): Map<number, entries.AdminEntryView[]> {
+    return entries.getAdminEntriesByAgent(this.db);
+  }
+
+  getLadderAdminSummaries(now?: number): Map<string, entries.LadderAdminSummary> {
+    return entries.getLadderAdminSummaries(this.db, now);
+  }
+
   recordCompletedMatch(
     input: matches.RecordMatchInput
   ): {duplicate: boolean; archivedLadder: boolean} {
@@ -745,6 +776,10 @@ export class Database extends SqliteDatabase {
 
   getAllActiveAgents(): agents.AgentRow[] {
     return agents.getAllActiveAgents(this.db);
+  }
+
+  getAllAgents(): agents.AgentRow[] {
+    return agents.getAllAgents(this.db);
   }
 
   getAgentParticipatedLadders(agentId: number): ladders.LadderRow[] {
@@ -822,6 +857,10 @@ export class Database extends SqliteDatabase {
 
   getTournamentEntrants(tournamentId: string): entrants.TournamentEntrantView[] {
     return entrants.getTournamentEntrants(this.db, tournamentId);
+  }
+
+  getTournamentEntrantsByAgent(): Map<number, entrants.AgentTournamentEntryView[]> {
+    return entrants.getTournamentEntrantsByAgent(this.db);
   }
 
   upsertTournamentGame(input: tournamentMatches.UpsertTournamentGameInput) {

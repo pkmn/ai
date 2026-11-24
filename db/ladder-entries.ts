@@ -4,7 +4,15 @@ import * as ratings from '../server/ratings';
 import {formatUtcDate} from '../static/util';
 
 import * as stats from './agent-ladder-stats';
-import {LadderRow, LadderSlot, LadderStatus, getLadder} from './ladders';
+import {
+  LadderRow,
+  LadderSlot,
+  LadderStatus,
+  SLOT_ORDER_SQL,
+  archiveLadderInPlace,
+  canSettleLadder,
+  getLadder,
+} from './ladders';
 import {loadPairAggregates, updatePairAggregateLos} from './pair-aggregates';
 import {upsertDailyRatingSnapshots} from './rating-snapshots';
 
@@ -1483,4 +1491,300 @@ export function getArenaLadderRoleTargets(db: DatabaseSync): ArenaLadderRoleTarg
 
   targets.sort((a, b) => (SLOT_ORDER[a.slot] ?? 99) - (SLOT_ORDER[b.slot] ?? 99));
   return targets;
+}
+
+export interface AdminEntryView {
+  ladderId: string;
+  slot: LadderSlot;
+  ladderName: string;
+  ladderStatus: LadderStatus;
+  versionId: number;
+  version: string;
+  role: 'champion' | 'challenger' | 'quarantined';
+  isAnchor: boolean;
+  elo: number;
+  se: number;
+  lcb: number;
+  gxe: number;
+  rankCurrent?: number;
+  matches: number;
+  ww: number;
+  wt: number;
+  split: number;
+  tl: number;
+  ll: number;
+  settledAt?: number;
+  meanTurnMillis: number;
+  peakRam: number;
+  crashes: number;
+  timeouts: number;
+  ooms: number;
+}
+
+export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntryView[]> {
+  const rows = db.prepare(`
+    SELECT
+      av.agent_id,
+      le.ladder_id,
+      l.slot,
+      l.name AS ladder_name,
+      l.status AS ladder_status,
+      le.version_id,
+      av.version,
+      le.role,
+      le.is_anchor,
+      le.elo,
+      le.se,
+      le.lcb,
+      le.gxe,
+      le.rank_current,
+      le.matches,
+      le.ww,
+      le.wt,
+      le.split,
+      le.tl,
+      le.ll,
+      le.settled_at,
+      le.mean_turn_millis,
+      le.peak_ram,
+      le.crashes,
+      le.timeouts,
+      le.ooms
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN ladders l ON l.id = le.ladder_id
+    WHERE le.role IN ('champion', 'challenger', 'quarantined')
+      AND l.status != 'archived'
+    ORDER BY
+      av.agent_id ASC,
+      ${SLOT_ORDER_SQL.replace(/slot/g, 'l.slot')} ASC,
+      CASE le.role WHEN 'champion' THEN 0 WHEN 'challenger' THEN 1 ELSE 2 END ASC,
+      le.lcb DESC,
+      le.version_id DESC
+  `).all() as Array<Record<string, unknown>>;
+
+  const out = new Map<number, AdminEntryView[]>();
+  for (const r of rows) {
+    const agentId = r.agent_id as number;
+    let list = out.get(agentId);
+    if (!list) {
+      list = [];
+      out.set(agentId, list);
+    }
+    list.push({
+      ladderId: r.ladder_id as string,
+      slot: r.slot as LadderSlot,
+      ladderName: r.ladder_name as string,
+      ladderStatus: r.ladder_status as LadderStatus,
+      versionId: r.version_id as number,
+      version: r.version as string,
+      role: r.role as 'champion' | 'challenger' | 'quarantined',
+      isAnchor: (r.is_anchor as number) === 1,
+      elo: r.elo as number,
+      se: r.se as number,
+      lcb: r.lcb as number,
+      gxe: r.gxe as number,
+      rankCurrent: (r.rank_current as number | null) ?? undefined,
+      matches: r.matches as number,
+      ww: r.ww as number,
+      wt: r.wt as number,
+      split: r.split as number,
+      tl: r.tl as number,
+      ll: r.ll as number,
+      settledAt: (r.settled_at as number | null) ?? undefined,
+      meanTurnMillis: r.mean_turn_millis as number,
+      peakRam: r.peak_ram as number,
+      crashes: r.crashes as number,
+      timeouts: r.timeouts as number,
+      ooms: r.ooms as number,
+    });
+  }
+  return out;
+}
+
+export interface LadderAdminSummary {
+  ladderId: string;
+  activeAgents: number;
+  activeEntries: number;
+  unsettledEntries: number;
+  quarantinedEntries: number;
+  anchor?: {agentSlug: string; agentName: string; version: string};
+  totalMatches: number;
+  matches24h: number;
+  harvestedTeams: number;
+  lockedPools: number;
+  savedPools: number;
+}
+
+export function getLadderAdminSummaries(
+  db: DatabaseSync,
+  now = Math.floor(Date.now() / 1000)
+): Map<string, LadderAdminSummary> {
+  const cutoff24h = now - 86400;
+  const entryRows = db.prepare(`
+    SELECT
+      le.ladder_id,
+      COUNT(DISTINCT CASE
+        WHEN le.role IN ('champion', 'challenger') THEN av.agent_id
+      END) AS active_agents,
+      SUM(CASE WHEN le.role IN ('champion', 'challenger') THEN 1 ELSE 0 END) AS active_entries,
+      SUM(CASE
+        WHEN le.role IN ('champion', 'challenger')
+          AND le.settled_at IS NULL
+          AND (le.matches < 25 OR le.se > 30.0)
+        THEN 1 ELSE 0
+      END) AS unsettled_entries,
+      SUM(CASE WHEN le.role = 'quarantined' THEN 1 ELSE 0 END) AS quarantined_entries
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN ladders l ON l.id = le.ladder_id
+    WHERE l.status != 'archived'
+    GROUP BY le.ladder_id
+  `).all() as Array<{
+    ladder_id: string;
+    active_agents: number;
+    active_entries: number;
+    unsettled_entries: number;
+    quarantined_entries: number;
+  }>;
+
+  const anchorRows = db.prepare(`
+    SELECT le.ladder_id, a.slug AS agent_slug, a.name AS agent_name, av.version
+    FROM ladder_entries le
+    JOIN agent_versions av ON av.id = le.version_id
+    JOIN agents a ON a.id = av.agent_id
+    JOIN ladders l ON l.id = le.ladder_id
+    WHERE le.is_anchor = 1 AND l.status != 'archived'
+  `).all() as Array<{
+    ladder_id: string;
+    agent_slug: string;
+    agent_name: string;
+    version: string;
+  }>;
+  const anchorByLadder = new Map(
+    anchorRows.map(r => [
+      r.ladder_id,
+      {agentSlug: r.agent_slug, agentName: r.agent_name, version: r.version},
+    ])
+  );
+
+  const totalMatchRows = db.prepare(`
+    SELECT ladder_id, COALESCE(SUM(ww + wt + split + tl + ll), 0) AS total_matches
+    FROM pair_aggregates
+    GROUP BY ladder_id
+  `).all() as Array<{ladder_id: string; total_matches: number}>;
+  const totalMatchesByLadder = new Map(
+    totalMatchRows.map(r => [r.ladder_id, r.total_matches])
+  );
+
+  const recentMatchRows = db.prepare(`
+    SELECT ladder_id, COUNT(*) AS matches_24h
+    FROM matches
+    WHERE completed_at >= ?
+    GROUP BY ladder_id
+  `).all(cutoff24h) as Array<{ladder_id: string; matches_24h: number}>;
+  const recentMatchesByLadder = new Map(
+    recentMatchRows.map(r => [r.ladder_id, r.matches_24h])
+  );
+
+  const harvestedRows = db.prepare(`
+    SELECT ladder_id, COUNT(*) AS count
+    FROM ladder_teams
+    GROUP BY ladder_id
+  `).all() as Array<{ladder_id: string; count: number}>;
+  const harvestedByLadder = new Map(harvestedRows.map(r => [r.ladder_id, r.count]));
+
+  const poolRows = db.prepare(`
+    SELECT
+      ladder_id,
+      COUNT(DISTINCT CASE WHEN status = 'active' THEN agent_id END) AS locked_pools,
+      COUNT(DISTINCT CASE WHEN status = 'saved' THEN agent_id END) AS saved_pools
+    FROM agent_ladder_teams
+    GROUP BY ladder_id
+  `).all() as Array<{ladder_id: string; locked_pools: number; saved_pools: number}>;
+  const poolsByLadder = new Map(poolRows.map(r => [r.ladder_id, r]));
+
+  const ladders = db.prepare("SELECT id FROM ladders WHERE status != 'archived'")
+    .all() as Array<{id: string}>;
+  const entriesByLadder = new Map(entryRows.map(r => [r.ladder_id, r]));
+  const out = new Map<string, LadderAdminSummary>();
+
+  for (const {id} of ladders) {
+    const e = entriesByLadder.get(id);
+    const p = poolsByLadder.get(id);
+    out.set(id, {
+      ladderId: id,
+      activeAgents: e?.active_agents ?? 0,
+      activeEntries: e?.active_entries ?? 0,
+      unsettledEntries: e?.unsettled_entries ?? 0,
+      quarantinedEntries: e?.quarantined_entries ?? 0,
+      anchor: anchorByLadder.get(id),
+      totalMatches: totalMatchesByLadder.get(id) ?? 0,
+      matches24h: recentMatchesByLadder.get(id) ?? 0,
+      harvestedTeams: harvestedByLadder.get(id) ?? 0,
+      lockedPools: p?.locked_pools ?? 0,
+      savedPools: p?.saved_pools ?? 0,
+    });
+  }
+  return out;
+}
+
+// Retires a single active version on one specific ladder without affecting the project's
+// per-ladder qualification grants or entries on other ladders. Historical match edges stay intact
+// in the Davidson graph while any remaining challenger is promoted to champion on recompute.
+export function retireLadderEntry(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  ladderId: string,
+  versionId: number,
+  now = Math.floor(Date.now() / 1000)
+) {
+  inTransaction(() => {
+    const ladder = getLadder(db, ladderId);
+    if (!ladder) {
+      throw Object.assign(new Error(`Unknown ladder "${ladderId}"`), {status: 404});
+    }
+    const row = db.prepare(`
+      SELECT role, is_anchor
+      FROM ladder_entries
+      WHERE ladder_id = ? AND version_id = ?
+    `).get(ladderId, versionId) as {role: EntryRole; is_anchor: number} | undefined;
+    if (!row) {
+      throw Object.assign(
+        new Error(`No ladder entry found on "${ladderId}" for versionId ${versionId}`),
+        {status: 404}
+      );
+    }
+    if (row.is_anchor === 1) {
+      throw Object.assign(
+        new Error(
+          `Cannot retire the 1500 Elo anchor on "${ladderId}" — assign a new anchor first.`
+        ),
+        {status: 400}
+      );
+    }
+    if (row.role !== 'champion' && row.role !== 'challenger') {
+      throw Object.assign(
+        new Error(`Entry on "${ladderId}" is not active (current role: ${row.role})`),
+        {status: 409}
+      );
+    }
+
+    db.prepare(`
+      UPDATE ladder_entries
+      SET role = 'retired',
+          retired_at = ?,
+          rank_current = NULL,
+          rank_min = NULL,
+          rank_max = NULL
+      WHERE ladder_id = ? AND version_id = ?
+    `).run(now, ladderId, versionId);
+
+    if (ladder.status !== 'archived') {
+      recomputeLadderRatings(db, ladderId, now, undefined, formatUtcDate(now));
+    }
+    if (ladder.status === 'settling' && !canSettleLadder(db, ladder)) {
+      archiveLadderInPlace(db, ladder.id, now);
+    }
+  });
 }
