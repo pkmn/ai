@@ -430,6 +430,15 @@ describe('account routes', () => {
       expect(stranger.headers.get('location')).toBe(auth.REGISTER_ISSUE_URL);
     });
 
+    test('redirects unregistered admin on /account to /admin/', async () => {
+      const adminRes = await realFetch(`${baseUrl}/account`, {
+        headers: {Cookie: cookieFor('scheibo')},
+        redirect: 'manual',
+      });
+      expect(adminRes.status).toBe(302);
+      expect(adminRes.headers.get('location')).toBe('/admin/');
+    });
+
     test('rejects disabled projects on /account with 403', async () => {
       db.db.prepare("UPDATE agents SET status = 'disabled' WHERE slug = '0-error'").run();
       const disabled = await realFetch(`${baseUrl}/account`, {

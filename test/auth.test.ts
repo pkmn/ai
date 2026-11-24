@@ -762,4 +762,24 @@ describe('server/auth.ts routes', () => {
         avatarUrl: `https://cdn.discordapp.com/embed/avatars/${outsiderIdx}.png`,
       });
     });
+
+  test('redirects unregistered admin GitHub OAuth /account callback to /admin/', async () => {
+    const {state, stateCookie} = await beginGitHubOAuth();
+    mockGitHubUser({id: 117249, login: 'scheibo'});
+
+    const cb = await realFetch(
+      `${baseUrl}/auth/github/callback?code=admin-cb&state=${encodeURIComponent(state)}`,
+      {
+        headers: {Cookie: `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`},
+        redirect: 'manual',
+      }
+    );
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('location')).toBe('/admin/');
+    const session = auth.verifyToken<auth.Session>(
+      extractCookieMap(cb)[auth.SESSION_COOKIE],
+      AUTH_CFG.sessionSecret
+    );
+    expect(session?.github).toEqual({id: 117249, login: 'scheibo'});
+  });
 });

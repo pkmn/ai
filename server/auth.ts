@@ -357,7 +357,7 @@ export class Auth {
     const lower = login.trim().toLowerCase();
     if (!lower) return false;
     if (this.customAuthorizedGitHub) return this.customAuthorizedGitHub(lower);
-    return Boolean(this.db?.getDeveloperByGitHub(lower));
+    return isAdmin(lower) || Boolean(this.db?.getDeveloperByGitHub(lower));
   }
 
   isDiscordGuildMember(discordId: string | undefined): boolean {
@@ -469,7 +469,11 @@ export class Auth {
             ? {discord: {id: discord, username, ...(avatar ? {avatar} : {})}}
             : existing?.discord ? {discord: existing.discord} : {}),
         });
-        redirect(res, returnTo, 302, [cookie]);
+        const target =
+          github && isAccountReturnTo(returnTo) && isAdmin(github) && !devRow
+            ? '/admin/'
+            : returnTo;
+        redirect(res, target, 302, [cookie]);
       });
     }
 
@@ -587,7 +591,12 @@ export class Auth {
           github: {id: githubId, login},
           ...(existing?.discord ? {discord: existing.discord} : {}),
         });
-        redirect(res, sanitizeReturnTo(saved.returnTo, '/account/'), 302, [
+        const rawTarget = sanitizeReturnTo(saved.returnTo, '/account/');
+        const target =
+          isAccountReturnTo(rawTarget) && isAdmin(login) && !byId && !byLogin
+            ? '/admin/'
+            : rawTarget;
+        redirect(res, target, 302, [
           sessionCookie,
           clearState,
         ]);

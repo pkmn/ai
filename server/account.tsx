@@ -11,7 +11,7 @@ import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/bui
 import * as util from '../static/util';
 
 import type * as arena from './arena';
-import {Auth, REGISTER_ISSUE_URL, isCrossSiteRequest} from './auth';
+import {Auth, REGISTER_ISSUE_URL, isAdmin, isCrossSiteRequest} from './auth';
 import {AI_PANEL_STYLE, buildAiPanelClientJs, renderAiPanelHtml} from './render';
 import * as serverTeams from './teams';
 
@@ -1982,7 +1982,7 @@ export function register(app: polka.Polka, options: Options) {
           error: `GitHub account "${login}" is not registered to an approved Arena project.`,
         });
       } else if (!developer || !agent) {
-        redirect(res, REGISTER_ISSUE_URL);
+        redirect(res, isAdmin(login) ? '/admin/' : REGISTER_ISSUE_URL);
       } else {
         sendHtml(res, 403, renderErrorPage(403, liveTournament));
       }
