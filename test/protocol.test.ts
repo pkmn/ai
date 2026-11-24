@@ -177,6 +177,10 @@ describe('parseAgentStdoutLine', () => {
     expect(protocol.isAgentInfoLine('|battle-gen9ou-1|/info {"win":0.5}')).toBe(true);
     expect(protocol.isAgentInfoLine('/info bad')).toBe(true);
     expect(protocol.isAgentInfoLine('move 1')).toBe(false);
+    expect(protocol.parseAgentInfoLine('|battle-gen9ou-1|/info {"win":0.5}')).toEqual({win: 0.5});
+    expect(protocol.parseAgentInfoLine('/info bad')).toBeUndefined();
+    const oversized = `/info {"win":0.5,"pad":"${'x'.repeat(protocol.MAX_INFO_LINE_CHARS)}"}`;
+    expect(protocol.parseAgentInfoLine(oversized)).toBeUndefined();
   });
 
   test('silently ignores malformed, out-of-bounds, or oversized /info lines', () => {

@@ -962,6 +962,23 @@ describe('TimeSlicedArenaGame', () => {
     expect(engine.truncateDiagnosticLog(log, 20)).toBe('line-one\nline-two');
   });
 
+  test('createInfoLineInterceptor rejects malformed /info lines', () => {
+    const coalescer = new engine.InfoCoalescer({maxIngestsPerTurn: 2});
+    const intercept = engine.createInfoLineInterceptor('p1', coalescer);
+    expect(intercept('/info not-json')).toBe(false);
+    expect(coalescer.getLive('p1')).toBeUndefined();
+  });
+
+  test('createInfoLineInterceptor stops intercepting after per-turn cap', () => {
+    const coalescer = new engine.InfoCoalescer({maxIngestsPerTurn: 2});
+    const intercept = engine.createInfoLineInterceptor('p1', coalescer);
+    expect(intercept('/info {"win":0.5}')).toBe(true);
+    expect(intercept('/info {"policy":{"move 1":1}}')).toBe(true);
+    expect(intercept('/info {"win":0.7}')).toBe(false);
+    coalescer.commitTurn('p1', 1);
+    expect(intercept('/info {"win":0.8}')).toBe(true);
+  });
+
   test('diagnosticWallCapMillis and protocol error classifier handle formats and buckets', () => {
     expect(engine.diagnosticWallCapMillis('gen1ou')).toBe(10 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen3ou')).toBe(8 * 60 * 1000);

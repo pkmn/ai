@@ -497,14 +497,18 @@ export function wakeLineResolver(io: LineIoState | undefined): void {
 
 export type WinHistoryPoint = arena.WinHistoryPoint;
 
+export const MAX_INFO_LINES_PER_DECISION = 1024;
+
 export interface InfoCoalescerOptions {
   intervalMillis?: number;
+  maxIngestsPerTurn?: number;
   now?: () => number;
   onBroadcast?: (slot: PlayerSlot, info: protocol.PublicAgentInfo) => void;
 }
 
 export class InfoCoalescer {
   private readonly intervalMillis: number;
+  private readonly maxIngestsPerTurn: number;
   private readonly now: () => number;
   private readonly onBroadcast?: (slot: PlayerSlot, info: protocol.PublicAgentInfo) => void;
   private readonly live: Record<PlayerSlot, protocol.PublicAgentInfo | undefined>;
@@ -514,20 +518,28 @@ export class InfoCoalescer {
     {p1?: protocol.PublicAgentInfo; p2?: protocol.PublicAgentInfo}
   >;
   private readonly lastBroadcastAt: Record<PlayerSlot, number>;
+  private readonly ingestsThisTurn: Record<PlayerSlot, number>;
   private readonly timers: Record<PlayerSlot, ReturnType<typeof setTimeout> | undefined>;
 
   constructor(options: InfoCoalescerOptions = {}) {
     this.intervalMillis = options.intervalMillis ?? INFO_BROADCAST_INTERVAL_MILLIS;
+    this.maxIngestsPerTurn = options.maxIngestsPerTurn ?? MAX_INFO_LINES_PER_DECISION;
     this.now = options.now ?? (() => Date.now());
     this.onBroadcast = options.onBroadcast;
     this.live = {p1: undefined, p2: undefined};
     this.pending = {p1: undefined, p2: undefined};
     this.committedByTurn = new Map();
     this.lastBroadcastAt = {p1: -Infinity, p2: -Infinity};
+    this.ingestsThisTurn = {p1: 0, p2: 0};
     this.timers = {p1: undefined, p2: undefined};
   }
 
+  canIngest(slot: PlayerSlot): boolean {
+    return this.ingestsThisTurn[slot] < this.maxIngestsPerTurn;
+  }
+
   ingest(slot: PlayerSlot, info: protocol.AgentInfo): void {
+    this.ingestsThisTurn[slot]++;
     const pub = protocol.toPublicAgentInfo(info);
     if (!pub) return;
     this.live[slot] = pub;
@@ -556,6 +568,7 @@ export class InfoCoalescer {
 
   commitTurn(slot: PlayerSlot, turn: number): protocol.PublicAgentInfo | undefined {
     this.clearTimer(slot);
+    this.ingestsThisTurn[slot] = 0;
     const finalInfo = this.pending[slot];
     this.pending[slot] = undefined;
     if (!finalInfo) return undefined;
@@ -604,6 +617,8 @@ export class InfoCoalescer {
     this.committedByTurn.clear();
     this.lastBroadcastAt.p1 = -Infinity;
     this.lastBroadcastAt.p2 = -Infinity;
+    this.ingestsThisTurn.p1 = 0;
+    this.ingestsThisTurn.p2 = 0;
   }
 
   dispose(): void {
@@ -625,11 +640,10 @@ export function createInfoLineInterceptor(
   coalescer: InfoCoalescer
 ): (line: string) => boolean {
   return (line: string): boolean => {
-    if (!protocol.isAgentInfoLine(line)) return false;
-    const parsed = protocol.parseAgentStdoutLine(line);
-    if (parsed?.kind === 'info') {
-      coalescer.ingest(slot, parsed.info);
-    }
+    if (!coalescer.canIngest(slot)) return false;
+    const info = protocol.parseAgentInfoLine(line);
+    if (!info) return false;
+    coalescer.ingest(slot, info);
     return true;
   };
 }
@@ -645,12 +659,13 @@ export function attachStdoutLineFramer(
   proc.stdout.setEncoding('utf8');
   proc.stdout.on('data', (chunk: string) => {
     stdoutBuf += chunk;
-    let nl = stdoutBuf.indexOf('\n');
+    let start = 0;
+    let nl = stdoutBuf.indexOf('\n', start);
     while (nl >= 0) {
-      const line = stdoutBuf.slice(0, nl).replace(/\r$/, '');
-      stdoutBuf = stdoutBuf.slice(nl + 1);
+      const end = nl > start && stdoutBuf.charCodeAt(nl - 1) === 0x0d ? nl - 1 : nl;
+      const lineLen = end - start;
       lineSeq++;
-      if (line.length > MAX_STDOUT_LINE_CHARS) {
+      if (lineLen > MAX_STDOUT_LINE_CHARS) {
         stdoutBuf = '';
         try {
           proc.kill('SIGKILL');
@@ -658,8 +673,10 @@ export function attachStdoutLineFramer(
         onOverflow();
         return;
       }
+      const line = stdoutBuf.slice(start, end);
+      start = nl + 1;
       if (onLine?.(line, lineSeq)) {
-        nl = stdoutBuf.indexOf('\n');
+        nl = stdoutBuf.indexOf('\n', start);
         continue;
       }
       if (io.lineResolver) {
@@ -670,7 +687,10 @@ export function attachStdoutLineFramer(
         io.lineQueue.push(line);
         io.lineSeqQueue?.push(lineSeq);
       }
-      nl = stdoutBuf.indexOf('\n');
+      nl = stdoutBuf.indexOf('\n', start);
+    }
+    if (start > 0) {
+      stdoutBuf = stdoutBuf.slice(start);
     }
     if (stdoutBuf.length > MAX_STDOUT_LINE_CHARS) {
       stdoutBuf = '';

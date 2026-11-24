@@ -299,6 +299,17 @@ export function isAgentInfoLine(rawLine: string): boolean {
   return body === '/info' || body.startsWith('/info ');
 }
 
+export function parseAgentInfoLine(rawLine: string): AgentInfo | undefined {
+  const withoutCr = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+  const trimmed = withoutCr.trim();
+  if (!trimmed) return undefined;
+  const body = stripOptionalRoomPrefix(trimmed);
+  if (body.length < 7 || body.length > MAX_INFO_LINE_CHARS) return undefined;
+  if (body.slice(0, 6).toLowerCase() !== '/info ') return undefined;
+  if (hasEmbeddedControlChars(withoutCr)) return undefined;
+  return parseAgentInfoPayload(body.slice(6).trim());
+}
+
 // Parses a single stdout line from an Arena agent into either a Showdown simulator choice string
 // or a plain chat/text line (which callers discard so agents cannot message each other or inject
 // protocol commands). Lines with embedded `\r` or control characters are always demoted to chat.

@@ -551,12 +551,17 @@ export class ConcurrentGame {
         stderrOverflow = false;
       }
       stderrBuf += data;
-      let nl = stderrBuf.indexOf('\n');
+      let start = 0;
+      let nl = stderrBuf.indexOf('\n', start);
       while (nl >= 0) {
-        const errLine = stderrBuf.slice(0, nl).replace(/\r$/, '');
-        stderrBuf = stderrBuf.slice(nl + 1);
+        const end = nl > start && stderrBuf.charCodeAt(nl - 1) === 0x0d ? nl - 1 : nl;
+        const errLine = stderrBuf.slice(start, end);
+        start = nl + 1;
         handleStderrLine(errLine);
-        nl = stderrBuf.indexOf('\n');
+        nl = stderrBuf.indexOf('\n', start);
+      }
+      if (start > 0) {
+        stderrBuf = stderrBuf.slice(start);
       }
       if (stderrBuf.length > MAX_STDOUT_LINE_CHARS) {
         stderrBuf = '';
