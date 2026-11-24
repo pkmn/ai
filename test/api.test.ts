@@ -3298,7 +3298,7 @@ describe('createServerApp production HTTP hardening', () => {
     }
   });
 
-  test('serves activated artifact metadata with authToken and scrubs on archived callback',
+  test('serves activated artifact authToken until scrubbed by archived callback',
     async () => {
       const a1 = db.getAgentBySlug('0-error')!;
       const v1 = db.createSubmission({
@@ -3557,7 +3557,7 @@ describe('createServerApp production HTTP hardening', () => {
       }
     });
 
-  test('fires onLiveMatch and onLiveTournamentGame once per match/game and exposes active games',
+  test('fires live match/tournament callbacks once per active game while exposing active state',
     async () => {
       const liveMatches: string[] = [];
       const liveTourneyGames: arena.LiveTournamentGame[] = [];

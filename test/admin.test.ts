@@ -108,14 +108,18 @@ describe('/admin dashboard & API', () => {
     db.close();
   });
 
-  test('redirects unauthenticated visitors and blocks non-admins with 403', async () => {
+  test('redirects unauthenticated /admin HTML requests to GitHub login', async () => {
     const anonHtml = await fetch(`${baseUrl}/admin/`, {redirect: 'manual'});
     expect(anonHtml.status).toBe(302);
     expect(anonHtml.headers.get('location')).toBe('/auth/github?return_to=%2Fadmin%2F');
+  });
 
+  test('returns 401 on unauthenticated /admin.json requests', async () => {
     const anonJson = await fetch(`${baseUrl}/admin.json`);
     expect(anonJson.status).toBe(401);
+  });
 
+  test('blocks non-admin authenticated users with 403 across /admin endpoints', async () => {
     const nonAdminHtml = await fetch(`${baseUrl}/admin/`, {
       headers: {Cookie: cookieFor('pmariglia', 2002)},
     });
@@ -150,7 +154,7 @@ describe('/admin dashboard & API', () => {
     expect(res.status).toBe(403);
   });
 
-  test('renders HTML dashboard and identical /admin.json & /admin/index.json feeds', async () => {
+  test('renders noindex HTML dashboard for authenticated admins', async () => {
     const htmlRes = await fetch(`${baseUrl}/admin/`, {
       headers: {Cookie: cookieFor('scheibo')},
     });
@@ -167,7 +171,9 @@ describe('/admin dashboard & API', () => {
     expect(html).not.toContain('Champion');
     expect(html).not.toContain('Challenger');
     expect(html).not.toContain('Needs Attention');
+  });
 
+  test('serves matching /admin.json alongside /admin/index.json snapshots', async () => {
     const j1 = await (await fetch(`${baseUrl}/admin.json`, {
       headers: {Cookie: cookieFor('scheibo')},
     })).json() as admin.AdminSnapshot;
@@ -183,103 +189,122 @@ describe('/admin dashboard & API', () => {
     expect(j1.agents.map(a => a.agent.slug)).toEqual(['0-error', 'foul-play', 'newcomer']);
   });
 
-  test(
-    'toggles per-ladder eligibility, refunds cooldown, quarantines, and retires entries',
-    async () => {
-      const adminCookie = cookieFor('scheibo');
+  test('toggles per-ladder eligibility via admin API', async () => {
+    const enableRes = await fetch(`${baseUrl}/api/admin/agents/newcomer/ladders`, {
+      method: 'POST',
+      headers: {Cookie: cookieFor('scheibo'), 'Content-Type': 'application/json'},
+      body: JSON.stringify({slot: 'vgc', qualified: true}),
+    });
+    expect(enableRes.status).toBe(200);
+    const enableData = await enableRes.json() as {
+      qualifiedLadders: string[];
+      submissionStatus: {label: string; canSubmit: boolean};
+    };
+    expect(enableData.qualifiedLadders).toEqual(['vgc']);
+    expect(enableData.submissionStatus.label).toBe('Eligible');
+  });
 
-      // 1. Toggle VGC on for Newcomer -> transitions from Pending to Eligible.
-      const enableRes = await fetch(`${baseUrl}/api/admin/agents/newcomer/ladders`, {
-        method: 'POST',
-        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
-        body: JSON.stringify({slot: 'vgc', qualified: true}),
-      });
-      expect(enableRes.status).toBe(200);
-      const enableData = await enableRes.json() as {
-        qualifiedLadders: string[];
-        submissionStatus: {label: string; canSubmit: boolean};
-      };
-      expect(enableData.qualifiedLadders).toEqual(['vgc']);
-      expect(enableData.submissionStatus.label).toBe('Eligible');
+  test('refunds submission cooldown via admin API', async () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    const v1 = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: now + 5});
+    now += 10;
+    expect(db.computeAgentSubmissionStatus(zero.id, now).nextEligibleAt).toBeDefined();
+    const refundRes = await fetch(`${baseUrl}/api/admin/agents/0-error/refund-cooldown`, {
+      method: 'POST',
+      headers: {Cookie: cookieFor('scheibo'), 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(refundRes.status).toBe(200);
+    expect(db.getAgentById(zero.id)?.cooldownRefundedAt).toBe(now);
+  });
 
-      // 2. Submit two versions for 0 ERROR on RBY and pass smoke tests.
-      const zero = db.getAgentBySlug('0-error')!;
-      const v1 = db.createSubmission({
-        agentId: zero.id,
-        version: '1.0.0',
-        package: 'bundle',
-        url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
-        sha256: SHA_A,
-        ladderIds: ['gen1ou20261109'],
-        now,
-      });
-      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: now + 5});
-      db.setLadderAnchor('gen1ou20261109', '0-error', '1.0.0', now + 6);
+  test('quarantines then unquarantines a version via admin API', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const v1 = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: now + 5});
 
-      // Cooldown is active right after 1.0.0 passes; refund it via admin API.
-      now += 10;
-      expect(db.computeAgentSubmissionStatus(zero.id, now).nextEligibleAt).toBeDefined();
-      const refundRes = await fetch(`${baseUrl}/api/admin/agents/0-error/refund-cooldown`, {
-        method: 'POST',
-        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
-        body: '{}',
-      });
-      expect(refundRes.status).toBe(200);
-      expect(db.getAgentById(zero.id)?.cooldownRefundedAt).toBe(now);
+    const qRes = await fetch(`${baseUrl}/api/admin/versions/0-error/1.0.0/quarantine`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: JSON.stringify({reason: 'Turn timeout loop'}),
+    });
+    expect(qRes.status).toBe(200);
+    expect(db.getVersionById(v1.id)?.smokeStatus).toBe('quarantined');
+    expect(db.getVersionById(v1.id)?.smokeError).toBe('Turn timeout loop');
 
-      // Settle v1 so v2 can be submitted.
-      db.db.prepare(
-        'UPDATE ladder_entries SET settled_at = ?, matches = 25, se = 20 WHERE version_id = ?'
-      ).run(now, v1.id);
-      const v2 = db.createSubmission({
-        agentId: zero.id,
-        version: '1.1.0',
-        package: 'bundle',
-        url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
-        sha256: SHA_B,
-        ladderIds: ['gen1ou20261109'],
-        now: now + 10,
-      });
-      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: now + 15});
+    const uqRes = await fetch(`${baseUrl}/api/admin/versions/0-error/1.0.0/unquarantine`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(uqRes.status).toBe(200);
+    expect(db.getVersionById(v1.id)?.smokeStatus).toBe('passed');
+  });
 
-      // 3. Quarantine & unquarantine v2 via admin API.
-      const qRes = await fetch(`${baseUrl}/api/admin/versions/0-error/1.1.0/quarantine`, {
-        method: 'POST',
-        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
-        body: JSON.stringify({reason: 'Turn timeout loop'}),
-      });
-      expect(qRes.status).toBe(200);
-      expect(db.getVersionById(v2.id)?.smokeStatus).toBe('quarantined');
-      expect(db.getVersionById(v2.id)?.smokeError).toBe('Turn timeout loop');
+  test('retires a non-anchor entry while rejecting anchor retirement with 400', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const v1 = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: now + 5});
+    db.setLadderAnchor('gen1ou20261109', '0-error', '1.0.0', now + 6);
+    db.refundCooldown('0-error', now + 10);
+    db.db.prepare(
+      'UPDATE ladder_entries SET settled_at = ?, matches = 25, se = 20 WHERE version_id = ?'
+    ).run(now + 10, v1.id);
+    const v2 = db.createSubmission({
+      agentId: zero.id,
+      version: '1.1.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.1.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109'],
+      now: now + 12,
+    });
+    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: now + 15});
 
-      const uqRes = await fetch(`${baseUrl}/api/admin/versions/0-error/1.1.0/unquarantine`, {
-        method: 'POST',
-        headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
-        body: '{}',
-      });
-      expect(uqRes.status).toBe(200);
-      expect(db.getVersionById(v2.id)?.smokeStatus).toBe('passed');
+    const retireAnchorRes = await fetch(
+      `${baseUrl}/api/admin/ladders/gen1ou20261109/entries/0-error/1.0.0/retire`,
+      {method: 'POST', headers: {Cookie: adminCookie, 'Content-Type': 'application/json'}}
+    );
+    expect(retireAnchorRes.status).toBe(400);
 
-      // 4. Retiring the 1500 Elo anchor is blocked with 400.
-      const retireAnchorRes = await fetch(
-        `${baseUrl}/api/admin/ladders/gen1ou20261109/entries/0-error/1.0.0/retire`,
-        {method: 'POST', headers: {Cookie: adminCookie, 'Content-Type': 'application/json'}}
-      );
-      expect(retireAnchorRes.status).toBe(400);
-
-      // 5. Retiring non-anchor v2 succeeds without removing RBY qualification.
-      const retireRes = await fetch(
-        `${baseUrl}/api/admin/ladders/gen1ou20261109/entries/0-error/1.1.0/retire`,
-        {method: 'POST', headers: {Cookie: adminCookie, 'Content-Type': 'application/json'}}
-      );
-      expect(retireRes.status).toBe(200);
-      expect(db.getAgentLadders(zero.id)).toEqual(['rby', 'adv']);
-      const v2Role = db.db.prepare(
-        'SELECT role FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
-      ).get('gen1ou20261109', v2.id) as {role: string};
-      expect(v2Role.role).toBe('retired');
-    }
-  );
+    const retireRes = await fetch(
+      `${baseUrl}/api/admin/ladders/gen1ou20261109/entries/0-error/1.1.0/retire`,
+      {method: 'POST', headers: {Cookie: adminCookie, 'Content-Type': 'application/json'}}
+    );
+    expect(retireRes.status).toBe(200);
+    expect(db.getAgentLadders(zero.id)).toEqual(['rby', 'adv']);
+    const v2Role = db.db.prepare(
+      'SELECT role FROM ladder_entries WHERE ladder_id = ? AND version_id = ?'
+    ).get('gen1ou20261109', v2.id) as {role: string};
+    expect(v2Role.role).toBe('retired');
+  });
 
   test('pkmn retire CLI retires an active entry on a specific ladder', async () => {
     const fp = db.getAgentBySlug('foul-play')!;
@@ -306,7 +331,7 @@ describe('/admin dashboard & API', () => {
   });
 
   test(
-    'ingests Arena system telemetry via heartbeat without leaking to live.json and pushes SSE',
+    'streams heartbeat Arena telemetry over /api/admin/stream without leaking to /api/live.json',
     async () => {
       const GIB = 1024 ** 3;
       const arenaSys: system.ArenaSystemInfo = {
@@ -443,7 +468,7 @@ describe('/admin dashboard & API', () => {
   );
 
   test(
-    'surfaces diagnostics, /info dots, CPU/faults, staged discard, and admin log endpoints',
+    'exposes diagnostics, /info dots, CPU/faults, staged discard via /admin endpoints',
     async () => {
       const adminCookie = cookieFor('scheibo');
       const nonAdminCookie = cookieFor('pmariglia', 2002);

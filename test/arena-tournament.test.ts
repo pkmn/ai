@@ -716,7 +716,7 @@ describe('ConcurrentTournamentGame', () => {
     }
   });
 
-  test('ConcurrentGame broadcasts live /info updates and collapses final |ai| logs', async () => {
+  test('ConcurrentGame broadcasts live /info while collapsing final |ai| logs', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-info-tourney-'));
     try {
       const p1Script = path.join(dir, 'p1-tourney.js');

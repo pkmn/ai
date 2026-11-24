@@ -1979,7 +1979,7 @@ describe('announce and mention resolution', () => {
     ],
   };
 
-  test('resolves real announcement mentions while ignoring @-ing, code, and URLs', () => {
+  test('resolves real announcement mentions while ignoring @-ing, code, URLs', () => {
     const draft = [
       '**🏛️ OLYMPUS MONS**',
       '',
@@ -2019,7 +2019,7 @@ describe('announce and mention resolution', () => {
     ]);
   });
 
-  test('resolves emoji-prefixed roles and config role aliases cleanly', () => {
+  test('resolves emoji-prefixed roles using config role aliases', () => {
     const aliases = discord.loadRoleAliases(discord.loadConfig());
     expect(aliases.Competitor).toBe('1568629775122309210');
     expect(aliases.RBY).toBe('1563716887131459685');
@@ -2043,7 +2043,7 @@ describe('announce and mention resolution', () => {
     ]);
   });
 
-  test('skips code blocks, inline code, URLs, emails, versions, and escaped mentions', () => {
+  test('skips code blocks, inline code, URLs, emails, versions, escaped mentions', () => {
     const raw = [
       'Use `@pkmn/sim` and `metamon@1.0.0`, email admin@pkmn.ai, or see https://medium.com/@ghost.',
       'Literal \\@ghost, **@Competitor**, _@pkmn_, __@pre__, (@alice.dev), and @pkmn\'s.',
@@ -2068,7 +2068,7 @@ describe('announce and mention resolution', () => {
     expect(res.content).toContain('<@&9002> and <@&9001> and @everyone and @here!');
   });
 
-  test('validates explicit Discord user, role, and channel tags', () => {
+  test('validates explicit Discord user, role, channel tags', () => {
     const valid = discord.resolveMentions(
       'Hi <@200>, <@!300>, <@&1568629775122309210> in <#689316506265321535>',
       GUILD
@@ -2093,7 +2093,7 @@ describe('announce and mention resolution', () => {
     ]);
   });
 
-  test('reports unknown, non-boundary, and ambiguous mentions without false matches', () => {
+  test('reports unknown, non-boundary, or ambiguous mentions without false matches', () => {
     const res = discord.resolveMentions(
       'Ping @Competitr, @pkmn-bot, @pkmn/sim, _@ghost_, and @Twin.',
       GUILD
@@ -2165,7 +2165,7 @@ describe('announce and mention resolution', () => {
     }) as unknown as typeof fetch;
   }
 
-  test('pkmn announce --dry-run validates mentions and DMs staff instead of channel', async () => {
+  test('pkmn announce --dry-run DMs staff preview instead of posting to channel', async () => {
     const posted: Array<{url: string; body: {content: string; flags?: number}}> = [];
     stubAnnounceFetch(posted);
     const prevToken = process.env.DISCORD_BOT_TOKEN;
@@ -2256,7 +2256,7 @@ describe('announce and mention resolution', () => {
     }
   });
 
-  test('pkmn announce validates CLI flags and required token', async () => {
+  test('pkmn announce rejects invalid CLI flag combinations or missing token', async () => {
     const prevToken = process.env.DISCORD_BOT_TOKEN;
     delete process.env.DISCORD_BOT_TOKEN;
     try {
@@ -2357,7 +2357,7 @@ describe('live match watches (/watch)', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('autocompletes agents (excluding selected counterpart) and active events', () => {
+  test('autocompletes agents (excluding counterpart) or active events for /watch', () => {
     const db = seedWatchDb();
     try {
       const autoCtx: discord.InteractionContext = {db, nowSeconds: () => 1_700_000_000};
@@ -2416,7 +2416,7 @@ describe('live match watches (/watch)', () => {
     }
   });
 
-  test('arms, lists, cancels, and clears watches ephemerally via /watch and buttons', () => {
+  test('manages ephemeral /watch arm, list, cancel, clear lifecycle via buttons', () => {
     const db = seedWatchDb();
     try {
       const ctx: discord.InteractionContext = {db, nowSeconds: () => 1_700_000_100};
@@ -2580,7 +2580,7 @@ describe('live match watches (/watch)', () => {
     }
   });
 
-  test('reports already-live matches immediately and lets users arm for the next match', () => {
+  test('reports already-live matches immediately with a Watch next match button', () => {
     const db = seedWatchDb();
     try {
       const ctx: discord.InteractionContext = {
@@ -2634,7 +2634,7 @@ describe('live match watches (/watch)', () => {
     }
   });
 
-  test('dispatches deduped one-shot DMs with Watch Live and Watch next match buttons', async () => {
+  test('dispatches deduped one-shot DMs with Watch Live / re-arm buttons', async () => {
     const db = seedWatchDb();
     const dmPosts: Array<{
       channel: string;

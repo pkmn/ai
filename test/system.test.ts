@@ -13,7 +13,7 @@ import * as auth from '../server/auth';
 import * as system from '../server/system';
 
 describe('system telemetry parsers & TrafficTracker', () => {
-  test('parses Linux /proc and Ubuntu update-notifier outputs', () => {
+  test('parses Linux /proc alongside Ubuntu update-notifier outputs', () => {
     const mem = system.parseProcMeminfo(
       'MemTotal:       8192000 kB\nMemFree:        1000000 kB\n' +
       'MemAvailable:   6000000 kB\nSwapTotal:      2048000 kB\nSwapFree:       1536000 kB\n'
@@ -126,7 +126,7 @@ describe('system telemetry parsers & TrafficTracker', () => {
     });
   });
 
-  test('TrafficTracker aggregates visitors, requests, error rates, and latency', () => {
+  test('TrafficTracker aggregates visitors, requests, error rates, latency', () => {
     let t = 1_760_000_000;
     const tracker = new system.TrafficTracker(() => t);
     tracker.record({status: 200, durationMillis: 10, ip: '1.1.1.1', pathname: '/arena/'});
@@ -168,7 +168,7 @@ describe('system telemetry parsers & TrafficTracker', () => {
     expect(later.requests1h).toBe(5);
   });
 
-  test('schedule-aware backup scanning stops once good and resumes at next window', async () => {
+  test('schedule-aware backup scanning skips rescans until next scheduled window', async () => {
     const before = Math.floor(Date.UTC(2026, 10, 22, 9, 55, 0) / 1000);
     const windowPrev = Math.floor(Date.UTC(2026, 10, 21, 10, 0, 0) / 1000);
     const windowToday = Math.floor(Date.UTC(2026, 10, 22, 10, 0, 0) / 1000);

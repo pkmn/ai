@@ -215,7 +215,7 @@ describe('parseAgentStdoutLine', () => {
 });
 
 describe('agent info public formatting and |ai| log helpers', () => {
-  test('toPublicAgentInfo strips policy and rounds win to 4 decimal places', () => {
+  test('toPublicAgentInfo strips policy while rounding win to 4 decimal places', () => {
     expect(
       protocol.toPublicAgentInfo({
         win: 0.63426,
@@ -235,7 +235,7 @@ describe('agent info public formatting and |ai| log helpers', () => {
     expect(protocol.toPublicAgentInfo({policy: {'move 1': 1}})).toBeUndefined();
   });
 
-  test('formatAiLogLine and parseAiLogLine roundtrip without leaking policy', () => {
+  test('|ai| log serialization roundtrips without leaking policy', () => {
     const line = protocol.formatAiLogLine('p1', {
       win: 0.75,
       nodes: 50000,
@@ -256,7 +256,7 @@ describe('agent info public formatting and |ai| log helpers', () => {
     expect(protocol.parseAiLogLine('|turn|1')).toBeUndefined();
   });
 
-  test('injectAiLogLines and extractAiTelemetry align per-turn snapshots', () => {
+  test('injectAiLogLines aligns per-turn snapshots extracted by extractAiTelemetry', () => {
     const rawLog = [
       '|player|p1|Hydra|',
       '|player|p2|Vertex|',

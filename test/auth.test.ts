@@ -675,7 +675,7 @@ describe('server/auth.ts routes', () => {
     expect((await res.text()).trim()).toBe(newer);
   });
 
-  test('resolves /api/me with GitHub avatar first and Discord avatar for Discord-only sessions',
+  test('resolves /api/me preferring GitHub avatar over Discord avatar',
     async () => {
       expect(auth.githubAvatarUrl(117249)).toBe(
         'https://avatars.githubusercontent.com/u/117249?s=64'

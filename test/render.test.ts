@@ -869,7 +869,7 @@ describe('project de-registration', () => {
     }
   });
 
-  test('renders CPU utilization and protocol fault aggregates on project profiles', async () => {
+  test('renders CPU utilization with protocol faults on project profiles', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-cpu-'));
     const tmpPublic = path.join(tmpDir, 'public');
     seedStaticPublicAssets(tmpPublic);
@@ -4007,7 +4007,7 @@ describe('JSON route parity & retired pool archives', () => {
     }
   });
 
-  test('renders agent /info telemetry panels for both, one-sided, and silent games', () => {
+  test('renders agent /info telemetry panels across both, one-sided, silent games', () => {
     expect(
       render.renderAiPanelHtml('Hydra', 'Vertex', undefined, undefined, undefined)
     ).toBe('');
@@ -4074,7 +4074,7 @@ describe('JSON route parity & retired pool archives', () => {
     expect(withoutStrip).toContain('ai-chart');
   });
 
-  test('battle viewer strips |ai| lines and supports turn sync plus seek messages', () => {
+  test('battle viewer strips |ai| lines while supporting turn sync / seek messages', () => {
     const viewerDir = path.join(tmpDir, 'viewer-check');
     tournaments.renderBattleViewerPage(viewerDir);
     const html = fs.readFileSync(

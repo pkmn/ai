@@ -3041,7 +3041,7 @@ describe('per-ladder qualification & migrations', () => {
     fs.rmSync(tmpDir, {recursive: true, force: true});
   });
 
-  test('migrates existing database with agent_ladders backfill and matches fresh schema', () => {
+  test('migrates populated database through 0005–0008 matching fresh schema', () => {
     const preSchemaDir = path.join(tmpDir, 'pre-schema');
     const emptyMigDir = path.join(tmpDir, 'empty-mig');
     fs.mkdirSync(preSchemaDir, {recursive: true});
@@ -3860,7 +3860,7 @@ describe('per-ladder qualification & migrations', () => {
     }
   });
 
-  test('aggregates host CPU utilization and fixed-enum protocol error counts on ladder_entries',
+  test('aggregates host CPU utilization with protocol error counts on ladder_entries',
     () => {
       const db = new database.Database(':memory:', {now: 1_760_000_000});
       try {
@@ -4208,7 +4208,7 @@ describe('discord watches', () => {
   status: active
 `;
 
-  test('migration 0008-discord-watches.sql is additive and matches declarative schema', () => {
+  test('migration 0008-discord-watches.sql is additive matching declarative schema', () => {
     const sql = fs.readFileSync(
       root('db', 'migration', '0008-discord-watches.sql'),
       'utf8'
@@ -4254,7 +4254,7 @@ describe('discord watches', () => {
     }
   });
 
-  test('manages canonicalized watches, per-user limits, consumption, and pruning', () => {
+  test('manages canonicalized watches with per-user limits, consumption, pruning', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
       db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
@@ -4421,7 +4421,7 @@ describe('discord watches', () => {
     }
   });
 
-  test('listWatchableAgents prioritizes active ladder and tournament agents', () => {
+  test('listWatchableAgents prioritizes active ladder/tournament agents', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
       db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);

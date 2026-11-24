@@ -859,7 +859,7 @@ describe('TimeSlicedArenaGame', () => {
     coalescer.dispose();
   });
 
-  test('TimeSlicedArenaGame collapses /info per turn and honors recordAiLogs', async () => {
+  test('TimeSlicedArenaGame collapses /info per turn when recordAiLogs is enabled', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-info-arbiter-'));
     try {
       const p1Script = path.join(dir, 'p1-info.js');
@@ -936,7 +936,7 @@ describe('TimeSlicedArenaGame', () => {
     }
   });
 
-  test('BoundedStderrBuffer preserves head and tail with truncation marker', () => {
+  test('BoundedStderrBuffer preserves head/tail around truncation marker', () => {
     const small = new engine.BoundedStderrBuffer({headBytes: 16, tailBytes: 32});
     small.append('boot ok\nturn 1 ok\n');
     expect(small.truncatedBytes).toBe(0);
@@ -986,13 +986,15 @@ describe('TimeSlicedArenaGame', () => {
     expect(intercept('/info {"win":0.8}')).toBe(true);
   });
 
-  test('diagnosticWallCapMillis and protocol error classifier handle formats and buckets', () => {
+  test('diagnosticWallCapMillis selects per-format wall caps', () => {
     expect(engine.diagnosticWallCapMillis('gen1ou')).toBe(10 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen3ou')).toBe(8 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen9ou')).toBe(6 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen9randombattle')).toBe(6 * 60 * 1000);
     expect(engine.diagnosticWallCapMillis('gen9championsvgc2026regmc')).toBe(6 * 60 * 1000);
+  });
 
+  test('inspectPlayerProtocolChunk classifies invalid-choice error buckets', () => {
     const errors = engine.emptyProtocolErrorCounts();
     const state: engine.ProtocolStrikeState = {
       retryingInvalidChoice: false,
@@ -1020,12 +1022,14 @@ describe('TimeSlicedArenaGame', () => {
     });
   });
 
-  test('classifySmokeGame treats self-play faults on either slot as failure and caps as ok', () => {
+  test('classifySmokeGame treats diagnostic-cap completion as passing', () => {
     expect(engine.classifySmokeGame(
       {winner: 'tie', endReason: 'diagnostic-cap'},
       {label: 'Diagnostic', format: 'gen1ou', selfPlay: true}
     )).toEqual({kind: 'ok'});
+  });
 
+  test('classifySmokeGame treats P2 crash during self-play as failure', () => {
     const p2Fault = engine.classifySmokeGame(
       {winner: 'p1', endReason: 'crash'},
       {label: 'Diagnostic', format: 'gen1ou', selfPlay: true, p2Stderr: 'p2 segfault'}

@@ -1213,7 +1213,7 @@ describe('Coordinator', () => {
     expect(script).toContain('key: "arena-archive"');
   });
 
-  test('maintenance.sh coordinates maintenance.lock / match.lock and separates updates', () => {
+  test('maintenance.sh coordinates maintenance.lock against match.lock before archiving', () => {
     const script = fs.readFileSync(root('arena', 'scripts', 'maintenance.sh'), 'utf8');
     const maintIdx = script.search(/mv -f ".*MAINT_LOCK.*\.tmp\.\$\$" "\$MAINT_LOCK"/);
     const waitIdx = script.indexOf('while [[ -f "$MATCH_LOCK" ]]; do');

@@ -1764,7 +1764,7 @@ describe('account routes', () => {
       expect(json.versions[0].smoke.queueAhead).toBe(1);
     });
 
-    test('enforces private diagnostic log/stderr auth and supports staged activate/discard',
+    test('serves private staged diagnostics with activate/discard lifecycle gating',
       async () => {
         openLadders(['gen1ou20261109', 'gen9championsvgc2026regmc']);
         db.setAgentLadders('0-error', ['rby', 'vgc'], currentNow);
