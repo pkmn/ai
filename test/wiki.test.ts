@@ -1573,9 +1573,12 @@ describe('wiki recent edits', () => {
     fs.mkdirSync(path.join(wikiDir, 'projects'), {recursive: true});
     fs.writeFileSync(projectsFile, PROJECTS_YAML, 'utf8');
 
-    git('init');
+    git('init', '--template=');
     git('config', 'user.email', 'test@pkmn.ai');
     git('config', 'user.name', 'scheibo');
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
 
     fs.writeFileSync(path.join(wikiDir, 'index.dj'), '# Wiki\n', 'utf8');
     git('add', 'index.dj');
