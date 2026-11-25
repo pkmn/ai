@@ -1444,7 +1444,7 @@ export function getWipeableVersionIds(db: DatabaseSync): number[] {
         SELECT 1 FROM ladder_entries le
         JOIN ladders l ON l.id = le.ladder_id
         WHERE le.version_id = av.id
-          AND (le.matches > 0 OR le.is_anchor = 1 OR l.status = 'archived')
+          AND (le.matches > 0 OR le.is_anchor = 1 OR l.status != 'upcoming')
       )
       AND NOT EXISTS (
         SELECT 1 FROM tournament_matches tm
@@ -1520,9 +1520,11 @@ export function wipeVersion(
         {status: 409}
       );
     }
-    if (entryRows.some(r => r.ladder_status === 'archived')) {
+    if (entryRows.some(r => r.ladder_status !== 'upcoming')) {
       throw Object.assign(
-        new Error(`Version "${ver.version}" belongs to an archived ladder and cannot be wiped.`),
+        new Error(
+          `Version "${ver.version}" is enrolled on a live or archived ladder and cannot be wiped.`
+        ),
         {status: 409}
       );
     }
@@ -1578,8 +1580,6 @@ export function wipeVersion(
       teams.revertPendingTeamsToSaved(db, ver.ladders, ver.agentId);
     }
 
-    // Update `pools` team rosters before evaluating `canSettleLadder` below so dropping the last
-    // unplayed agent's `'active'` pool on a `'settling'` ladder accurately triggers archival.
     const inFlightLadders = new Set<string>();
     const inFlightRows = db.prepare(`
       SELECT ladders_json FROM agent_versions
@@ -1593,7 +1593,7 @@ export function wipeVersion(
 
     for (const ladderId of touchedLadderIds) {
       const ladder = getLadder(db, ladderId);
-      if (ladder?.team !== 'pools' || ladder.status === 'archived') continue;
+      if (ladder?.team !== 'pools' || ladder.status !== 'upcoming') continue;
       const hasEntry = db.prepare(`
         SELECT 1 FROM ladder_entries le
         JOIN agent_versions av ON av.id = le.version_id
@@ -1601,13 +1601,6 @@ export function wipeVersion(
         LIMIT 1
       `).get(ladderId, ver.agentId);
       if (hasEntry) continue;
-      const hasAgentMatch = db.prepare(`
-        SELECT 1 FROM matches m
-        JOIN agent_versions av ON av.id = m.p1_version_id OR av.id = m.p2_version_id
-        WHERE m.ladder_id = ? AND av.agent_id = ?
-        LIMIT 1
-      `).get(ladderId, ver.agentId);
-      if (hasAgentMatch) continue;
       if (inFlightLadders.has(ladderId)) {
         teams.demoteActiveTeamsToPending(db, ladderId, ver.agentId);
       } else {
@@ -1618,13 +1611,7 @@ export function wipeVersion(
     const dayUtc = formatUtcDate(now);
     for (const row of entryRows) {
       entries.promoteRemainingActiveToChampion(db, row.ladder_id, ver.agentId);
-      const ladder = getLadder(db, row.ladder_id);
-      if (ladder && ladder.status !== 'archived') {
-        entries.recomputeLadderRatings(db, row.ladder_id, now, undefined, dayUtc);
-      }
-      if (ladder?.status === 'settling' && !canSettleLadder(db, ladder)) {
-        archiveLadderInPlace(db, ladder.id, now);
-      }
+      entries.recomputeLadderRatings(db, row.ladder_id, now, undefined, dayUtc);
       const remainingEntries = db.prepare(`
         SELECT 1 FROM ladder_entries le
         JOIN agent_versions av ON av.id = le.version_id

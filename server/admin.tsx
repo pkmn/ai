@@ -1194,23 +1194,6 @@ function renderSystemSection(
   );
 }
 
-function getLiveMatchVersionIds(
-  database: db.Database,
-  arenaHandle?: arena.Handle
-): Set<number> {
-  const out = new Set<number>();
-  const state = arenaHandle?.getState();
-  const live = state && !state.stale ? state.live : undefined;
-  if (!live) return out;
-  for (const side of [live.p1, live.p2]) {
-    const ver = database.getVersionBySlugAndLabel(side.slug, side.version);
-    if (ver && (ver.smokeStatus === 'passed' || ver.smokeStatus === 'quarantined')) {
-      out.add(ver.id);
-    }
-  }
-  return out;
-}
-
 function computeRunnerHealth(arenaHandle: arena.Handle | undefined, now: number): RunnerHealth {
   if (!arenaHandle) return {status: 'idle'};
   const state = arenaHandle.getState();
@@ -1336,8 +1319,6 @@ export function buildAdminSnapshot(
     0
   );
 
-  const liveMatchVersionIds = getLiveMatchVersionIds(database, arenaHandle);
-
   return {
     generatedAt: now,
     admin: adminLogin,
@@ -1351,9 +1332,7 @@ export function buildAdminSnapshot(
     },
     ladders,
     agents,
-    wipeableVersionIds: database
-      .getWipeableVersionIds()
-      .filter(id => !liveMatchVersionIds.has(id)),
+    wipeableVersionIds: database.getWipeableVersionIds(),
     wikiEdits,
   };
 }
@@ -2531,26 +2510,8 @@ export function register(app: polka.Polka, options: Options): Handle {
       return;
     }
     const now = getNow();
-    if (getLiveMatchVersionIds(db, options.arena).has(versionId)) {
-      const ver = db.getVersionById(versionId);
-      const label = ver ? `"${ver.version}"` : String(versionId);
-      sendJson(res, 409, {
-        error: `Version ${label} is currently playing a live match and cannot be wiped.`,
-      });
-      return;
-    }
     try {
-      const activePoolsIds = db
-        .getLadders()
-        .filter(l => l.team === 'pools' && l.status !== 'archived')
-        .map(l => l.id);
       const result = db.wipeVersion(versionId, now);
-      const pubDir = options.publicDir ?? arena.PUBLIC_DIR;
-      for (const id of activePoolsIds) {
-        if (db.getLadder(id)?.status === 'archived') {
-          arena.promoteArchivedPoolsLogs(pubDir, id);
-        }
-      }
       const safe = {...result.version};
       delete safe.authTokenEncoding;
       sendJson(res, 200, {ok: true, version: safe});

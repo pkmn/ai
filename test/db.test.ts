@@ -5144,77 +5144,74 @@ describe('discord watches', () => {
     }
   });
 
-  test('wipeVersion archives settling pools ladder when dropping below min active pools', () => {
+  test('wipeVersion rejects unplayed versions enrolled on active or settling ladders with 409',
+    () => {
+      const db = new database.Database(':memory:', {now: 1_700_000_000});
+      try {
+        db.syncLadders(undefined, 1_700_000_000);
+        db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+        const ladderId = 'gen9championsvgc2026regmc';
+        const slugs = ['alpha', 'beta', 'gamma', 'delta'];
+        const versions: Record<string, number> = {};
+        for (const [i, slug] of slugs.entries()) {
+          const agent = db.getAgentBySlug(slug)!;
+          db.setAgentLadders(agent.id, ['vgc'], 1_700_000_000);
+          const v = db.createSubmission({
+            agentId: agent.id,
+            version: '1.0',
+            package: 'bundle',
+            url: `https://example.com/${slug}-1.0.tar.zst`,
+            sha256: String(i + 1).repeat(64),
+            ladderIds: [ladderId],
+            teamsByLadder: {[ladderId]: [`${slug}-t1`, `${slug}-t2`]},
+            now: 1_700_000_000,
+          });
+          db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: 1_700_000_010});
+          versions[slug] = v.id;
+        }
+        db.setLadderAnchor(ladderId, 'alpha', '1.0', 1_700_000_015);
+        db.setLadderStatus(ladderId, 'active', 1_700_000_020);
+
+        expect(db.getWipeableVersionIds()).not.toContain(versions.delta);
+        expect(() => db.wipeVersion(versions.delta, 1_700_000_030)).toThrow(
+          /live or archived ladder/
+        );
+
+        const {oldLadder} = db.rotateLadder({
+          oldLadderId: ladderId,
+          archivedName: 'VGC Reg M-C',
+          now: 1_700_000_040,
+        });
+        expect(oldLadder.status).toBe('settling');
+        expect(db.getWipeableVersionIds()).not.toContain(versions.delta);
+        expect(() => db.wipeVersion(versions.delta, 1_700_000_050)).toThrow(
+          /live or archived ladder/
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+  test('wipeVersion allows wiping a staged version targeting an active ladder', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
-      db.syncLadders(undefined, 1_700_000_000);
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
       db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
-      const ladderId = 'gen9championsvgc2026regmc';
-      const slugs = ['alpha', 'beta', 'gamma', 'delta'];
-      const versions: Record<string, number> = {};
-      for (const [i, slug] of slugs.entries()) {
-        const agent = db.getAgentBySlug(slug)!;
-        db.setAgentLadders(agent.id, ['vgc'], 1_700_000_000);
-        const v = db.createSubmission({
-          agentId: agent.id,
-          version: '1.0',
-          package: 'bundle',
-          url: `https://example.com/${slug}-1.0.tar.zst`,
-          sha256: String(i + 1).repeat(64),
-          ladderIds: [ladderId],
-          teamsByLadder: {[ladderId]: [`${slug}-t1`, `${slug}-t2`]},
-          now: 1_700_000_000,
-        });
-        db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: 1_700_000_010});
-        versions[slug] = v.id;
-      }
-      db.setLadderAnchor(ladderId, 'alpha', '1.0', 1_700_000_015);
-      db.setLadderStatus(ladderId, 'active', 1_700_000_020);
-      db.recordCompletedMatch({
-        match: {
-          id: 'vgc-settle-1',
-          ladderId,
-          p1VersionId: versions.alpha,
-          p2VersionId: versions.beta,
-          seed: '1,2,3,4',
-          category: 'WW',
-          game1Outcome: 'W',
-          game2Outcome: 'W',
-          game1Turns: 8,
-          game2Turns: 8,
-          game1EndReason: 'normal',
-          game2EndReason: 'normal',
-          p1Game1PeakRam: 10,
-          p1Game2PeakRam: 10,
-          p2Game1PeakRam: 10,
-          p2Game2PeakRam: 10,
-          p1Game1InitMillis: 10,
-          p1Game2InitMillis: 10,
-          p2Game1InitMillis: 10,
-          p2Game2InitMillis: 10,
-          p1Game1MeanTurnMillis: 10,
-          p1Game2MeanTurnMillis: 10,
-          p2Game1MeanTurnMillis: 10,
-          p2Game2MeanTurnMillis: 10,
-          p1Game1BankSeconds: 100,
-          p1Game2BankSeconds: 100,
-          p2Game1BankSeconds: 100,
-          p2Game2BankSeconds: 100,
-          completedAt: 1_700_000_030,
-        },
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      const staged = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.1',
+        package: 'bundle',
+        url: 'https://example.com/a-0.1.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
       });
-      const {oldLadder} = db.rotateLadder({
-        oldLadderId: ladderId,
-        archivedName: 'VGC Reg M-C',
-        now: 1_700_000_040,
-      });
-      expect(oldLadder.status).toBe('settling');
-
-      // Wiping the 4th (unplayed) agent drops active pools from 4 to 3 (< min=4), so the
-      // settling ladder must auto-archive instead of wedging in `'settling'`.
-      db.wipeVersion(versions.delta, 1_700_000_050);
-      expect(db.getActiveRosterForLadder(ladderId)).toHaveLength(3);
-      expect(db.getLadder(ladderId)?.status).toBe('archived');
+      db.applySubmissionStatus({versionId: staged.id, smokeStatus: 'staged', now: 1_700_000_010});
+      expect(db.getWipeableVersionIds()).toContain(staged.id);
+      db.wipeVersion(staged.id, 1_700_000_020);
+      expect(db.getVersionById(staged.id)).toBeUndefined();
     } finally {
       db.close();
     }
@@ -5330,7 +5327,7 @@ describe('discord watches', () => {
         ladderIds: ['gen1ou20261109'],
         now: 1_700_000_000,
       });
-      db.applySubmissionStatus({versionId: va.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.applySubmissionStatus({versionId: va.id, smokeStatus: 'staged', now: 1_700_000_010});
       db.applySubmissionStatus({versionId: vb.id, smokeStatus: 'passed', now: 1_700_000_010});
       db.wipeVersion(va.id, 1_700_000_020);
 
