@@ -99,7 +99,10 @@ Site admins (`ADMINS` in `server/auth.ts`) can inspect and moderate registered p
 (or `/admin.json`): live VPS & Arena host system telemetry (updated over `/api/admin/stream` SSE
 whenever the Arena heartbeats — load, RAM/swap, internal & `/Volumes/Archive` disk usage/I/O,
 network health, traffic/SSE viewers, error rates, backups/GCS archive sync, and pending OS updates),
-runner health, smoke queue & staged counts, ladder readiness, linked Discord/Smogon standing, inline
+runner health, smoke queue & staged counts, ladder readiness, open `registration`-labeled issues on
+`pkmn/ai` (polled every 5 minutes using conditional `ETag`/`If-None-Match` requests and streamed
+over `/api/admin/stream` — set optional `GITHUB_TOKEN` in `.env` for higher rate limits), linked
+Discord/Smogon standing, inline
 per-ladder qualification toggles, cooldowns, `/info` telemetry status dots, CPU/fault/protocol-error
 aggregates, inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, recent
 `pkmn/wiki` git edits (linking to page, revision, and diff for moderation), plus direct actions

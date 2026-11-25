@@ -178,8 +178,10 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     dbPath: db.dbPath,
     traffic,
   });
+  const registrationMonitor = new admin.RegistrationIssueMonitor();
   if (!isMock && !process.env.VITEST) {
     vpsMonitor.start();
+    registrationMonitor.start();
   }
 
   // `static/build.tsx` writes 0-byte `index.html` stubs for `/account`, `/arena`, `/projects`, and
@@ -315,6 +317,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     wiki: wikiInstance,
     publicDir,
     vpsMonitor,
+    registrationMonitor,
   });
   notifyAdminHeartbeat = () => adminHandle.notifyHeartbeat();
 
@@ -355,6 +358,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     discordHandle,
     close: () => {
       vpsMonitor.stop();
+      registrationMonitor.stop();
       adminHandle.close();
       arenaHandle.close();
       discordHandle?.stop();

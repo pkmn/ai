@@ -1112,3 +1112,359 @@ describe('/admin recent wiki edits', () => {
     expect(badPage.status).toBe(400);
   });
 });
+
+describe('/admin registration issue polling', () => {
+  const cookieFor = (login: string) => {
+    const token = auth.signToken(
+      {github: {id: 1001, login}, exp: Math.floor(Date.now() / 1000) + 3600},
+      AUTH_CFG.sessionSecret
+    );
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
+
+  test('parseRegistrationIssues filters PRs, ignores untrusted URLs, and sorts by updatedAt',
+    () => {
+      const parsed = admin.parseRegistrationIssues([
+        {
+          number: 12,
+          title: '[Arena] Older Entry',
+          html_url: 'javascript:alert(1)',
+          user: {login: 'olddev', html_url: 'javascript:alert(2)'},
+          created_at: '2026-10-01T00:00:00Z',
+          updated_at: '2026-10-02T00:00:00Z',
+          comments: 1,
+        },
+        {
+          number: 99,
+          title: 'PR with registration label',
+          pull_request: {url: 'https://api.github.com/repos/pkmn/ai/pulls/99'},
+          user: {login: 'prdev'},
+          created_at: '2026-10-15T00:00:00Z',
+          updated_at: '2026-10-15T00:00:00Z',
+          comments: 0,
+        },
+        {
+          number: 25,
+          title: '  [Arena] Newer Entry  ',
+          user: {login: 'newdev'},
+          created_at: '2026-10-10T00:00:00Z',
+          updated_at: '2026-10-12T12:00:00Z',
+          comments: 3,
+        },
+        {
+          number: -1,
+          title: 'Invalid number',
+          created_at: '2026-10-10T00:00:00Z',
+        },
+      ]);
+
+      expect(parsed).toEqual([
+        {
+          number: 25,
+          title: '[Arena] Newer Entry',
+          url: 'https://github.com/pkmn/ai/issues/25',
+          author: 'newdev',
+          authorUrl: 'https://github.com/newdev',
+          createdAt: Math.floor(Date.parse('2026-10-10T00:00:00Z') / 1000),
+          updatedAt: Math.floor(Date.parse('2026-10-12T12:00:00Z') / 1000),
+          comments: 3,
+        },
+        {
+          number: 12,
+          title: '[Arena] Older Entry',
+          url: 'https://github.com/pkmn/ai/issues/12',
+          author: 'olddev',
+          authorUrl: 'https://github.com/olddev',
+          createdAt: Math.floor(Date.parse('2026-10-01T00:00:00Z') / 1000),
+          updatedAt: Math.floor(Date.parse('2026-10-02T00:00:00Z') / 1000),
+          comments: 1,
+        },
+      ]);
+    });
+
+  test('RegistrationIssueMonitor uses ETag/304, preserves cached issues on error, and polls',
+    async () => {
+      let now = 1_760_000_000;
+      const seenHeaders: Array<Record<string, string>> = [];
+      let call = 0;
+
+      const fakeFetch: typeof fetch = (input, init) => {
+        const reqUrl = typeof input === 'string'
+          ? input
+          : input instanceof URL ? input.href : input.url;
+        expect(reqUrl).toBe(
+          'https://api.github.com/repos/pkmn/ai/issues' +
+          '?labels=registration&state=open&sort=updated&direction=desc&per_page=100'
+        );
+        const h = (init?.headers ?? {}) as Record<string, string>;
+        seenHeaders.push({...h});
+        call++;
+        if (call === 1) {
+          return Promise.resolve(new Response(
+            JSON.stringify([
+              {
+                number: 41,
+                title: '[Arena] Staraptor',
+                user: {login: 'stardev'},
+                created_at: '2026-10-19T00:00:00Z',
+                updated_at: '2026-10-19T06:00:00Z',
+                comments: 2,
+              },
+            ]),
+            {status: 200, headers: {'Content-Type': 'application/json', ETag: 'W/"reg-v1"'}}
+          ));
+        }
+        if (call === 2) {
+          return Promise.resolve(new Response(null, {status: 304}));
+        }
+        if (call === 3) {
+          return Promise.resolve(new Response(
+            JSON.stringify({message: 'API rate limit exceeded'}),
+            {status: 403, headers: {'x-ratelimit-remaining': '0'}}
+          ));
+        }
+        return Promise.resolve(new Response(null, {status: 304}));
+      };
+
+      const monitor = new admin.RegistrationIssueMonitor({
+        token: 'ghp_test_token',
+        fetchImpl: fakeFetch,
+        now: () => now,
+      });
+
+      const first = await monitor.poll();
+      expect(first.issues).toHaveLength(1);
+      expect(first.issues[0].number).toBe(41);
+      expect(first.checkedAt).toBe(now);
+      expect(first.error).toBeUndefined();
+      expect(seenHeaders[0].Authorization).toBe('Bearer ghp_test_token');
+      expect(seenHeaders[0]['If-None-Match']).toBeUndefined();
+
+      now += 300;
+      const second = await monitor.poll();
+      expect(seenHeaders[1]['If-None-Match']).toBe('W/"reg-v1"');
+      expect(second.issues).toHaveLength(1);
+      expect(second.checkedAt).toBe(now);
+      expect(second.error).toBeUndefined();
+
+      // Rate limit error preserves last known issues and surfaces error.
+      now += 300;
+      const third = await monitor.poll();
+      expect(third.issues).toHaveLength(1);
+      expect(third.error).toBe('GitHub API rate limit exceeded');
+
+      // Subsequent 304 clears the transient error.
+      now += 300;
+      const fourth = await monitor.poll();
+      expect(fourth.issues).toHaveLength(1);
+      expect(fourth.error).toBeUndefined();
+    });
+
+  test('RegistrationIssueMonitor polls periodically on start() and halts on stop()', async () => {
+    let calls = 0;
+    let resolveSecond!: () => void;
+    const secondPollDone = new Promise<void>(resolve => {
+      resolveSecond = resolve;
+    });
+
+    const fakeFetch: typeof fetch = () => {
+      calls++;
+      return Promise.resolve(new Response('[]', {
+        status: 200,
+        headers: {'Content-Type': 'application/json'},
+      }));
+    };
+
+    const monitor = new admin.RegistrationIssueMonitor({
+      pollIntervalMillis: 25,
+      fetchImpl: fakeFetch,
+      now: () => 1_760_000_000,
+    });
+    const unsubscribe = monitor.onUpdate(() => {
+      if (calls >= 2) resolveSecond();
+    });
+
+    monitor.start();
+    try {
+      await secondPollDone;
+      expect(calls).toBeGreaterThanOrEqual(2);
+    } finally {
+      unsubscribe();
+      monitor.stop();
+    }
+    const callsAfterStop = calls;
+    await new Promise(resolve => setTimeout(resolve, 60));
+    expect(calls).toBe(callsAfterStop);
+  });
+
+  test('renders polled registration issues with TablePager and streams SSE updates',
+    async () => {
+      let now = 1_760_000_000;
+      let phase: 'initial' | 'updated' | 'many' | 'error' = 'initial';
+
+      const fakeFetch: typeof fetch = () => {
+        if (phase === 'error') {
+          return Promise.resolve(new Response('boom', {status: 502}));
+        }
+        const payload = phase === 'initial'
+          ? [
+            {
+              number: 47,
+              title: '[Arena] Noctowl',
+              user: {login: 'noctowldev'},
+              created_at: '2026-10-19T12:00:00Z',
+              updated_at: '2026-10-19T12:00:00Z',
+              comments: 0,
+            },
+            {
+              number: 19,
+              title: '[Arena] Foul Play',
+              user: {login: 'pmariglia'},
+              created_at: '2026-09-01T00:00:00Z',
+              updated_at: '2026-10-18T10:00:00Z',
+              comments: 4,
+            },
+          ]
+          : phase === 'updated'
+            ? [
+              {
+                number: 48,
+                title: '[Arena] Breloom',
+                user: {login: 'breloomdev'},
+                created_at: '2026-10-20T00:00:00Z',
+                updated_at: '2026-10-20T00:00:00Z',
+                comments: 1,
+              },
+            ]
+            : Array.from({length: 27}, (_, i) => ({
+              number: 100 + i,
+              title: `[Arena] Project ${i + 1}`,
+              user: {login: `dev${i + 1}`},
+              created_at: '2026-10-19T12:00:00Z',
+              updated_at: '2026-10-19T12:00:00Z',
+              comments: 0,
+            }));
+        return Promise.resolve(new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: {'Content-Type': 'application/json'},
+        }));
+      };
+
+      const db = new Database(':memory:');
+      db.syncLadders(undefined, now);
+      db.syncProjectsFromYaml(PROJECTS_YAML, undefined, now);
+      const authHandler = new auth.Auth({config: AUTH_CFG, db});
+      const monitor = new admin.RegistrationIssueMonitor({
+        fetchImpl: fakeFetch,
+        now: () => now,
+      });
+      await monitor.poll();
+
+      const app = polka();
+      const adminHandle = admin.register(app, {
+        db,
+        auth: authHandler,
+        registrationMonitor: monitor,
+        now: () => now,
+      });
+      const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      const baseUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
+      const adminCookie = cookieFor('scheibo');
+
+      try {
+        // 1. HTML and JSON include polled registration issues, plain count, and hidden TablePager.
+        const html = await (await fetch(`${baseUrl}/admin/`, {
+          headers: {Cookie: adminCookie},
+        })).text();
+        expect(html).toContain('href="#registrations" class="subtle">Registrations (2)</a>');
+        expect(html).not.toContain('data-action="refresh-registrations"');
+        expect(html).not.toContain('Open registration issues on GitHub');
+        expect(html).toContain('id="registrations-pager"');
+        expect(html).toContain('class="pager hide"');
+        expect(html).toContain('#47');
+        expect(html).toContain('[Arena] Noctowl');
+        expect(html).toContain('https://github.com/pkmn/ai/issues/47');
+        expect(html).toContain('noctowldev');
+        expect(html).toContain('#19');
+        expect(html).toContain('href="/projects/foul-play/"');
+
+        const snap = await (await fetch(`${baseUrl}/admin.json`, {
+          headers: {Cookie: adminCookie},
+        })).json() as admin.AdminSnapshot;
+        expect(snap.registrations.issues.map(i => i.number)).toEqual([47, 19]);
+        expect(snap.registrations.checkedAt).toBe(now);
+
+        // 2. Connect SSE stream, then trigger a poll update and verify live `registrations` event.
+        const ctrl = new AbortController();
+        const streamRes = await fetch(`${baseUrl}/api/admin/stream`, {
+          headers: {Cookie: adminCookie},
+          signal: ctrl.signal,
+        });
+        expect(streamRes.status).toBe(200);
+        const reader = streamRes.body!.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        const readNextEvent = async (): Promise<{event: string; data: Record<string, unknown>}> => {
+          for (;;) {
+            const idx = buf.indexOf('\n\n');
+            if (idx !== -1) {
+              const chunk = buf.slice(0, idx);
+              buf = buf.slice(idx + 2);
+              const lines = chunk.split('\n');
+              const eventLine = lines.find(l => l.startsWith('event: '));
+              const dataLine = lines.find(l => l.startsWith('data: '));
+              if (eventLine && dataLine) {
+                return {
+                  event: eventLine.slice(7),
+                  data: JSON.parse(dataLine.slice(6)) as Record<string, unknown>,
+                };
+              }
+            }
+            const {value, done} = await reader.read();
+            if (done) throw new Error('SSE stream ended unexpectedly');
+            buf += decoder.decode(value, {stream: true});
+          }
+        };
+
+        const initEv = await readNextEvent();
+        expect(initEv.event).toBe('system');
+
+        phase = 'updated';
+        now += 300;
+        await monitor.poll();
+
+        const regEv = await readNextEvent();
+        expect(regEv.event).toBe('registrations');
+        expect(String(regEv.data.innerHtml)).toContain('[Arena] Breloom');
+        ctrl.abort();
+
+        // 3. Transient error preserves last known issues and shows warning banner.
+        phase = 'error';
+        now += 300;
+        await monitor.poll();
+        const errHtml = await (await fetch(`${baseUrl}/admin/`, {
+          headers: {Cookie: adminCookie},
+        })).text();
+        expect(errHtml).toContain('Last poll failed: GitHub API returned HTTP 502');
+        expect(errHtml).toContain('[Arena] Breloom');
+
+        // 4. >25 issues reveal TablePager and hide rows past TABLE_PAGE_SIZE.
+        phase = 'many';
+        now += 300;
+        await monitor.poll();
+        const pagedHtml = await (await fetch(`${baseUrl}/admin/`, {
+          headers: {Cookie: adminCookie},
+        })).text();
+        expect(pagedHtml).toContain('Registrations (27)');
+        expect(pagedHtml).toContain('class="pager" id="registrations-pager"');
+        expect(pagedHtml).toContain('Page 1 of 2 (27 issues)');
+      } finally {
+        monitor.stop();
+        adminHandle.close();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+        db.close();
+      }
+    });
+});

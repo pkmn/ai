@@ -16,6 +16,33 @@ import * as system from './system';
 import {formatTournamentName} from './tournaments';
 import * as wiki from './wiki';
 
+export interface RegistrationIssue {
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  authorUrl: string;
+  createdAt: number;
+  updatedAt: number;
+  comments: number;
+}
+
+export interface RegistrationIssuesSnapshot {
+  issues: RegistrationIssue[];
+  checkedAt?: number;
+  error?: string;
+}
+
+export interface RegistrationMonitorOptions {
+  repo?: string;
+  label?: string;
+  token?: string;
+  pollIntervalMillis?: number;
+  fetchTimeoutMillis?: number;
+  fetchImpl?: typeof fetch;
+  now?: () => number;
+}
+
 export interface Options {
   db: db.Database;
   auth: Auth;
@@ -24,6 +51,8 @@ export interface Options {
   publicDir?: string;
   vpsMonitor?: system.VpsHostMonitor;
   getVpsSystem?: (now: number) => system.VpsSystemInfo;
+  registrationMonitor?: RegistrationIssueMonitor;
+  getRegistrationIssues?: () => RegistrationIssuesSnapshot;
   now?: () => number;
 }
 
@@ -96,6 +125,7 @@ export interface AdminSnapshot {
     discordMemberCount: number;
   };
   ladders: AdminLadderItem[];
+  registrations: RegistrationIssuesSnapshot;
   agents: AdminAgentItem[];
   totalAgents: number;
   wipeableVersionIds: number[];
@@ -107,6 +137,12 @@ const MAX_ADMIN_BODY_BYTES = 16 * 1024;
 const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024;
 const SSE_KEEPALIVE_MILLIS = 25_000;
 const HEARTBEAT_PUSH_THROTTLE_MILLIS = 3000;
+const REGISTRATION_REPO = 'pkmn/ai';
+const REGISTRATION_LABEL = 'registration';
+// Conditional `If-None-Match` (`304 Not Modified`) does not consume GitHub's 60 req/hr
+// unauthenticated REST quota, so polling every 5 minutes keeps onboarding issues fresh for free.
+const REGISTRATION_POLL_MILLIS = 5 * 60_000;
+const REGISTRATION_FETCH_TIMEOUT_MILLIS = 10_000;
 const BACKUP_STALE_SECONDS = 26 * 3600;
 const ARCHIVE_STALE_SECONDS = 36 * 3600;
 const HEARTBEAT_STALE_SECONDS = 15 * 60;
@@ -562,23 +598,57 @@ const ADMIN_SCRIPT = `
     };
 
     const sysCards = document.getElementById('system-cards');
+    const regSection = document.getElementById('registrations');
     let lastHbAt = sysCards && sysCards.dataset.heartbeatAt
       ? Number(sysCards.dataset.heartbeatAt)
+      : NaN;
+    let lastRegAt = regSection && regSection.dataset.checkedAt
+      ? Number(regSection.dataset.checkedAt)
       : NaN;
     let clockOffsetSec = sysCards && sysCards.dataset.generatedAt
       ? Number(sysCards.dataset.generatedAt) - Math.floor(Date.now() / 1000)
       : 0;
 
-    const tickHbAge = () => {
-      const el = document.getElementById('admin-hb-age');
-      if (!el || !Number.isFinite(lastHbAt)) return;
+    const tickAges = () => {
       const nowSec = Math.floor(Date.now() / 1000) + clockOffsetSec;
-      const ageSec = Math.max(0, nowSec - lastHbAt);
-      el.textContent = formatAge(ageSec) + ' ago';
-      el.className = ageSec > 900 ? 'no' : 'yes';
+      const hbEl = document.getElementById('admin-hb-age');
+      if (hbEl && Number.isFinite(lastHbAt)) {
+        const ageSec = Math.max(0, nowSec - lastHbAt);
+        hbEl.textContent = formatAge(ageSec) + ' ago';
+        hbEl.className = ageSec > 900 ? 'no' : 'yes';
+      }
+      const regEl = document.getElementById('admin-reg-age');
+      if (regEl && Number.isFinite(lastRegAt)) {
+        const ageSec = Math.max(0, nowSec - lastRegAt);
+        regEl.textContent = formatAge(ageSec) + ' ago';
+      }
     };
 
-    setInterval(tickHbAge, 1000);
+    setInterval(tickAges, 1000);
+
+    const bindTablePagers = () => {
+      ${util.TABLE_PAGER_SCRIPT}
+    };
+    bindTablePagers();
+
+    const applyRegistrations = (payload) => {
+      if (!regSection) return;
+      if (typeof payload.generatedAt === 'number') {
+        clockOffsetSec = payload.generatedAt - Math.floor(Date.now() / 1000);
+      }
+      if (typeof payload.checkedAt === 'number') {
+        lastRegAt = payload.checkedAt;
+        regSection.dataset.checkedAt = String(lastRegAt);
+      } else if ('checkedAt' in payload) {
+        lastRegAt = NaN;
+        regSection.dataset.checkedAt = '';
+      }
+      if (typeof payload.innerHtml === 'string') {
+        regSection.innerHTML = payload.innerHtml;
+        pkmnTime.localize(regSection);
+        bindTablePagers();
+      }
+    };
 
     if (typeof EventSource !== 'undefined' && sysCards) {
       const es = new EventSource('/api/admin/stream');
@@ -596,6 +666,11 @@ const ADMIN_SCRIPT = `
             sysCards.innerHTML = payload.cardsHtml;
             pkmnTime.localize(sysCards);
           }
+        } catch {}
+      });
+      es.addEventListener('registrations', (ev) => {
+        try {
+          applyRegistrations(JSON.parse(ev.data));
         } catch {}
       });
     }
@@ -1308,6 +1383,197 @@ function computeRunnerHealth(arenaHandle: arena.Handle | undefined, now: number)
   return {status: liveMatch ? 'online' : 'idle', liveMatch};
 }
 
+function parseIsoEpochSeconds(raw: unknown): number | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const millis = Date.parse(raw);
+  return Number.isFinite(millis) ? Math.floor(millis / 1000) : undefined;
+}
+
+export function parseRegistrationIssues(
+  raw: unknown,
+  repo = REGISTRATION_REPO
+): RegistrationIssue[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('Unexpected GitHub API response');
+  }
+  const issues: RegistrationIssue[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const item = entry as Record<string, unknown>;
+    if (item.pull_request !== undefined && item.pull_request !== null) continue;
+    const num = item.number;
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    const createdAt = parseIsoEpochSeconds(item.created_at);
+    const updatedAt = parseIsoEpochSeconds(item.updated_at) ?? createdAt;
+    if (
+      typeof num !== 'number' ||
+      !Number.isSafeInteger(num) ||
+      num <= 0 ||
+      !title ||
+      createdAt === undefined ||
+      updatedAt === undefined
+    ) {
+      continue;
+    }
+    const user = item.user && typeof item.user === 'object'
+      ? (item.user as Record<string, unknown>)
+      : undefined;
+    const author = typeof user?.login === 'string' && user.login.trim()
+      ? user.login.trim()
+      : 'ghost';
+    const comments = typeof item.comments === 'number' &&
+      Number.isFinite(item.comments) &&
+      item.comments >= 0
+      ? Math.floor(item.comments)
+      : 0;
+    issues.push({
+      number: num,
+      title,
+      url: `https://github.com/${repo}/issues/${num}`,
+      author,
+      authorUrl: `https://github.com/${encodeURIComponent(author)}`,
+      createdAt,
+      updatedAt,
+      comments,
+    });
+  }
+  issues.sort((a, b) => b.updatedAt - a.updatedAt || b.number - a.number);
+  return issues;
+}
+
+export class RegistrationIssueMonitor {
+  private readonly repo: string;
+  private readonly url: string;
+  private readonly token: string | undefined;
+  private readonly pollIntervalMillis: number;
+  private readonly fetchTimeoutMillis: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly now: () => number;
+  private readonly listeners: Set<() => void>;
+  private issues: RegistrationIssue[];
+  private checkedAt: number | undefined;
+  private error: string | undefined;
+  private etag: string | undefined;
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private inflight: Promise<RegistrationIssuesSnapshot> | undefined;
+
+  constructor(opts: RegistrationMonitorOptions = {}) {
+    this.repo = opts.repo ?? REGISTRATION_REPO;
+    const label = opts.label ?? REGISTRATION_LABEL;
+    this.url =
+      `https://api.github.com/repos/${this.repo}/issues` +
+      `?labels=${encodeURIComponent(label)}&state=open&sort=updated&direction=desc&per_page=100`;
+    this.token = (opts.token ?? process.env.GITHUB_TOKEN)?.trim() || undefined;
+    this.pollIntervalMillis = opts.pollIntervalMillis ?? REGISTRATION_POLL_MILLIS;
+    this.fetchTimeoutMillis = opts.fetchTimeoutMillis ?? REGISTRATION_FETCH_TIMEOUT_MILLIS;
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
+    this.listeners = new Set();
+    this.issues = [];
+    this.checkedAt = undefined;
+    this.error = undefined;
+    this.etag = undefined;
+    this.timer = undefined;
+    this.inflight = undefined;
+  }
+
+  start(): void {
+    if (this.timer) return;
+    this.poll().catch(() => {});
+    this.timer = setInterval(() => {
+      this.poll().catch(() => {});
+    }, this.pollIntervalMillis);
+    this.timer.unref?.();
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+
+  onUpdate(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  getSnapshot(): RegistrationIssuesSnapshot {
+    return {
+      issues: this.issues.map(i => ({...i})),
+      ...(this.checkedAt !== undefined ? {checkedAt: this.checkedAt} : {}),
+      ...(this.error !== undefined ? {error: this.error} : {}),
+    };
+  }
+
+  poll(): Promise<RegistrationIssuesSnapshot> {
+    if (this.inflight) return this.inflight;
+    const run = this.doPoll().finally(() => {
+      if (this.inflight === run) this.inflight = undefined;
+    });
+    this.inflight = run;
+    return run;
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch (err) {
+        console.error('Registration issue listener failed:', err);
+      }
+    }
+  }
+
+  private async doPoll(): Promise<RegistrationIssuesSnapshot> {
+    const headers: Record<string, string> = {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'pkmn.ai',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    if (this.etag) headers['If-None-Match'] = this.etag;
+
+    try {
+      const res = await this.fetchImpl(this.url, {
+        headers,
+        signal: AbortSignal.timeout(this.fetchTimeoutMillis),
+      });
+      const checkedAt = this.now();
+      if (res.status === 304) {
+        this.checkedAt = checkedAt;
+        this.error = undefined;
+      } else if (!res.ok) {
+        const rateLimited =
+          (res.status === 403 || res.status === 429) &&
+          res.headers.get('x-ratelimit-remaining') === '0';
+        this.checkedAt = checkedAt;
+        this.error = rateLimited
+          ? 'GitHub API rate limit exceeded'
+          : `GitHub API returned HTTP ${res.status}`;
+      } else {
+        const data = await util.parseJsonResponse<unknown>(res, 'GitHub API');
+        const parsed = parseRegistrationIssues(data, this.repo);
+        const etag = res.headers.get('etag')?.trim();
+        if (etag) this.etag = etag;
+        this.issues = parsed;
+        this.checkedAt = checkedAt;
+        this.error = undefined;
+      }
+    } catch (err) {
+      this.checkedAt = this.now();
+      this.error = util.isConnectivityError(err)
+        ? 'GitHub unreachable'
+        : err instanceof Error ? err.message : 'GitHub poll failed';
+    }
+
+    this.notify();
+    return this.getSnapshot();
+  }
+}
+
 export function buildAdminAgentsPage(
   database: db.Database,
   now = Math.floor(Date.now() / 1000),
@@ -1360,7 +1626,8 @@ export function buildAdminSnapshot(
   arenaHandle?: arena.Handle,
   now = Math.floor(Date.now() / 1000),
   systemSnapshot?: AdminSystemSnapshot,
-  wikiEditsPage: {edits: wiki.RecentEdit[]; total: number} = {edits: [], total: 0}
+  wikiEditsPage: {edits: wiki.RecentEdit[]; total: number} = {edits: [], total: 0},
+  registrations: RegistrationIssuesSnapshot = {issues: []}
 ): AdminSnapshot {
   const currentLadders = database.getCurrentLadders();
   const ladderSummaries = database.getLadderAdminSummaries(now);
@@ -1433,6 +1700,7 @@ export function buildAdminSnapshot(
       discordMemberCount: database.countDiscordMembers(),
     },
     ladders,
+    registrations,
     agents,
     totalAgents,
     wipeableVersionIds: database.getWipeableVersionIds(),
@@ -2226,15 +2494,175 @@ function renderProjectRows(
   );
 }
 
+interface AuthorProject {
+  slug: string;
+  name: string;
+}
+
+function buildAuthorProjectsFromAgents(
+  agents: readonly AdminAgentItem[]
+): Map<string, AuthorProject> {
+  const out = new Map<string, AuthorProject>();
+  for (const item of agents) {
+    for (const dev of item.developers) {
+      out.set(dev.githubLogin.toLowerCase(), {slug: item.agent.slug, name: item.agent.name});
+    }
+  }
+  return out;
+}
+
+function buildAuthorProjectsFromDb(database: db.Database): Map<string, AuthorProject> {
+  const out = new Map<string, AuthorProject>();
+  const devsByAgent = database.getDevelopersByAgent();
+  for (const agent of database.getAllAgents()) {
+    for (const dev of devsByAgent.get(agent.id) ?? []) {
+      out.set(dev.githubLogin.toLowerCase(), {slug: agent.slug, name: agent.name});
+    }
+  }
+  return out;
+}
+
+function renderRegistrationsInner(
+  registrations: RegistrationIssuesSnapshot,
+  now: number,
+  authorProjects: ReadonlyMap<string, AuthorProject>
+): util.Html {
+  const {issues, checkedAt, error} = registrations;
+  const count = issues.length;
+  const checkedAttrs = checkedAt !== undefined
+    ? util.localizedTitle([{prefix: 'Checked ', epoch: checkedAt}])
+    : {};
+  return (
+    <>
+      <div className='section-head'>
+        <h3>
+          <a href='#registrations' className='subtle'>Registrations ({count})</a>
+        </h3>
+        {checkedAt !== undefined && (
+          <span className='section-meta muted' {...checkedAttrs}>
+            Checked <span id='admin-reg-age'>{formatAge(now - checkedAt)} ago</span>
+          </span>
+        )}
+      </div>
+      {error && (
+        <p className='warn reg-error'>
+          {count > 0
+            ? `Last poll failed: ${error} (showing last known issues).`
+            : `Unable to poll GitHub registration issues: ${error}.`}
+        </p>
+      )}
+      {count === 0 ? (
+        !error && <p className='muted'>No open registration issues.</p>
+      ) : (
+        <util.PaginatedTable
+          head={
+            <tr>
+              <th>Opened</th>
+              <th>Issue</th>
+              <th>Author</th>
+              <th className='num'>Comments</th>
+              <th className='num'>Updated</th>
+            </tr>
+          }
+          pager={{
+            id: 'registrations-pager',
+            label: 'Registration issues pagination',
+            total: issues.length,
+            singular: 'issue',
+            plural: 'issues',
+          }}
+        >
+          {issues.map((issue, idx) => {
+            const existing = authorProjects.get(issue.author.toLowerCase());
+            return (
+              <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                <td className='muted'>
+                  <util.Time
+                    epoch={issue.createdAt}
+                    format='date'
+                    title={[{prefix: 'Opened ', epoch: issue.createdAt}]}
+                  />
+                </td>
+                <td className='wrap'>
+                  <a
+                    href={issue.url}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='subtle'
+                  >
+                    <code>#{issue.number}</code> <strong>{issue.title}</strong>
+                  </a>
+                </td>
+                <td>
+                  <a
+                    href={issue.authorUrl}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='subtle'
+                  >
+                    {issue.author}
+                  </a>
+                  {existing && (
+                    <>
+                      {' '}
+                      <span className='muted'>
+                        (
+                        <a
+                          href={`/projects/${encodeURIComponent(existing.slug)}/`}
+                          className='subtle'
+                        >
+                          {existing.name}
+                        </a>
+                        )
+                      </span>
+                    </>
+                  )}
+                </td>
+                <td className='num'>
+                  {issue.comments > 0 ? issue.comments : <span className='muted'>0</span>}
+                </td>
+                <td className='num muted'>
+                  <util.Time
+                    epoch={issue.updatedAt}
+                    format='date'
+                    title={[{prefix: 'Updated ', epoch: issue.updatedAt}]}
+                  />
+                </td>
+              </tr>
+            );
+          })}
+        </util.PaginatedTable>
+      )}
+    </>
+  );
+}
+
+function renderRegistrationsSection(
+  registrations: RegistrationIssuesSnapshot,
+  now: number,
+  authorProjects: ReadonlyMap<string, AuthorProject>
+): util.Child {
+  return (
+    <section
+      id='registrations'
+      data-checked-at={registrations.checkedAt !== undefined ? String(registrations.checkedAt) : ''}
+    >
+      {renderRegistrationsInner(registrations, now, authorProjects)}
+    </section>
+  );
+}
+
 export function renderAdminPage(opts: {
   snapshot: AdminSnapshot;
   allLadders: db.LadderRow[];
   liveTournament?: {id: string; name: string};
+  authorProjects?: ReadonlyMap<string, AuthorProject>;
 }): string {
   const {snapshot, allLadders, liveTournament} = opts;
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
   const wipeableVersionIds = new Set(snapshot.wipeableVersionIds);
   const {pendingSubmissions, stagedCount, unsentDmCount} = snapshot.health;
+  const authorProjects = opts.authorProjects ?? buildAuthorProjectsFromAgents(snapshot.agents);
 
   const content = (
     <>
@@ -2246,6 +2674,7 @@ export function renderAdminPage(opts: {
         unsentDms: unsentDmCount,
       })}
       {renderLaddersSection(snapshot.ladders)}
+      {renderRegistrationsSection(snapshot.registrations, snapshot.generatedAt, authorProjects)}
 
       <section id='projects'>
         <h3>
@@ -2388,6 +2817,45 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
   };
 
+  const getRegistrationIssues = (): RegistrationIssuesSnapshot => {
+    if (options.getRegistrationIssues) return options.getRegistrationIssues();
+    if (options.registrationMonitor) return options.registrationMonitor.getSnapshot();
+    return {issues: []};
+  };
+
+  const buildRegistrationsEventPayload = (
+    now: number,
+    registrations = getRegistrationIssues()
+  ) => ({
+    generatedAt: now,
+    ...(registrations.checkedAt !== undefined ? {checkedAt: registrations.checkedAt} : {}),
+    registrations,
+    innerHtml: renderRegistrationsInner(
+      registrations,
+      now,
+      buildAuthorProjectsFromDb(db)
+    ).toString(),
+  });
+
+  const pushRegistrationsEventNow = () => {
+    if (adminStreamClients.size === 0) return;
+    let frame: string;
+    try {
+      const payload = buildRegistrationsEventPayload(getNow());
+      frame = `event: registrations\ndata: ${JSON.stringify(payload)}\n\n`;
+    } catch (err) {
+      console.error('Failed building /api/admin/stream registrations payload:', err);
+      return;
+    }
+    for (const client of adminStreamClients) {
+      if (!evictIfStalled(client)) {
+        client.write(frame);
+      }
+    }
+  };
+
+  const unsubscribeRegistrations = options.registrationMonitor?.onUpdate(pushRegistrationsEventNow);
+
   const notifyHeartbeat = () => {
     if (adminStreamClients.size === 0) return;
     const elapsed = Date.now() - lastBroadcastMs;
@@ -2503,7 +2971,16 @@ export function register(app: polka.Polka, options: Options): Handle {
     const wikiEditsPage = options.wiki
       ? await options.wiki.getRecentEditsPage(util.TABLE_PAGE_SIZE, 0)
       : {edits: [], total: 0};
-    const snapshot = buildAdminSnapshot(db, login, arenaHandle, now, sys, wikiEditsPage);
+    const registrations = getRegistrationIssues();
+    const snapshot = buildAdminSnapshot(
+      db,
+      login,
+      arenaHandle,
+      now,
+      sys,
+      wikiEditsPage,
+      registrations
+    );
     if (wantsJson) {
       sendJson(res, 200, {
         ...snapshot,
@@ -2516,6 +2993,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       snapshot,
       allLadders: db.getLadders(),
       liveTournament: db.getRunningTournament(),
+      authorProjects: buildAuthorProjectsFromDb(db),
     });
     sendHtml(res, 200, html);
   };
@@ -2815,6 +3293,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     notifyHeartbeat,
     getAdminStreamCount: () => adminStreamClients.size,
     close: () => {
+      unsubscribeRegistrations?.();
       if (ownsVpsMonitor) vpsMonitor.stop();
       clearInterval(keepaliveTimer);
       if (pendingBroadcastTimer) {

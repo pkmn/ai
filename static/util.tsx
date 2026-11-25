@@ -590,6 +590,8 @@ export const TABLE_PAGER_SCRIPT = `
     document
       .querySelectorAll('.pager[data-table-pager]:not([data-server-pager])')
       .forEach(pager => {
+      if (pager.dataset.pagerBound) return;
+      pager.dataset.pagerBound = '1';
       const pageSize = Number(pager.dataset.pageSize) || ${TABLE_PAGE_SIZE};
       const wrap = pager.previousElementSibling;
       const tbody = wrap ? wrap.querySelector('tbody') : undefined;

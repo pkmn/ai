@@ -2347,12 +2347,38 @@ async function startFixture(): Promise<Fixture> {
     podmanState: 'running',
     podmanCheckedAt: NOW_SECONDS - 300,
   };
+  const mockRegistrations: admin.RegistrationIssuesSnapshot = {
+    checkedAt: NOW_SECONDS - 125,
+    issues: [
+      {
+        number: 47,
+        title: '[Arena] Noctowl',
+        url: 'https://github.com/pkmn/ai/issues/47',
+        author: 'noctowldev',
+        authorUrl: 'https://github.com/noctowldev',
+        createdAt: NOW_SECONDS - 86400,
+        updatedAt: NOW_SECONDS - 3600,
+        comments: 0,
+      },
+      {
+        number: 19,
+        title: '[Arena] Foul Play',
+        url: 'https://github.com/pkmn/ai/issues/19',
+        author: 'pmariglia',
+        authorUrl: 'https://github.com/pmariglia',
+        createdAt: NOW_SECONDS - 60 * 86400,
+        updatedAt: NOW_SECONDS - 3 * 3600,
+        comments: 4,
+      },
+    ],
+  };
   const adminHandle = admin.register(app, {
     db,
     auth: wikiInstance.auth,
     arena: arenaHandle,
     wiki: wikiInstance,
     getVpsSystem: () => mockVpsSystem,
+    getRegistrationIssues: () => mockRegistrations,
     now: () => NOW_SECONDS,
   });
   account.register(app, {

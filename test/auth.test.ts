@@ -119,11 +119,24 @@ describe('auth config helpers', () => {
 
 describe('server/auth.ts routes', () => {
   let db: db.Database;
+  let currentApp: polka.Polka;
   let server: http.Server;
   let baseUrl: string;
   const realFetch = globalThis.fetch;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    server = http.createServer((req, res) => currentApp.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address() as {port: number};
+    baseUrl = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+
+  beforeEach(() => {
     db = new Database(':memory:');
     db.syncProjectsFromYaml(PROJECTS_YAML);
     db.syncDiscordMembers([
@@ -131,19 +144,12 @@ describe('server/auth.ts routes', () => {
       {id: '283674461268344832', username: 'pmariglia'},
     ]);
 
-    const app = polka();
-    new auth.Auth({config: AUTH_CFG, db, devAuth: true}).register(app);
-
-    server = http.createServer((req, res) => app.handler(req as polka.Request, res));
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const addr = server.address() as {port: number};
-    baseUrl = `http://127.0.0.1:${addr.port}`;
+    currentApp = polka();
+    new auth.Auth({config: AUTH_CFG, db, devAuth: true}).register(currentApp);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     globalThis.fetch = realFetch;
-    server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
     db.close();
   });
 

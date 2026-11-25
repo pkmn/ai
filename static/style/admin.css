@@ -135,6 +135,29 @@ tr.project-row.expanded .row-toggle {
   overflow-x: auto;
 }
 
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 1.75rem 0 0.6rem;
+}
+
+.section-head h3 {
+  margin: 0;
+}
+
+.section-meta {
+  font-size: 0.86em;
+  font-variant-numeric: tabular-nums;
+}
+
+.reg-error {
+  margin: 0 0 0.6rem;
+  font-size: 0.9em;
+}
+
 #system h3 {
   margin-top: 0.4rem;
 }

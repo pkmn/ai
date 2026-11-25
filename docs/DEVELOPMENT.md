@@ -79,6 +79,7 @@ Scripts load root `.env` via `--env-file-if-exists=.env`. All secrets are option
 | `SESSION_SECRET` | random hex (`DEV_AUTH=1`) | HMAC-SHA256 key for `pkmn_session` cookies and HKDF key for encrypted pull tokens. |
 | `ARENA_SECRET` | unset | Bearer token for `/api/arena/*` control-plane RPCs. |
 | `GITHUB_CLIENT_ID` / `_SECRET` | unset | GitHub OAuth2 (`/auth/github`). |
+| `GITHUB_TOKEN` | unset | Optional GitHub token for `/admin/` registration issue polling (unauthenticated `If-None-Match` works by default). |
 | `DISCORD_CLIENT_ID` / `_SECRET` | unset | Discord OAuth2 (`/auth/discord`). |
 | `DISCORD_BOT_TOKEN` | unset | Role sync, `/define` interactions, chat log archival, and DMs. |
 | `VGC_BOT_TOKEN` | unset | Partner API bearer token for `vgc.bot` / `pkmn.bot` `#1` Discord roles. |
