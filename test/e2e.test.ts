@@ -1580,6 +1580,63 @@ describe('mock scenarios & E2E lifecycle', () => {
           await nyCtx.close();
         }
 
+        // Part C: `/arena/viewer/` splits omniscient `|split|pN` logs without duplicating switches
+        const viewerPage = await liveCtx.newPage();
+        try {
+          await viewerPage.goto(`${viewBaseUrl}/arena/`, {waitUntil: 'domcontentloaded'});
+          const rendered = await viewerPage.evaluate(() => new Promise<{
+            p1Log: string;
+            p2Log: string;
+          }>((resolve, reject) => {
+            const iframe = document.createElement('iframe');
+            iframe.src = '/arena/viewer/';
+            iframe.setAttribute('sandbox', 'allow-scripts');
+            document.body.appendChild(iframe);
+            const timer = setTimeout(() => reject(new Error('Viewer timed out')), 8000);
+            const onMsg = (ev: MessageEvent) => {
+              if (ev.source !== iframe.contentWindow) return;
+              const data = ev.data as {type?: string};
+              if (data?.type === 'ready') {
+                iframe.contentWindow!.postMessage({
+                  type: 'load',
+                  lines: [
+                    '|start',
+                    '|split|p1',
+                    '|switch|p1a: Tauros|Tauros|353/353',
+                    '|switch|p1a: Tauros|Tauros|100/100',
+                    '|split|p2',
+                    '|switch|p2a: Chansey|Chansey|703/703',
+                    '|switch|p2a: Chansey|Chansey|100/100',
+                    '|turn|1',
+                  ],
+                  live: false,
+                  side: 'p1',
+                }, '*');
+              } else if (data?.type === 'playback') {
+                window.removeEventListener('message', onMsg);
+                clearTimeout(timer);
+                resolve({p1Log: 'loaded', p2Log: 'loaded'});
+              }
+            };
+            window.addEventListener('message', onMsg);
+          }));
+          expect(rendered.p1Log).toBe('loaded');
+
+          const frame = viewerPage.frameLocator('iframe[src="/arena/viewer/"]');
+          expect(await frame.locator('#log .battle-history').count()).toBe(3);
+          const p1Text = await frame.locator('#log').innerText();
+          expect(p1Text).toContain('353/353');
+          expect(p1Text).not.toContain('703/703');
+
+          await frame.locator('button[data-action="switch"]').click();
+          expect(await frame.locator('#log .battle-history').count()).toBe(3);
+          const p2Text = await frame.locator('#log').innerText();
+          expect(p2Text).toContain('703/703');
+          expect(p2Text).not.toContain('353/353');
+        } finally {
+          await viewerPage.close();
+        }
+
         await liveCtx.close();
       } finally {
         await browser.close();

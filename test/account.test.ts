@@ -2102,6 +2102,67 @@ describe('account routes', () => {
       })).status).toBe(403);
     });
 
+    test('diagnostic log endpoint splits omniscient |split| blocks by perspective', async () => {
+      const zero = db.getAgentBySlug('0-error')!;
+      const ver = db.createSubmission({
+        agentId: zero.id,
+        version: '2.2.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/0-error-2.2.0.tar.zst',
+        sha256: SHA_B,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      const splitLog = [
+        '|start',
+        '|split|p1',
+        '|switch|p1a: Tauros|Tauros|353/353',
+        '|switch|p1a: Tauros|Tauros|100/100',
+        '|split|p2',
+        '|switch|p2a: Chansey|Chansey|703/703',
+        '|switch|p2a: Chansey|Chansey|100/100',
+        '|split|p1',
+        '|-heal|p1a: Tauros|353/353',
+        '',
+        '|turn|1',
+        '|win|0 ERROR (P1)',
+      ].join('\n');
+      db.applySubmissionStatus({
+        versionId: ver.id,
+        smokeStatus: 'staged',
+        smokeDurationMillis: 1500,
+        diagnostics: [{
+          format: 'gen1ou',
+          turns: 1,
+          endReason: 'win',
+          durationMillis: 1500,
+          battleLog: splitLog,
+          supportsInfo: false,
+        }],
+        now: currentNow + 1,
+      });
+      const diagId = db.getSmokeDiagnosticsForVersion(ver.id)[0].id;
+      const logJson = await (await realFetch(`${baseUrl}/api/account/diagnostics/${diagId}/log`, {
+        headers: {Cookie: cookieFor('pre')},
+      })).json() as {lines: string[]; p1Lines: string[]; p2Lines: string[]};
+
+      expect(logJson.p1Lines).toEqual([
+        '|start',
+        '|switch|p1a: Tauros|Tauros|353/353',
+        '|switch|p2a: Chansey|Chansey|100/100',
+        '|-heal|p1a: Tauros|353/353',
+        '|turn|1',
+        '|win|0 ERROR (P1)',
+      ]);
+      expect(logJson.p2Lines).toEqual([
+        '|start',
+        '|switch|p1a: Tauros|Tauros|100/100',
+        '|switch|p2a: Chansey|Chansey|703/703',
+        '|turn|1',
+        '|win|0 ERROR (P1)',
+      ]);
+    });
+
     test('diagnostic SSE delivers live frames only to the owning project', async () => {
       const liveApp = polka();
       const liveAuth = new auth.Auth({config: AUTH_CFG, db});
@@ -2174,7 +2235,12 @@ describe('account routes', () => {
             incrementSeconds: 5,
             p1: {name: '0 ERROR (P1)', version: '3.2.0', bankSeconds: 120, thinking: true},
             p2: {name: '0 ERROR (P2)', version: '3.2.0', bankSeconds: 120, thinking: false},
-            lines: ['|turn|2'],
+            lines: [
+              '|split|p1',
+              '|switch|p1a: Tauros|Tauros|353/353',
+              '|switch|p1a: Tauros|Tauros|100/100',
+              '|turn|2',
+            ],
           }),
         });
         expect(pushRes.status).toBe(200);
@@ -2183,6 +2249,13 @@ describe('account routes', () => {
         const ownerText = dec.decode(nextChunk.value);
         expect(ownerText).toContain('event: diagnostic');
         expect(ownerText).toContain('3.2.0');
+        const dataLine = ownerText.split('\n').find(l => l.startsWith('data: '))!;
+        const snap = JSON.parse(dataLine.slice('data: '.length)) as {
+          p1Lines: string[];
+          p2Lines: string[];
+        };
+        expect(snap.p1Lines).toEqual(['|switch|p1a: Tauros|Tauros|353/353', '|turn|2']);
+        expect(snap.p2Lines).toEqual(['|switch|p1a: Tauros|Tauros|100/100', '|turn|2']);
         expect(rivalReceived).toBe('');
       } finally {
         ownerAc.abort();

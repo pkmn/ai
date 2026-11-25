@@ -52,7 +52,15 @@ export function truncateDiagnosticLog(log: string, maxBytes = MAX_DIAGNOSTIC_LOG
   if (buf.length <= maxBytes) return log;
   const sliced = sliceUtf8Prefix(buf, maxBytes);
   const lastNl = sliced.lastIndexOf(0x0a);
-  return (lastNl > 0 ? sliced.subarray(0, lastNl) : sliced).toString('utf8');
+  const text = (lastNl > 0 ? sliced.subarray(0, lastNl) : sliced).toString('utf8');
+  const lines = text.split('\n');
+  // Never leave a torn 3-line `|split|pN` directive at the tail of a truncated omniscient log.
+  if (lines.length >= 1 && lines[lines.length - 1].startsWith('|split|')) {
+    lines.pop();
+  } else if (lines.length >= 2 && lines[lines.length - 2].startsWith('|split|')) {
+    lines.splice(lines.length - 2, 2);
+  }
+  return lines.join('\n');
 }
 
 function stripUnsafeControlChars(chunk: string): string {

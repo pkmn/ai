@@ -809,8 +809,7 @@ export class Coordinator {
               const p2Label = `${sub.agentName} (P2)`;
               const lines = arbiter
                 .rewriteBlindPlayerNames(info.omniscientLog, p1Label, p2Label)
-                .split('\n')
-                .filter(l => l.length > 0);
+                .split('\n');
               return this.client.sendDiagnosticLive({
                 versionId: sub.versionId,
                 agentId: sub.agentId,

@@ -433,6 +433,39 @@ const VIEWER_SCRIPT = `
 
     const isLines = val => Array.isArray(val) && val.every(x => typeof x === 'string');
 
+    const SPLIT_LINE_RE = /^\\|split\\|p([1234])\\n(.*)\\n(.*)|.+/gm;
+
+    const splitPerspectives = rawLines => {
+      if (!rawLines || rawLines.length === 0) return {p1: [], p2: []};
+      const p1 = [];
+      const p2 = [];
+      for (const m of rawLines.join('\\n').matchAll(SPLIT_LINE_RE)) {
+        const player = m[1] ? parseInt(m[1], 10) : 0;
+        if (player) {
+          const p1Line = player === 1 ? m[2] : m[3];
+          const p2Line = player === 2 ? m[2] : m[3];
+          if (p1Line) p1.push(p1Line);
+          if (p2Line) p2.push(p2Line);
+        } else {
+          p1.push(m[0]);
+          p2.push(m[0]);
+        }
+      }
+      return {p1, p2};
+    };
+
+    const resolveSides = msg => {
+      const hasP1 = isLines(msg.p1Lines);
+      const hasP2 = isLines(msg.p2Lines);
+      const fallback = (!hasP1 || !hasP2) && isLines(msg.lines)
+        ? splitPerspectives(msg.lines)
+        : {p1: [], p2: []};
+      return {
+        p1: (hasP1 ? msg.p1Lines : fallback.p1).filter(readable),
+        p2: (hasP2 ? msg.p2Lines : fallback.p2).filter(readable),
+      };
+    };
+
     const loadBattle = msg => {
       if (battle) {
         battle.destroy();
@@ -441,11 +474,7 @@ const VIEWER_SCRIPT = `
       }
       live = Boolean(msg.live);
       currentSide = msg.side === 'p2' ? 'p2' : 'p1';
-      const fallback = isLines(msg.lines) ? msg.lines.filter(readable) : [];
-      sideLines = {
-        p1: isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback.slice(),
-        p2: isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback.slice(),
-      };
+      sideLines = resolveSides(msg);
       if (sideLines.p1.length === 0 && sideLines.p2.length === 0) {
         battle = null;
         offlineTurn = 0;
@@ -514,9 +543,9 @@ const VIEWER_SCRIPT = `
       if (msg.type === 'load' && (isLines(msg.lines) || isLines(msg.p1Lines))) {
         loadBattle(msg);
       } else if (msg.type === 'append' && (battle || offline) && live) {
-        const fallback = isLines(msg.lines) ? msg.lines.filter(readable) : [];
-        const addP1 = isLines(msg.p1Lines) ? msg.p1Lines.filter(readable) : fallback;
-        const addP2 = isLines(msg.p2Lines) ? msg.p2Lines.filter(readable) : fallback;
+        const added = resolveSides(msg);
+        const addP1 = added.p1;
+        const addP2 = added.p2;
         sideLines.p1.push(...addP1);
         sideLines.p2.push(...addP2);
         if (Array.isArray(msg.p1Pokemon)) sidePokemon.p1 = msg.p1Pokemon;

@@ -969,6 +969,18 @@ describe('TimeSlicedArenaGame', () => {
     expect(engine.truncateDiagnosticLog(log, 20)).toBe('line-one\nline-two');
   });
 
+  test('truncateDiagnosticLog drops incomplete trailing |split| blocks', () => {
+    const log = [
+      '|start',
+      '|split|p1',
+      '|switch|p1a: Tauros|Tauros|353/353',
+      '|switch|p1a: Tauros|Tauros|100/100',
+    ].join('\n');
+    // Truncating after `|split|p1` or after its first payload line backs up before `|split|p1`.
+    expect(engine.truncateDiagnosticLog(log, 18)).toBe('|start');
+    expect(engine.truncateDiagnosticLog(log, 55)).toBe('|start');
+  });
+
   test('createInfoLineInterceptor rejects malformed /info lines', () => {
     const coalescer = new engine.InfoCoalescer({maxIngestsPerTurn: 2});
     const intercept = engine.createInfoLineInterceptor('p1', coalescer);

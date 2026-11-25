@@ -665,9 +665,17 @@ describe('/admin dashboard & API', () => {
 
       const logJson = await (await fetch(`${baseUrl}/api/admin/diagnostics/${stagedDiag.id}/log`, {
         headers: {Cookie: adminCookie},
-      })).json() as {id: number; lines: string[]; p1CpuCores?: number};
+      })).json() as {
+        id: number;
+        lines: string[];
+        p1Lines: string[];
+        p2Lines: string[];
+        p1CpuCores?: number;
+      };
       expect(logJson.id).toBe(stagedDiag.id);
       expect(logJson.lines).toContain('|ai|p1|{"win":0.58}');
+      expect(logJson.p1Lines).toContain('|ai|p1|{"win":0.58}');
+      expect(logJson.p2Lines).toContain('|ai|p1|{"win":0.58}');
       expect(logJson.p1CpuCores).toBe(2.9);
 
       const logDownload = await fetch(

@@ -2116,9 +2116,7 @@ export class Coordinator {
             stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
             callbacks: {
               onSpectatorChunk: (chunk, state) => {
-                for (const line of chunk.split('\n')) {
-                  if (line.length > 0) liveLines.push(line);
-                }
+                if (chunk) liveLines.push(...chunk.split('\n'));
                 pushLive(state, true);
               },
               onClockChange: state => pushLive(state, false),

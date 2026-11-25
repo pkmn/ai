@@ -12,6 +12,7 @@ import * as util from '../static/util';
 
 import type * as arena from './arena';
 import {Auth, REGISTER_ISSUE_URL, isAdmin, isCrossSiteRequest} from './auth';
+import {extractPerspectiveLogs} from './protocol';
 import {AI_PANEL_STYLE, buildAiPanelClientJs, renderAiPanelHtml} from './render';
 import * as serverTeams from './teams';
 
@@ -204,6 +205,8 @@ export function buildDiagnosticReplayClientJs(opts: {
             postToFrame(f, {
               type: 'load',
               lines: slot._pendingLines,
+              p1Lines: slot._pendingP1Lines,
+              p2Lines: slot._pendingP2Lines,
               live: false,
               side: 'p1',
             });
@@ -222,6 +225,8 @@ export function buildDiagnosticReplayClientJs(opts: {
         const data = await res.json();
         const lines = Array.isArray(data.lines) ? data.lines : [];
         wrap._pendingLines = lines;
+        wrap._pendingP1Lines = Array.isArray(data.p1Lines) ? data.p1Lines : undefined;
+        wrap._pendingP2Lines = Array.isArray(data.p2Lines) ? data.p2Lines : undefined;
         wrap._p1Name = data.p1Name || 'P1';
         wrap._p2Name = data.p2Name || 'P2';
         wrap._aiTelemetry = extractAiTelemetryFromLines(lines);
@@ -614,12 +619,26 @@ const ACCOUNT_SCRIPT = `
     const liveFrame = document.getElementById('diag-live-frame');
     let liveReady = false;
     let liveLinesSent = 0;
+    let liveP1Sent = 0;
+    let liveP2Sent = 0;
     let liveKey = liveBox ? (liveBox.dataset.initialKey || '') : '';
-    let livePendingLines = [];
+    let livePending = {lines: [], p1Lines: undefined, p2Lines: undefined};
     if (liveBox && liveBox.dataset.initialLines) {
       try {
         const parsed = JSON.parse(liveBox.dataset.initialLines);
-        if (Array.isArray(parsed)) livePendingLines = parsed;
+        if (Array.isArray(parsed)) livePending.lines = parsed;
+      } catch {}
+    }
+    if (liveBox && liveBox.dataset.initialP1Lines) {
+      try {
+        const parsed = JSON.parse(liveBox.dataset.initialP1Lines);
+        if (Array.isArray(parsed)) livePending.p1Lines = parsed;
+      } catch {}
+    }
+    if (liveBox && liveBox.dataset.initialP2Lines) {
+      try {
+        const parsed = JSON.parse(liveBox.dataset.initialP2Lines);
+        if (Array.isArray(parsed)) livePending.p2Lines = parsed;
       } catch {}
     }
 
@@ -631,30 +650,49 @@ const ACCOUNT_SCRIPT = `
       if (liveFrame && ev.source === liveFrame.contentWindow && data.type === 'ready') {
         liveReady = true;
         liveLinesSent = 0;
+        liveP1Sent = 0;
+        liveP2Sent = 0;
         syncFramePrefs(liveFrame);
-        if (livePendingLines.length > 0) flushLiveLines(livePendingLines);
+        if (livePending.lines.length > 0) flushLiveLines(livePending);
         return;
       }`,
     })}
 
-    const flushLiveLines = (lines, key) => {
-      if (!liveFrame || !Array.isArray(lines) || lines.length === 0) return;
+    const flushLiveLines = (payload, key) => {
+      const lines = payload && Array.isArray(payload.lines) ? payload.lines : [];
+      if (!liveFrame || lines.length === 0) return;
+      const p1Lines = Array.isArray(payload.p1Lines) ? payload.p1Lines : undefined;
+      const p2Lines = Array.isArray(payload.p2Lines) ? payload.p2Lines : undefined;
       if (key && key !== liveKey) {
         liveKey = key;
         liveLinesSent = 0;
+        liveP1Sent = 0;
+        liveP2Sent = 0;
       }
-      livePendingLines = lines;
+      livePending = {lines, p1Lines, p2Lines};
       if (!liveFrame.getAttribute('src')) {
         liveFrame.setAttribute('src', '/arena/viewer/');
         return;
       }
       if (!liveReady) return;
-      if (liveLinesSent === 0 || lines.length < liveLinesSent) {
-        postToFrame(liveFrame, {type: 'load', lines, live: true, side: 'p1'});
+      const resetNeeded =
+        liveLinesSent === 0 ||
+        lines.length < liveLinesSent ||
+        (p1Lines && p1Lines.length < liveP1Sent) ||
+        (p2Lines && p2Lines.length < liveP2Sent);
+      if (resetNeeded) {
+        postToFrame(liveFrame, {type: 'load', lines, p1Lines, p2Lines, live: true, side: 'p1'});
       } else if (lines.length > liveLinesSent) {
-        postToFrame(liveFrame, {type: 'append', lines: lines.slice(liveLinesSent)});
+        postToFrame(liveFrame, {
+          type: 'append',
+          lines: lines.slice(liveLinesSent),
+          p1Lines: p1Lines ? p1Lines.slice(liveP1Sent) : undefined,
+          p2Lines: p2Lines ? p2Lines.slice(liveP2Sent) : undefined,
+        });
       }
       liveLinesSent = lines.length;
+      liveP1Sent = p1Lines ? p1Lines.length : 0;
+      liveP2Sent = p2Lines ? p2Lines.length : 0;
     };
 
     if (liveBox && typeof EventSource === 'function') {
@@ -688,7 +726,10 @@ const ACCOUNT_SCRIPT = `
           }
           if (Array.isArray(snap.lines) && snap.lines.length > 0) {
             const snapKey = String(snap.versionId || '') + ':' + String(snap.format || '');
-            flushLiveLines(snap.lines, snapKey);
+            flushLiveLines(
+              {lines: snap.lines, p1Lines: snap.p1Lines, p2Lines: snap.p2Lines},
+              snapKey
+            );
           }
         } catch {}
       });
@@ -897,6 +938,12 @@ function renderLiveDiagnosticSection(
       data-initial-lines={liveDiagnostic?.lines?.length
         ? JSON.stringify(liveDiagnostic.lines)
         : undefined}
+      data-initial-p1-lines={liveDiagnostic?.p1Lines?.length
+        ? JSON.stringify(liveDiagnostic.p1Lines)
+        : undefined}
+      data-initial-p2-lines={liveDiagnostic?.p2Lines?.length
+        ? JSON.stringify(liveDiagnostic.p2Lines)
+        : undefined}
     >
       <div className='live-diag-head'>
         <strong id='diag-live-title'>
@@ -1003,6 +1050,8 @@ export function sendDiagnosticLogResponse(
     res.end(diag.battleLog);
     return;
   }
+  const lines = diag.battleLog ? diag.battleLog.split('\n') : [];
+  const {p1Lines, p2Lines} = extractPerspectiveLogs(lines);
   sendJson(res, 200, {
     id: diag.id,
     versionId: diag.versionId,
@@ -1013,7 +1062,9 @@ export function sendDiagnosticLogResponse(
     durationMillis: diag.durationMillis,
     p1Name: `${agent.name} (P1)`,
     p2Name: `${agent.name} (P2)`,
-    lines: diag.battleLog.split('\n').filter(Boolean),
+    lines,
+    p1Lines,
+    p2Lines,
     ...(diag.p1CpuCores !== undefined ? {p1CpuCores: diag.p1CpuCores} : {}),
     ...(diag.p2CpuCores !== undefined ? {p2CpuCores: diag.p2CpuCores} : {}),
     ...(diag.p1PeakRam !== undefined ? {p1PeakRam: diag.p1PeakRam} : {}),

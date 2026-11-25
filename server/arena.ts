@@ -971,6 +971,8 @@ export interface LiveDiagnostic {
   p1: LiveDiagnosticSlot;
   p2: LiveDiagnosticSlot;
   lines: string[];
+  p1Lines?: string[];
+  p2Lines?: string[];
   winHistory?: WinHistoryPoint[];
   updatedAt: number;
 }
@@ -1983,7 +1985,15 @@ export function register(app: polka.Polka, options: Options): Handle {
       pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
       return;
     }
-    const snap: LiveDiagnostic = {...payload, updatedAt: getNowSec()};
+    const persp = payload.p1Lines && payload.p2Lines
+      ? {p1Lines: payload.p1Lines.slice(), p2Lines: payload.p2Lines.slice()}
+      : extractPerspectiveLogs(payload.lines);
+    const snap: LiveDiagnostic = {
+      ...payload,
+      p1Lines: persp.p1Lines,
+      p2Lines: persp.p2Lines,
+      updatedAt: getNowSec(),
+    };
     liveDiagnosticsByAgent.set(snap.agentId, snap);
     pushDiagnosticEvent(snap.agentId, 'diagnostic', snap);
   };

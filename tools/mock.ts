@@ -2118,8 +2118,12 @@ export class Runner {
         `|gen|${gen}`,
         `|tier|[Gen ${gen}] ${t.format}`,
         '|start',
+        '|split|p1',
         '|switch|p1a: Tauros|Tauros|353/353',
+        '|switch|p1a: Tauros|Tauros|100/100',
+        '|split|p2',
         '|switch|p2a: Chansey|Chansey|703/703',
+        '|switch|p2a: Chansey|Chansey|100/100',
         '|turn|1',
         ...(supportsInfo
           ? [
@@ -2128,7 +2132,9 @@ export class Runner {
           ]
           : []),
         '|move|p1a: Tauros|Body Slam|p2a: Chansey',
+        '|split|p2',
         '|-damage|p2a: Chansey|421/703',
+        '|-damage|p2a: Chansey|60/100',
         '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
         '|-status|p1a: Tauros|par',
         '|turn|2',
