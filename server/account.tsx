@@ -1215,172 +1215,169 @@ function renderHistorySection(
   return (
     <section id='history'>
       <h3><a href='#history' className='subtle'>History</a></h3>
-      <div className='table-wrap'>
-        <table>
-          <thead>
-            <tr>
-              <th>Version</th>
-              <th>Ladders</th>
-              <th>Artifact</th>
-              <th>Smoke Test</th>
-              <th>State</th>
-              <th className='num'>Submitted</th>
+      <util.PaginatedTable
+        head={(
+          <tr>
+            <th>Version</th>
+            <th>Ladders</th>
+            <th>Artifact</th>
+            <th>Smoke Test</th>
+            <th>State</th>
+            <th className='num'>Submitted</th>
+          </tr>
+        )}
+        pager={{
+          id: 'history-pager',
+          label: 'Version history pagination',
+          total: versions.length,
+          singular: 'version',
+          plural: 'versions',
+        }}
+      >
+        {versions.map((v, idx) => {
+          const ladderLabels: util.Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
+          const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map(name => {
+            const m = /^Tournament #(\d+)/.exec(name);
+            return m ? <span title={name}>T#{m[1]}</span> : name;
+          });
+          const allLabels = [...ladderLabels, ...tourneyLabels];
+          const laddersContent = allLabels.map((item, i) => (i === 0 ? item : [', ', item]));
+
+          const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
+          const sizeMib = v.unpackedBytes !== undefined
+            ? Math.max(1, Math.round(v.unpackedBytes / (1024 * 1024)))
+            : undefined;
+
+          const isTournamentOnly =
+            ladderLabels.length === 0 && (v.tournamentNames?.length ?? 0) > 0;
+          const isFullyActive = v.smokeStatus === 'passed' && (
+            isTournamentOnly || (
+              v.activeLadderNames.length > 0 &&
+              v.activeLadderNames.length >= ladderLabels.length
+            )
+          );
+          const isPartiallyActive = !isTournamentOnly &&
+            v.smokeStatus === 'passed' &&
+            v.activeLadderNames.length > 0 &&
+            v.activeLadderNames.length < ladderLabels.length;
+          const isRetired = !isTournamentOnly &&
+            v.smokeStatus === 'passed' &&
+            v.activeLadderNames.length === 0;
+
+          let smokeCell: util.Child;
+          if (v.smokeStatus === 'pending') {
+            const queueText = v.queueAhead === undefined
+              ? undefined
+              : v.queueAhead === 0
+                ? 'next in queue'
+                : `${v.queueAhead} ahead`;
+            smokeCell = (
+              <>
+                <span className='muted'>PENDING</span>
+                {queueText && <> <span className='muted'>({queueText})</span></>}
+              </>
+            );
+          } else if (
+            v.smokeStatus === 'passed' ||
+            v.smokeStatus === 'staged' ||
+            v.smokeStatus === 'discarded'
+          ) {
+            const statsText = formatSmokeStatsText(v);
+            smokeCell = (
+              <>
+                {isRetired || v.smokeStatus === 'discarded'
+                  ? <span>PASS</span>
+                  : <span className='yes'>PASS</span>}
+                {v.smokeStatus === 'staged' && <> <span className='muted'>(staged)</span></>}
+                {statsText && <> <span className='muted'>({statsText})</span></>}
+                {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
+              </>
+            );
+          } else {
+            const label = v.smokeStatus === 'quarantined' ? 'QUARANTINED' : 'FAIL';
+            const showInlineError = Boolean(v.smokeError) && (
+              v.smokeStatus === 'quarantined' || !v.diagnostics?.length
+            );
+            smokeCell = (
+              <>
+                <span className='no'>{label}</span>
+                {Boolean(v.notified) && <> <span className='muted'>(DM sent)</span></>}
+                {showInlineError && <div className='smoke-error muted'>{v.smokeError}</div>}
+                {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
+              </>
+            );
+          }
+
+          let stateCell: util.Child;
+          if (v.smokeStatus === 'pending') {
+            stateCell = <span className='muted'>Pending</span>;
+          } else if (v.smokeStatus === 'staged') {
+            stateCell = <a href='#staged-review'><strong>Staged</strong></a>;
+          } else if (v.smokeStatus === 'discarded') {
+            stateCell = <span className='muted'>Discarded</span>;
+          } else if (v.smokeStatus === 'failed') {
+            stateCell = <span className='muted'>Rejected</span>;
+          } else if (v.smokeStatus === 'quarantined') {
+            stateCell = <span className='no'>Quarantined</span>;
+          } else if (isFullyActive) {
+            stateCell = isTournamentOnly
+              ? <span className='yes'>Entered</span>
+              : <span className='yes'>Active</span>;
+          } else if (isPartiallyActive) {
+            stateCell = (
+              <>Active <span className='muted'>({v.activeLadderNames.join(', ')})</span></>
+            );
+          } else {
+            stateCell = <span className='muted'>Retired</span>;
+          }
+
+          const playableDiags = (v.diagnostics ?? []).filter(d => d.hasLog);
+          const classes: string[] = [];
+          if (playableDiags.length > 0) classes.push('battle-row');
+          if (isRetired || v.smokeStatus === 'discarded') classes.push('secondary');
+          if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
+
+          return (
+            <tr
+              className={classes.length > 0 ? classes.join(' ') : undefined}
+              tabIndex={playableDiags.length > 0 ? 0 : undefined}
+              aria-expanded={playableDiags.length > 0 ? 'false' : undefined}
+              data-diag-ids={playableDiags.length > 0
+                ? playableDiags.map(d => String(d.id)).join(',')
+                : undefined}
+              data-diag-labels={playableDiags.length > 0
+                ? playableDiags.map(d => diagnosticTargetLabel(d, ladderNameById)).join('|')
+                : undefined}
+            >
+              <td>
+                {playableDiags.length > 0 && (
+                  <span className='battle-toggle' aria-hidden='true'>▸</span>
+                )}
+                {isFullyActive
+                  ? <code><strong>{v.version}</strong></code>
+                  : <code>{v.version}</code>}
+                {util.renderInfoDot(v.smokeInfoStatus)}
+              </td>
+              <td className='wrap'><tt>{laddersContent}</tt></td>
+              <td className='wrap'>
+                <tt>{shortSha}</tt>
+                {sizeMib !== undefined && (
+                  <> <span className='muted'>({sizeMib} MiB)</span></>
+                )}
+              </td>
+              <td className='wrap'>{smokeCell}</td>
+              <td>{stateCell}</td>
+              <td className='num muted'>
+                <util.Time
+                  epoch={v.submittedAt}
+                  format='date'
+                  title={[{prefix: 'Submitted ', epoch: v.submittedAt}]}
+                />
+              </td>
             </tr>
-          </thead>
-          <tbody>
-            {versions.map((v, idx) => {
-              const ladderLabels: util.Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
-              const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map(name => {
-                const m = /^Tournament #(\d+)/.exec(name);
-                return m ? <span title={name}>T#{m[1]}</span> : name;
-              });
-              const allLabels = [...ladderLabels, ...tourneyLabels];
-              const laddersContent = allLabels.map((item, i) => (i === 0 ? item : [', ', item]));
-
-              const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
-              const sizeMib = v.unpackedBytes !== undefined
-                ? Math.max(1, Math.round(v.unpackedBytes / (1024 * 1024)))
-                : undefined;
-
-              const isTournamentOnly =
-                ladderLabels.length === 0 && (v.tournamentNames?.length ?? 0) > 0;
-              const isFullyActive = v.smokeStatus === 'passed' && (
-                isTournamentOnly || (
-                  v.activeLadderNames.length > 0 &&
-                  v.activeLadderNames.length >= ladderLabels.length
-                )
-              );
-              const isPartiallyActive = !isTournamentOnly &&
-                v.smokeStatus === 'passed' &&
-                v.activeLadderNames.length > 0 &&
-                v.activeLadderNames.length < ladderLabels.length;
-              const isRetired = !isTournamentOnly &&
-                v.smokeStatus === 'passed' &&
-                v.activeLadderNames.length === 0;
-
-              let smokeCell: util.Child;
-              if (v.smokeStatus === 'pending') {
-                const queueText = v.queueAhead === undefined
-                  ? undefined
-                  : v.queueAhead === 0
-                    ? 'next in queue'
-                    : `${v.queueAhead} ahead`;
-                smokeCell = (
-                  <>
-                    <span className='muted'>PENDING</span>
-                    {queueText && <> <span className='muted'>({queueText})</span></>}
-                  </>
-                );
-              } else if (
-                v.smokeStatus === 'passed' ||
-                v.smokeStatus === 'staged' ||
-                v.smokeStatus === 'discarded'
-              ) {
-                const statsText = formatSmokeStatsText(v);
-                smokeCell = (
-                  <>
-                    {isRetired || v.smokeStatus === 'discarded'
-                      ? <span>PASS</span>
-                      : <span className='yes'>PASS</span>}
-                    {v.smokeStatus === 'staged' && <> <span className='muted'>(staged)</span></>}
-                    {statsText && <> <span className='muted'>({statsText})</span></>}
-                    {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
-                  </>
-                );
-              } else {
-                const label = v.smokeStatus === 'quarantined' ? 'QUARANTINED' : 'FAIL';
-                const showInlineError = Boolean(v.smokeError) && (
-                  v.smokeStatus === 'quarantined' || !v.diagnostics?.length
-                );
-                smokeCell = (
-                  <>
-                    <span className='no'>{label}</span>
-                    {Boolean(v.notified) && <> <span className='muted'>(DM sent)</span></>}
-                    {showInlineError && <div className='smoke-error muted'>{v.smokeError}</div>}
-                    {renderDiagnosticLinks(v.diagnostics, ladderNameById)}
-                  </>
-                );
-              }
-
-              let stateCell: util.Child;
-              if (v.smokeStatus === 'pending') {
-                stateCell = <span className='muted'>Pending</span>;
-              } else if (v.smokeStatus === 'staged') {
-                stateCell = <a href='#staged-review'><strong>Staged</strong></a>;
-              } else if (v.smokeStatus === 'discarded') {
-                stateCell = <span className='muted'>Discarded</span>;
-              } else if (v.smokeStatus === 'failed') {
-                stateCell = <span className='muted'>Rejected</span>;
-              } else if (v.smokeStatus === 'quarantined') {
-                stateCell = <span className='no'>Quarantined</span>;
-              } else if (isFullyActive) {
-                stateCell = isTournamentOnly
-                  ? <span className='yes'>Entered</span>
-                  : <span className='yes'>Active</span>;
-              } else if (isPartiallyActive) {
-                stateCell = (
-                  <>Active <span className='muted'>({v.activeLadderNames.join(', ')})</span></>
-                );
-              } else {
-                stateCell = <span className='muted'>Retired</span>;
-              }
-
-              const playableDiags = (v.diagnostics ?? []).filter(d => d.hasLog);
-              const classes: string[] = [];
-              if (playableDiags.length > 0) classes.push('battle-row');
-              if (isRetired || v.smokeStatus === 'discarded') classes.push('secondary');
-              if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
-
-              return (
-                <tr
-                  className={classes.length > 0 ? classes.join(' ') : undefined}
-                  tabIndex={playableDiags.length > 0 ? 0 : undefined}
-                  aria-expanded={playableDiags.length > 0 ? 'false' : undefined}
-                  data-diag-ids={playableDiags.length > 0
-                    ? playableDiags.map(d => String(d.id)).join(',')
-                    : undefined}
-                  data-diag-labels={playableDiags.length > 0
-                    ? playableDiags.map(d => diagnosticTargetLabel(d, ladderNameById)).join('|')
-                    : undefined}
-                >
-                  <td>
-                    {playableDiags.length > 0 && (
-                      <span className='battle-toggle' aria-hidden='true'>▸</span>
-                    )}
-                    {isFullyActive
-                      ? <code><strong>{v.version}</strong></code>
-                      : <code>{v.version}</code>}
-                    {util.renderInfoDot(v.smokeInfoStatus)}
-                  </td>
-                  <td className='wrap'><tt>{laddersContent}</tt></td>
-                  <td className='wrap'>
-                    <tt>{shortSha}</tt>
-                    {sizeMib !== undefined && (
-                      <> <span className='muted'>({sizeMib} MiB)</span></>
-                    )}
-                  </td>
-                  <td className='wrap'>{smokeCell}</td>
-                  <td>{stateCell}</td>
-                  <td className='num muted'>
-                    <util.Time
-                      epoch={v.submittedAt}
-                      format='date'
-                      title={[{prefix: 'Submitted ', epoch: v.submittedAt}]}
-                    />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        id='history-pager'
-        label='Version history pagination'
-        total={versions.length}
-        singular='version'
-        plural='versions'
-      />
+          );
+        })}
+      </util.PaginatedTable>
     </section>
   );
 }

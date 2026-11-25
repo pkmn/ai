@@ -54,13 +54,13 @@ export const FORMAT_TITLES: Record<string, string> = {
 
 const LADDER_SCRIPT = `
   document.addEventListener('DOMContentLoaded', () => {
+    ${util.UPDATE_TABLE_PAGER_SCRIPT}
     const verRadios = document.querySelectorAll('input[name="versions"]');
     const rows = Array.from(document.querySelectorAll('.standings-table tbody tr'));
     const pager = document.getElementById('standings-pager');
     const prevBtn = document.getElementById('standings-pager-prev');
     const nextBtn = document.getElementById('standings-pager-next');
-    const infoEl = document.getElementById('standings-pager-info');
-    const pageSize = 25;
+    const pageSize = (pager && Number(pager.dataset.pageSize)) || ${util.TABLE_PAGE_SIZE};
     let mode = 'active';
     let page = 1;
 
@@ -70,26 +70,13 @@ const LADDER_SCRIPT = `
         if (mode === 'best') return Boolean(row.dataset.best);
         return Boolean(row.dataset.active);
       });
-      const total = matching.length;
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
-      if (page > totalPages) page = totalPages;
-      if (page < 1) page = 1;
+      const state = updateTablePager(pager, page, matching.length, pageSize);
+      page = state.page;
       const start = (page - 1) * pageSize;
       const visible = new Set(matching.slice(start, start + pageSize));
       rows.forEach(row => {
         row.classList.toggle('hide', !visible.has(row));
       });
-      if (pager && prevBtn && nextBtn && infoEl) {
-        pager.classList.toggle('hide', totalPages <= 1);
-        prevBtn.disabled = page <= 1;
-        nextBtn.disabled = page >= totalPages;
-        const word = total === 1
-          ? (pager.dataset.singular || 'entry')
-          : (pager.dataset.plural || 'entries');
-        infoEl.textContent =
-          'Page ' + page + ' of ' + totalPages +
-          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
-      }
     };
 
     verRadios.forEach(r => r.addEventListener('change', () => {
@@ -1064,13 +1051,13 @@ function buildBattlesScript(
     const livePanel = document.getElementById('live-panel');
     const battleViewerWrap = document.getElementById('battle-viewer-wrap');
     const liveViewerFrame = document.getElementById('ps-viewer-frame');
+    ${util.UPDATE_TABLE_PAGER_SCRIPT}
     const tbody = document.getElementById('battles-tbody');
     const pager = document.getElementById('battles-pager');
-    const prevBtn = document.getElementById('battles-prev');
-    const nextBtn = document.getElementById('battles-next');
-    const pageInfo = document.getElementById('battles-page-info');
+    const prevBtn = document.getElementById('battles-pager-prev');
+    const nextBtn = document.getElementById('battles-pager-next');
     const radios = document.querySelectorAll('input[name="bformat"]');
-    const pageSize = (state && state.pageSize) || 25;
+    const pageSize = (state && state.pageSize) || ${util.TABLE_PAGE_SIZE};
     const historyEndpoint = (state && state.historyEndpoint) || '/api/battles.json';
     let currentFmt = 'all';
     let currentPage = 1;
@@ -1544,13 +1531,7 @@ function buildBattlesScript(
     }
 
     const updatePager = (page, total) => {
-      if (!pager || !prevBtn || !nextBtn || !pageInfo) return;
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
-      pager.classList.toggle('hide', total === 0 || (totalPages <= 1 && page <= 1));
-      prevBtn.disabled = page <= 1;
-      nextBtn.disabled = page >= totalPages;
-      pageInfo.textContent = 'Page ' + page + ' of ' + totalPages + ' (' +
-        total.toLocaleString('en-US') + ' ' + (total === 1 ? 'battle' : 'battles') + ')';
+      updateTablePager(pager, page, total, pageSize);
     };
 
     const trimHistoryRows = () => {
@@ -2899,50 +2880,46 @@ function renderLadderHtml(opts: {
     standingsPane = activeEntrants.length === 0 ? (
       <p className='empty-state muted'>{upcomingEmptyMsg}</p>
     ) : (
-      <>
-        <div className='table-wrap'>
-          <table className='standings-table'>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Agent</th>
-                <th className='num'>Submitted</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeEntrants.map((e, idx) => {
-                const href = resolveAgentHref(links, e.agentSlug, e.agentName);
-                return (
-                  <tr
-                    data-active='true'
-                    className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}
-                  >
-                    <td><strong>{idx + 1}</strong></td>
-                    <td>
-                      {renderAgentLink(e.agentName, href, true)}{' '}
-                      <code>{e.version}</code>
-                    </td>
-                    <td className='num muted'>
-                      <util.Time
-                        epoch={e.submittedAt}
-                        format='date'
-                        title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <util.TablePager
-          id='standings-pager'
-          label='Entrants pagination'
-          total={activeEntrants.length}
-          singular='entrant'
-          plural='entrants'
-        />
-      </>
+      <util.PaginatedTable
+        className='standings-table'
+        head={(
+          <tr>
+            <th>#</th>
+            <th>Agent</th>
+            <th className='num'>Submitted</th>
+          </tr>
+        )}
+        pager={{
+          id: 'standings-pager',
+          label: 'Entrants pagination',
+          total: activeEntrants.length,
+          singular: 'entrant',
+          plural: 'entrants',
+        }}
+      >
+        {activeEntrants.map((e, idx) => {
+          const href = resolveAgentHref(links, e.agentSlug, e.agentName);
+          return (
+            <tr
+              data-active='true'
+              className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}
+            >
+              <td><strong>{idx + 1}</strong></td>
+              <td>
+                {renderAgentLink(e.agentName, href, true)}{' '}
+                <code>{e.version}</code>
+              </td>
+              <td className='num muted'>
+                <util.Time
+                  epoch={e.submittedAt}
+                  format='date'
+                  title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                />
+              </td>
+            </tr>
+          );
+        })}
+      </util.PaginatedTable>
     );
   } else {
     let activeCount = 0;
@@ -3063,31 +3040,29 @@ function renderLadderHtml(opts: {
     const thStreak = 'Current consecutive outright match win/loss streak';
     const thLos = 'Pairwise Likelihood of Superiority over the next-ranked settled agent';
     standingsPane = (
-      <>
-        <div className='table-wrap'>
-          <table className='standings-table'>
-            <thead>
-              <tr>
-                <th title='Official rank by Conservative Rating (Elo - 1.96 * SE)'>#</th>
-                <th>Agent</th>
-                <th className='num' title='MAP Davidson Elo ± 95% Confidence Interval'>Elo</th>
-                <th className='num' title={thGxe}>GXE</th>
-                <th className='num' title={thWlt}>W–L–T</th>
-                <th className='center' title={thStreak}>Streak</th>
-                <th className='num' title={thLos}>LOS</th>
-              </tr>
-            </thead>
-            <tbody>{rows}</tbody>
-          </table>
-        </div>
-        <util.TablePager
-          id='standings-pager'
-          label='Standings pagination'
-          total={activeCount}
-          singular='entry'
-          plural='entries'
-        />
-      </>
+      <util.PaginatedTable
+        className='standings-table'
+        head={(
+          <tr>
+            <th title='Official rank by Conservative Rating (Elo - 1.96 * SE)'>#</th>
+            <th>Agent</th>
+            <th className='num' title='MAP Davidson Elo ± 95% Confidence Interval'>Elo</th>
+            <th className='num' title={thGxe}>GXE</th>
+            <th className='num' title={thWlt}>W–L–T</th>
+            <th className='center' title={thStreak}>Streak</th>
+            <th className='num' title={thLos}>LOS</th>
+          </tr>
+        )}
+        pager={{
+          id: 'standings-pager',
+          label: 'Standings pagination',
+          total: activeCount,
+          singular: 'entry',
+          plural: 'entries',
+        }}
+      >
+        {rows}
+      </util.PaginatedTable>
     );
   }
 
@@ -4074,7 +4049,6 @@ function renderBattlesPage(opts: {
     ? liveDoc.recentMatches
     : db.getRecentMatches(recentMatchesLimit).map(m => arena.enrichMatchView(publicDir, m));
   const totalMatches = countsBySlot.all ?? recentMatches.length;
-  const totalPages = Math.max(1, Math.ceil(totalMatches / recentMatchesLimit));
 
   const formatFilterItems = filterSlots.map(s => (
     <>
@@ -4187,10 +4161,6 @@ function renderBattlesPage(opts: {
       recentMatches,
     };
 
-  const battleWord = totalMatches === 1 ? 'battle' : 'battles';
-  const pagerInitialInfo =
-    `Page 1 of ${totalPages} (${totalMatches.toLocaleString('en-US')} ${battleWord})`;
-
   const liveMatchWithLines =
     liveDoc && !liveDoc.stale && (liveDoc.live?.viewer?.lines.length ?? 0) > 0
       ? liveDoc.live
@@ -4231,42 +4201,34 @@ function renderBattlesPage(opts: {
       </section>
       <section id='history'>
         <h3><a href='#history' className='subtle'>History</a></h3>
-        <div className='table-wrap'>
-          <table id='battles-table'>
-            <thead>
-              <tr>
-                <th>Battle</th>
-                <th>Player 1</th>
-                <th>Player 2</th>
-                <th className='center' title='2-game blind-pair outcome (Game 1 / Game 2)'>
-                  Result
-                </th>
-                <th className='num'>Completed</th>
-              </tr>
-            </thead>
-            <tbody id='battles-tbody'>
-              {historyRows}
-            </tbody>
-          </table>
-        </div>
-        <div
-          className={`pager${totalPages <= 1 ? ' hide' : ''}`}
-          id='battles-pager'
-          aria-label='Battle history pagination'
+        <util.PaginatedTable
+          id='battles-table'
+          tbodyId='battles-tbody'
+          head={(
+            <tr>
+              <th>Battle</th>
+              <th>Player 1</th>
+              <th>Player 2</th>
+              <th className='center' title='2-game blind-pair outcome (Game 1 / Game 2)'>
+                Result
+              </th>
+              <th className='num'>Completed</th>
+            </tr>
+          )}
+          pager={{
+            id: 'battles-pager',
+            label: 'Battle history pagination',
+            total: totalMatches,
+            singular: 'battle',
+            plural: 'battles',
+            pageSize: recentMatchesLimit,
+            prevLabel: '\u2190 Newer',
+            nextLabel: 'Older \u2192',
+            server: true,
+          }}
         >
-          <button type='button' className='pager-btn' id='battles-prev' disabled>
-            {'\u2190'} Newer
-          </button>
-          <span className='pager-info muted' id='battles-page-info'>{pagerInitialInfo}</span>
-          <button
-            type='button'
-            className='pager-btn'
-            id='battles-next'
-            disabled={totalPages <= 1}
-          >
-            Older {'\u2192'}
-          </button>
-        </div>
+          {historyRows}
+        </util.PaginatedTable>
       </section>
       <script>
         {util.raw(buildBattlesScript(

@@ -1917,49 +1917,46 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
       const revisions = await wiki.getHistory(slug);
       const table = revisions.length ? (
         <>
-          <div className='table-wrap'>
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Revision</th>
-                  <th>Author</th>
-                  <th>Summary</th>
+          <util.PaginatedTable
+            head={(
+              <tr>
+                <th>Date</th>
+                <th>Revision</th>
+                <th>Author</th>
+                <th>Summary</th>
+              </tr>
+            )}
+            pager={{
+              id: 'wiki-history-pager',
+              label: 'Revision history pagination',
+              total: revisions.length,
+              singular: 'revision',
+              plural: 'revisions',
+            }}
+          >
+            {revisions.map((rev, idx) => {
+              const revUrl = `/wiki/${encoded}/${rev.sha}`;
+              const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
+              const displayAuthor = wiki.formatAuthor(rev.author);
+              return (
+                <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                  <td className='wiki-meta'>
+                    <util.Time epoch={rev.timestamp} format='date' />
+                  </td>
+                  <td>
+                    {rev.deleted
+                      ? <code>{rev.shortSha}</code>
+                      : <code><a href={revUrl}>{rev.shortSha}</a></code>}{' '}
+                    (<a href={`${revUrl}?diff=1`}>diff</a>)
+                  </td>
+                  <td>
+                    <a href={ghUrl} className='subtle'>{displayAuthor}</a>
+                  </td>
+                  <td>{rev.subject}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {revisions.map((rev, idx) => {
-                  const revUrl = `/wiki/${encoded}/${rev.sha}`;
-                  const ghUrl = `https://github.com/${encodeURIComponent(rev.author)}`;
-                  const displayAuthor = wiki.formatAuthor(rev.author);
-                  return (
-                    <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
-                      <td className='wiki-meta'>
-                        <util.Time epoch={rev.timestamp} format='date' />
-                      </td>
-                      <td>
-                        {rev.deleted
-                          ? <code>{rev.shortSha}</code>
-                          : <code><a href={revUrl}>{rev.shortSha}</a></code>}{' '}
-                        (<a href={`${revUrl}?diff=1`}>diff</a>)
-                      </td>
-                      <td>
-                        <a href={ghUrl} className='subtle'>{displayAuthor}</a>
-                      </td>
-                      <td>{rev.subject}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <util.TablePager
-            id='wiki-history-pager'
-            label='Revision history pagination'
-            total={revisions.length}
-            singular='revision'
-            plural='revisions'
-          />
+              );
+            })}
+          </util.PaginatedTable>
           <script>
             {`document.addEventListener('DOMContentLoaded', () => {${util.TABLE_PAGER_SCRIPT}});`}
           </script>

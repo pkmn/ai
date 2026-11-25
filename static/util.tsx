@@ -496,6 +496,7 @@ export interface TablePagerProps {
   pageSize?: number;
   prevLabel?: string;
   nextLabel?: string;
+  server?: boolean;
 }
 
 export const TablePager = (opts: TablePagerProps) => {
@@ -511,6 +512,7 @@ export const TablePager = (opts: TablePagerProps) => {
     id={opts.id}
     aria-label={opts.label}
     data-table-pager={true}
+    data-server-pager={opts.server ? true : undefined}
     data-page-size={pageSize}
     data-singular={opts.singular}
     data-plural={opts.plural}
@@ -537,66 +539,103 @@ export const TablePager = (opts: TablePagerProps) => {
   </div>;
 };
 
-export const TABLE_PAGER_SCRIPT = `
-  document.querySelectorAll('.pager[data-table-pager]').forEach(pager => {
-    const pageSize = Number(pager.dataset.pageSize) || 25;
-    const wrap = pager.previousElementSibling;
-    const tbody = wrap ? wrap.querySelector('tbody') : undefined;
-    if (!tbody) return;
-    const rows = Array.from(tbody.querySelectorAll('tr')).filter(
-      r => !r.classList.contains('diag-replay-row') && !r.classList.contains('battle-detail-row')
-    );
+export interface PaginatedTableProps {
+  id?: string;
+  className?: string;
+  tbodyId?: string;
+  head: Child;
+  children?: Child;
+  pager: TablePagerProps;
+}
+
+export const PaginatedTable = (opts: PaginatedTableProps) => (
+  <>
+    <div className='table-wrap'>
+      <table id={opts.id} className={opts.className}>
+        <thead>{opts.head}</thead>
+        <tbody id={opts.tbodyId}>{opts.children}</tbody>
+      </table>
+    </div>
+    <TablePager {...opts.pager} />
+  </>
+);
+
+export const UPDATE_TABLE_PAGER_SCRIPT = `
+  const updateTablePager = (pager, page, total, overridePageSize) => {
+    if (!pager) return {page: 1, totalPages: 1};
+    const pageSize = Number(overridePageSize || pager.dataset.pageSize) || ${TABLE_PAGE_SIZE};
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const clamped = Math.min(Math.max(1, page), totalPages);
     const prevBtn = pager.querySelector('[data-pager-prev]');
     const nextBtn = pager.querySelector('[data-pager-next]');
     const infoEl = pager.querySelector('[data-pager-info]');
     const singular = pager.dataset.singular || 'row';
     const plural = pager.dataset.plural || 'rows';
-    let page = 1;
-    const apply = () => {
-      const total = rows.length;
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
-      if (page > totalPages) page = totalPages;
-      if (page < 1) page = 1;
-      const start = (page - 1) * pageSize;
-      rows.forEach((row, idx) => {
-        const hidden = idx < start || idx >= start + pageSize;
-        row.classList.toggle('hide', hidden);
-        if (hidden) {
-          const next = row.nextElementSibling;
-          if (next && next.classList.contains('diag-replay-row')) {
-            next.remove();
-            row.classList.remove('expanded');
-            row.setAttribute('aria-expanded', 'false');
-          } else if (next && next.classList.contains('battle-detail-row')) {
-            next.classList.add('hide');
-            row.classList.remove('expanded');
-            row.setAttribute('aria-expanded', 'false');
+    pager.classList.toggle('hide', totalPages <= 1);
+    if (prevBtn) prevBtn.disabled = clamped <= 1;
+    if (nextBtn) nextBtn.disabled = clamped >= totalPages;
+    if (infoEl) {
+      const word = total === 1 ? singular : plural;
+      infoEl.textContent =
+        'Page ' + clamped + ' of ' + totalPages +
+        ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+    }
+    return {page: clamped, totalPages};
+  };
+`;
+
+export const TABLE_PAGER_SCRIPT = `
+  (() => {
+    ${UPDATE_TABLE_PAGER_SCRIPT}
+    document
+      .querySelectorAll('.pager[data-table-pager]:not([data-server-pager])')
+      .forEach(pager => {
+      const pageSize = Number(pager.dataset.pageSize) || ${TABLE_PAGE_SIZE};
+      const wrap = pager.previousElementSibling;
+      const tbody = wrap ? wrap.querySelector('tbody') : undefined;
+      if (!tbody) return;
+      const rows = Array.from(tbody.querySelectorAll('tr')).filter(
+        r => !r.classList.contains('diag-replay-row') && !r.classList.contains('battle-detail-row')
+      );
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      let page = 1;
+      const apply = () => {
+        const total = rows.length;
+        const state = updateTablePager(pager, page, total, pageSize);
+        page = state.page;
+        const start = (page - 1) * pageSize;
+        rows.forEach((row, idx) => {
+          const hidden = idx < start || idx >= start + pageSize;
+          row.classList.toggle('hide', hidden);
+          if (hidden) {
+            const next = row.nextElementSibling;
+            if (next && next.classList.contains('diag-replay-row')) {
+              next.remove();
+              row.classList.remove('expanded');
+              row.setAttribute('aria-expanded', 'false');
+            } else if (next && next.classList.contains('battle-detail-row')) {
+              next.classList.add('hide');
+              row.classList.remove('expanded');
+              row.setAttribute('aria-expanded', 'false');
+            }
           }
-        }
-      });
-      pager.classList.toggle('hide', totalPages <= 1);
-      if (prevBtn) prevBtn.disabled = page <= 1;
-      if (nextBtn) nextBtn.disabled = page >= totalPages;
-      if (infoEl) {
-        const word = total === 1 ? singular : plural;
-        infoEl.textContent =
-          'Page ' + page + ' of ' + totalPages +
-          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
+        });
+      };
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (page > 1) {
+            page--;
+            apply();
+          }
+        });
       }
-    };
-    if (prevBtn) {
-      prevBtn.addEventListener('click', () => {
-        if (page > 1) {
-          page--;
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          page++;
           apply();
-        }
-      });
-    }
-    if (nextBtn) {
-      nextBtn.addEventListener('click', () => {
-        page++;
-        apply();
-      });
-    }
-  });
+        });
+      }
+    });
+  })();
 `;

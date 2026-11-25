@@ -572,189 +572,186 @@ function renderVersionsPane(opts: {
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
       {renderVersionsLineageSvg(agentName, entriesDesc, snapshots, nowSec)}
-      <div className='table-wrap'>
-        <table>
-          <thead>
-            <tr>
-              <th>Version</th>
-              <th className='num'>Elo</th>
-              <th className='num' title='Elo improvement over previous version'>
-                {'\u0394'} Elo
+      <util.PaginatedTable
+        head={(
+          <tr>
+            <th>Version</th>
+            <th className='num'>Elo</th>
+            <th className='num' title='Elo improvement over previous version'>
+              {'\u0394'} Elo
+            </th>
+            <th className='num'>GXE</th>
+            <th className='num'>W–L–T</th>
+            <th className='num' title='Mean /ready initialization time'>Init</th>
+            {hasTeamPreview && (
+              <th className='num' title='Mean team preview selection time'>Preview</th>
+            )}
+            <th className='num' title='Mean regular turn decision time'>Turn</th>
+            <th className='num' title='Mean / Peak XNU physical memory footprint'>RAM</th>
+            {hasCpu && (
+              <th className='num' title='Mean host-measured CPU utilization (effective cores)'>
+                CPU
               </th>
-              <th className='num'>GXE</th>
-              <th className='num'>W–L–T</th>
-              <th className='num' title='Mean /ready initialization time'>Init</th>
-              {hasTeamPreview && (
-                <th className='num' title='Mean team preview selection time'>Preview</th>
-              )}
-              <th className='num' title='Mean regular turn decision time'>Turn</th>
-              <th className='num' title='Mean / Peak XNU physical memory footprint'>RAM</th>
+            )}
+            <th className='num'>Submitted</th>
+          </tr>
+        )}
+        pager={{
+          label: 'Versions pagination',
+          total: entriesDesc.length,
+          singular: 'version',
+          plural: 'versions',
+        }}
+      >
+        {entriesDesc.flatMap((e, idx) => {
+          const isPrimary = activePrimary?.versionId === e.versionId;
+          const isRetired = e.role === 'retired';
+          const eloRounded = Math.round(e.elo);
+          const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
+          const prevElo = prevEloByVer.get(e.versionId);
+
+          let deltaCell: util.Html;
+          if (prevElo === undefined) {
+            deltaCell = <td className='num muted'>—</td>;
+          } else {
+            const diff = Math.round(e.elo) - Math.round(prevElo);
+            if (diff > 0) {
+              deltaCell = <td className='num'><span className='yes'>+{diff}</span></td>;
+            } else if (diff < 0) {
+              deltaCell = <td className='num'><span className='no'>{diff}</span></td>;
+            } else {
+              deltaCell = <td className='num muted'>0</td>;
+            }
+          }
+
+          const wins = e.ww + e.wt;
+          const losses = e.ll + e.tl;
+          const ties = e.split;
+          const initText = `${Math.round(e.meanInitMillis)} ms`;
+          const tpText = e.meanTeamPreviewMillis !== undefined
+            ? `${Math.round(e.meanTeamPreviewMillis)} ms`
+            : '—';
+          const turnText = `${Math.round(e.meanTurnMillis)} ms`;
+          const meanRamText = `${Math.round(e.meanRam).toLocaleString('en-US')} MiB`;
+          const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
+          const cpuText = e.cpuMatches > 0 && e.meanCpuCores > 0
+            ? e.meanCpuCores.toFixed(1)
+            : '—';
+          const totalFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
+          const invalidTotal =
+            e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther;
+          const classes: string[] = ['battle-row'];
+          if (isRetired) classes.push('secondary');
+          if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
+
+          return [
+            <tr
+              className={classes.join(' ')}
+              tabIndex={0}
+              data-vrow={e.version}
+              aria-expanded='false'
+            >
+              <td>
+                <span className='battle-toggle' aria-hidden='true'>▸</span>
+                {isPrimary
+                  ? <code><strong>{e.version}</strong></code>
+                  : <code>{e.version}</code>}
+                {util.renderInfoDot(e.infoStatus)}
+                {isRetired && <> <span className='muted'>(retired)</span></>}
+              </td>
+              <td className='num'>
+                {isPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
+                <span className='muted'>±{ci}</span>
+              </td>
+              {deltaCell}
+              <td className='num'>{e.gxe.toFixed(1)}%</td>
+              <td className='num'>{wins}–{losses}–{ties}</td>
+              <td className='num'>{initText}</td>
+              {hasTeamPreview && <td className='num'>{tpText}</td>}
+              <td className='num'>{turnText}</td>
+              <td className='num' title={peakRamTip}>{meanRamText}</td>
               {hasCpu && (
-                <th className='num' title='Mean host-measured CPU utilization (effective cores)'>
-                  CPU
-                </th>
+                <td className={e.cpuMatches > 0 ? 'num' : 'num muted'}>{cpuText}</td>
               )}
-              <th className='num'>Submitted</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entriesDesc.flatMap((e, idx) => {
-              const isPrimary = activePrimary?.versionId === e.versionId;
-              const isRetired = e.role === 'retired';
-              const eloRounded = Math.round(e.elo);
-              const ci = e.isAnchor ? 0 : Math.round(1.96 * e.se);
-              const prevElo = prevEloByVer.get(e.versionId);
-
-              let deltaCell: util.Html;
-              if (prevElo === undefined) {
-                deltaCell = <td className='num muted'>—</td>;
-              } else {
-                const diff = Math.round(e.elo) - Math.round(prevElo);
-                if (diff > 0) {
-                  deltaCell = <td className='num'><span className='yes'>+{diff}</span></td>;
-                } else if (diff < 0) {
-                  deltaCell = <td className='num'><span className='no'>{diff}</span></td>;
-                } else {
-                  deltaCell = <td className='num muted'>0</td>;
-                }
-              }
-
-              const wins = e.ww + e.wt;
-              const losses = e.ll + e.tl;
-              const ties = e.split;
-              const initText = `${Math.round(e.meanInitMillis)} ms`;
-              const tpText = e.meanTeamPreviewMillis !== undefined
-                ? `${Math.round(e.meanTeamPreviewMillis)} ms`
-                : '—';
-              const turnText = `${Math.round(e.meanTurnMillis)} ms`;
-              const meanRamText = `${Math.round(e.meanRam).toLocaleString('en-US')} MiB`;
-              const peakRamTip = `Peak: ${Math.round(e.peakRam).toLocaleString('en-US')} MiB`;
-              const cpuText = e.cpuMatches > 0 && e.meanCpuCores > 0
-                ? e.meanCpuCores.toFixed(1)
-                : '—';
-              const totalFaults = e.crashes + e.timeouts + e.ooms + e.invalidChoices;
-              const invalidTotal =
-                e.invalidCantMove + e.invalidCantSwitch + e.invalidTarget + e.invalidOther;
-              const classes: string[] = ['battle-row'];
-              if (isRetired) classes.push('secondary');
-              if (idx >= util.TABLE_PAGE_SIZE) classes.push('hide');
-
-              return [
-                <tr
-                  className={classes.join(' ')}
-                  tabIndex={0}
-                  data-vrow={e.version}
-                  aria-expanded='false'
-                >
-                  <td>
-                    <span className='battle-toggle' aria-hidden='true'>▸</span>
-                    {isPrimary
-                      ? <code><strong>{e.version}</strong></code>
-                      : <code>{e.version}</code>}
-                    {util.renderInfoDot(e.infoStatus)}
-                    {isRetired && <> <span className='muted'>(retired)</span></>}
-                  </td>
-                  <td className='num'>
-                    {isPrimary ? <strong>{eloRounded}</strong> : eloRounded}{' '}
-                    <span className='muted'>±{ci}</span>
-                  </td>
-                  {deltaCell}
-                  <td className='num'>{e.gxe.toFixed(1)}%</td>
-                  <td className='num'>{wins}–{losses}–{ties}</td>
-                  <td className='num'>{initText}</td>
-                  {hasTeamPreview && <td className='num'>{tpText}</td>}
-                  <td className='num'>{turnText}</td>
-                  <td className='num' title={peakRamTip}>{meanRamText}</td>
-                  {hasCpu && (
-                    <td className={e.cpuMatches > 0 ? 'num' : 'num muted'}>{cpuText}</td>
-                  )}
-                  <td className='num muted'>
-                    <util.Time
-                      epoch={e.submittedAt}
-                      format='date'
-                      title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
-                    />
-                  </td>
-                </tr>,
-                <tr className='battle-detail-row hide'>
-                  <td colSpan={colCount}>
-                    <div className='battle-detail'>
-                      <div className='battle-detail-grid'>
-                        <div className='battle-detail-card'>
-                          <div className='battle-detail-title'>
-                            <span>Game Faults</span>
-                            <span className='battle-detail-sub'>
-                              {renderCount(totalFaults)}
-                            </span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Crashes</span>
-                            <span>{renderCount(e.crashes)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Timeouts</span>
-                            <span>{renderCount(e.timeouts)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>OOMs</span>
-                            <span>{renderCount(e.ooms)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Invalid choice</span>
-                            <span>{renderCount(e.invalidChoices)}</span>
-                          </div>
-                        </div>
-                        <div className='battle-detail-card'>
-                          <div className='battle-detail-title'>
-                            <span>Protocol Errors</span>
-                            <span className='battle-detail-sub'>
-                              {renderCount(invalidTotal)}
-                            </span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Can&apos;t move</span>
-                            <span>{renderCount(e.invalidCantMove)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Can&apos;t switch</span>
-                            <span>{renderCount(e.invalidCantSwitch)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Invalid target</span>
-                            <span>{renderCount(e.invalidTarget)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span className='muted'>Other invalid</span>
-                            <span>{renderCount(e.invalidOther)}</span>
-                          </div>
-                          <div className='battle-detail-line'>
-                            <span
-                              className='muted'
-                              title={
-                                'Informational [Unavailable choice] retries ' +
-                                '(not counted as faults)'
-                              }
-                            >
-                              Unavailable choices (info)
-                            </span>
-                            <span>{renderCount(e.unavailableChoices, false)}</span>
-                          </div>
-                        </div>
+              <td className='num muted'>
+                <util.Time
+                  epoch={e.submittedAt}
+                  format='date'
+                  title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                />
+              </td>
+            </tr>,
+            <tr className='battle-detail-row hide'>
+              <td colSpan={colCount}>
+                <div className='battle-detail'>
+                  <div className='battle-detail-grid'>
+                    <div className='battle-detail-card'>
+                      <div className='battle-detail-title'>
+                        <span>Game Faults</span>
+                        <span className='battle-detail-sub'>
+                          {renderCount(totalFaults)}
+                        </span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Crashes</span>
+                        <span>{renderCount(e.crashes)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Timeouts</span>
+                        <span>{renderCount(e.timeouts)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>OOMs</span>
+                        <span>{renderCount(e.ooms)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Invalid choice</span>
+                        <span>{renderCount(e.invalidChoices)}</span>
                       </div>
                     </div>
-                  </td>
-                </tr>,
-              ];
-            })}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        label='Versions pagination'
-        total={entriesDesc.length}
-        singular='version'
-        plural='versions'
-      />
+                    <div className='battle-detail-card'>
+                      <div className='battle-detail-title'>
+                        <span>Protocol Errors</span>
+                        <span className='battle-detail-sub'>
+                          {renderCount(invalidTotal)}
+                        </span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Can&apos;t move</span>
+                        <span>{renderCount(e.invalidCantMove)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Can&apos;t switch</span>
+                        <span>{renderCount(e.invalidCantSwitch)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Invalid target</span>
+                        <span>{renderCount(e.invalidTarget)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span className='muted'>Other invalid</span>
+                        <span>{renderCount(e.invalidOther)}</span>
+                      </div>
+                      <div className='battle-detail-line'>
+                        <span
+                          className='muted'
+                          title={
+                            'Informational [Unavailable choice] retries ' +
+                                '(not counted as faults)'
+                          }
+                        >
+                          Unavailable choices (info)
+                        </span>
+                        <span>{renderCount(e.unavailableChoices, false)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </td>
+            </tr>,
+          ];
+        })}
+      </util.PaginatedTable>
     </div>
   );
 }
@@ -928,39 +925,39 @@ function renderHeadToHeadPane(opts: {
     empty: false,
     pane: (
       <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
-        <div className='table-wrap'>
-          <table className='h2h-table'>
-            <thead>
-              <tr>
-                <th className='sortable' data-col='0' data-type='str'>Opponent</th>
-                <th className='num sortable' data-col='1' data-type='num'>Elo</th>
-                <th className='num sortable' data-col='2' data-type='num' title={thWlt}>
-                  W–L–T
-                </th>
-                <th className='num sortable' data-col='3' data-type='num'>Score</th>
-                <th className='num sortable' data-col='4' data-type='num' title={thExp}>
-                  Expected
-                </th>
-                <th className='num sortable' data-col='5' data-type='num' title={thDelta}>
-                  {'\u0394'}
-                </th>
-                <th className='center sortable' data-col='6' data-type='num' title={thStr}>
-                  Streak
-                </th>
-                <th className='num sortable' data-col='7' data-type='num' title={thLos}>
-                  LOS
-                </th>
-              </tr>
-            </thead>
-            <tbody>{h2hRows}</tbody>
-          </table>
-        </div>
-        <util.TablePager
-          label='Head-to-head pagination'
-          total={h2hRows.length}
-          singular='opponent'
-          plural='opponents'
-        />
+        <util.PaginatedTable
+          className='h2h-table'
+          head={(
+            <tr>
+              <th className='sortable' data-col='0' data-type='str'>Opponent</th>
+              <th className='num sortable' data-col='1' data-type='num'>Elo</th>
+              <th className='num sortable' data-col='2' data-type='num' title={thWlt}>
+                W–L–T
+              </th>
+              <th className='num sortable' data-col='3' data-type='num'>Score</th>
+              <th className='num sortable' data-col='4' data-type='num' title={thExp}>
+                Expected
+              </th>
+              <th className='num sortable' data-col='5' data-type='num' title={thDelta}>
+                {'\u0394'}
+              </th>
+              <th className='center sortable' data-col='6' data-type='num' title={thStr}>
+                Streak
+              </th>
+              <th className='num sortable' data-col='7' data-type='num' title={thLos}>
+                LOS
+              </th>
+            </tr>
+          )}
+          pager={{
+            label: 'Head-to-head pagination',
+            total: h2hRows.length,
+            singular: 'opponent',
+            plural: 'opponents',
+          }}
+        >
+          {h2hRows}
+        </util.PaginatedTable>
       </div>
     ),
   };
@@ -992,92 +989,91 @@ function renderRecentMatchesPane(opts: {
 
   return (
     <div className={isDefault ? 'profile-pane' : 'profile-pane hide'} data-ladder={ladderKey}>
-      <div className='table-wrap'>
-        <table className='matches-table'>
-          <thead>
-            <tr>
-              <th>Match</th>
-              <th>Version</th>
-              <th>Opponent</th>
-              <th className='center' title='Match Outcome (Game 1 / Game 2 Outcomes)'>Result</th>
-              <th className='num'>Completed</th>
-            </tr>
-          </thead>
-          <tbody>
-            {matches.length === 0 ? (
-              <tr><td colSpan={5} className='center muted'>No completed matches yet.</td></tr>
-            ) : (
-              matches.map((m, idx) => {
-                const weAreP1 = m.p1.slug === agentSlug;
-                const ourSide = weAreP1 ? m.p1 : m.p2;
-                const oppSide = weAreP1 ? m.p2 : m.p1;
-                const ternary = ratings.toTernaryMatchOutcome(m.category);
-                const ourOutcome = weAreP1 ? ternary.p1 : ternary.p2;
-                const ourCat = weAreP1 ? m.category : invertCategory(m.category);
+      <util.PaginatedTable
+        className='matches-table'
+        head={(
+          <tr>
+            <th>Match</th>
+            <th>Version</th>
+            <th>Opponent</th>
+            <th className='center' title='Match Outcome (Game 1 / Game 2 Outcomes)'>Result</th>
+            <th className='num'>Completed</th>
+          </tr>
+        )}
+        pager={{
+          label: 'Matches pagination',
+          total: totalMatches,
+          singular: 'match',
+          plural: 'matches',
+          prevLabel: '\u2190 Newer',
+          nextLabel: 'Older \u2192',
+          server: true,
+        }}
+      >
+        {matches.length === 0 ? (
+          <tr><td colSpan={5} className='center muted'>No completed matches yet.</td></tr>
+        ) : (
+          matches.map((m, idx) => {
+            const weAreP1 = m.p1.slug === agentSlug;
+            const ourSide = weAreP1 ? m.p1 : m.p2;
+            const oppSide = weAreP1 ? m.p2 : m.p1;
+            const ternary = ratings.toTernaryMatchOutcome(m.category);
+            const ourOutcome = weAreP1 ? ternary.p1 : ternary.p2;
+            const ourCat = weAreP1 ? m.category : invertCategory(m.category);
 
-                let resNode: util.Html;
-                if (ourOutcome === 'W') {
-                  resNode = (
-                    <><span className='yes'>W</span> <span className='muted'>({ourCat})</span></>
-                  );
-                } else if (ourOutcome === 'L') {
-                  resNode = (
-                    <><span className='no'>L</span> <span className='muted'>({ourCat})</span></>
-                  );
-                } else {
-                  resNode = <>T <span className='muted'>({ourCat})</span></>;
-                }
+            let resNode: util.Html;
+            if (ourOutcome === 'W') {
+              resNode = (
+                <><span className='yes'>W</span> <span className='muted'>({ourCat})</span></>
+              );
+            } else if (ourOutcome === 'L') {
+              resNode = (
+                <><span className='no'>L</span> <span className='muted'>({ourCat})</span></>
+              );
+            } else {
+              resNode = <>T <span className='muted'>({ourCat})</span></>;
+            }
 
-                const oppHref = agentLinks[oppSide.slug];
-                const rel = render.formatRelativeTime(nowSec, m.completedAt);
-                const detailHtml = render.battleInlineDetailHtml(m, agentSlug);
-                const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
+            const oppHref = agentLinks[oppSide.slug];
+            const rel = render.formatRelativeTime(nowSec, m.completedAt);
+            const detailHtml = render.battleInlineDetailHtml(m, agentSlug);
+            const rowCls = idx >= util.TABLE_PAGE_SIZE ? 'battle-row hide' : 'battle-row';
 
-                return (
-                  <>
-                    <tr
-                      className={rowCls}
-                      data-ver={ourSide.version}
-                      data-opp={oppSide.slug}
-                      tabIndex={0}
-                      aria-expanded='false'
-                    >
-                      <td>
-                        <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
-                        <code>{m.id}</code>
-                      </td>
-                      <td><code>{ourSide.version}</code></td>
-                      <td>
-                        {util.raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
-                        <code>{oppSide.version}</code>
-                      </td>
-                      <td className='center'>{resNode}</td>
-                      <td
-                        className='num muted'
-                        data-ts={m.completedAt}
-                        {...util.localizedTitle([{epoch: m.completedAt}])}
-                      >
-                        {rel}
-                      </td>
-                    </tr>
-                    <tr className='battle-detail-row hide' data-detail-for={m.id}>
-                      <td colSpan={5}>{util.raw(detailHtml)}</td>
-                    </tr>
-                  </>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        label='Matches pagination'
-        total={totalMatches}
-        singular='match'
-        plural='matches'
-        prevLabel={'\u2190 Newer'}
-        nextLabel={'Older \u2192'}
-      />
+            return (
+              <>
+                <tr
+                  className={rowCls}
+                  data-ver={ourSide.version}
+                  data-opp={oppSide.slug}
+                  tabIndex={0}
+                  aria-expanded='false'
+                >
+                  <td>
+                    <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
+                    <code>{m.id}</code>
+                  </td>
+                  <td><code>{ourSide.version}</code></td>
+                  <td>
+                    {util.raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
+                    <code>{oppSide.version}</code>
+                  </td>
+                  <td className='center'>{resNode}</td>
+                  <td
+                    className='num muted'
+                    data-ts={m.completedAt}
+                    {...util.localizedTitle([{epoch: m.completedAt}])}
+                  >
+                    {rel}
+                  </td>
+                </tr>
+                <tr className='battle-detail-row hide' data-detail-for={m.id}>
+                  <td colSpan={5}>{util.raw(detailHtml)}</td>
+                </tr>
+              </>
+            );
+          })
+        )}
+      </util.PaginatedTable>
     </div>
   );
 }
@@ -1311,23 +1307,10 @@ function buildProfileScript(
       tbody.appendChild(frag);
     };
 
+    ${util.UPDATE_TABLE_PAGER_SCRIPT}
+
     const updatePagerControls = (pager, page, total) => {
-      if (!pager) return;
-      const totalPages = Math.max(1, Math.ceil(total / pageSize));
-      const prevBtn = pager.querySelector('[data-pager-prev]');
-      const nextBtn = pager.querySelector('[data-pager-next]');
-      const infoEl = pager.querySelector('[data-pager-info]');
-      const singular = pager.dataset.singular || 'row';
-      const plural = pager.dataset.plural || 'rows';
-      const word = total === 1 ? singular : plural;
-      pager.classList.toggle('hide', totalPages <= 1);
-      if (prevBtn) prevBtn.disabled = page <= 1;
-      if (nextBtn) nextBtn.disabled = page >= totalPages;
-      if (infoEl) {
-        infoEl.textContent =
-          'Page ' + page + ' of ' + totalPages +
-          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
-      }
+      updateTablePager(pager, page, total, pageSize);
     };
 
     const wireVersionsOrMatchupsPane = pane => {

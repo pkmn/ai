@@ -960,45 +960,42 @@ function renderTournamentStandingsNode(opts: {
     );
     return (
       <div id='standings-body'>
-        <div className='table-wrap'>
-          <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Agent</th>
-                <th className='num'>Submitted</th>
+        <util.PaginatedTable
+          head={(
+            <tr>
+              <th>#</th>
+              <th>Agent</th>
+              <th className='num'>Submitted</th>
+            </tr>
+          )}
+          pager={{
+            id: 'standings-pager',
+            label: 'Entrants pagination',
+            total: ordered.length,
+            singular: 'entrant',
+            plural: 'entrants',
+          }}
+        >
+          {ordered.map((e, idx) => {
+            const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
+            return (
+              <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+                <td><strong>{idx + 1}</strong></td>
+                <td>
+                  {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
+                  <code>{e.version}</code>
+                </td>
+                <td className='num muted'>
+                  <util.Time
+                    epoch={e.submittedAt}
+                    format='date'
+                    title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
+                  />
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {ordered.map((e, idx) => {
-                const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
-                return (
-                  <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
-                    <td><strong>{idx + 1}</strong></td>
-                    <td>
-                      {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
-                      <code>{e.version}</code>
-                    </td>
-                    <td className='num muted'>
-                      <util.Time
-                        epoch={e.submittedAt}
-                        format='date'
-                        title={[{prefix: 'Submitted ', epoch: e.submittedAt}]}
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <util.TablePager
-          id='standings-pager'
-          label='Entrants pagination'
-          total={ordered.length}
-          singular='entrant'
-          plural='entrants'
-        />
+            );
+          })}
+        </util.PaginatedTable>
       </div>
     );
   }
@@ -1014,74 +1011,71 @@ function renderTournamentStandingsNode(opts: {
 
   return (
     <div id='standings-body'>
-      <div className='table-wrap'>
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Agent</th>
-              <th className='num' title='Tournament MAP Elo ± 95% CI'>Elo</th>
-              <th className='num' title={wltTitle}>
-                W–L–T
-              </th>
-              <th className='num' title={ptsTitle}>Points</th>
-              <th className='num' title='Sonneborn-Berger tiebreak score'>S–B</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entrants.map((e, idx) => {
-              const rankNum = e.finalRank ?? idx + 1;
-              const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
-              const liveTb = findLiveTableForEntrant(liveTables, e.agentSlug, e.agentName);
-              const elo = Math.round(e.elo);
-              const ci = Math.round(1.96 * e.se);
-              const ptsStr = e.points.toFixed(1);
-              const sbStr = Math.round(e.sonnebornBerger).toLocaleString('en-US');
+      <util.PaginatedTable
+        head={(
+          <tr>
+            <th>#</th>
+            <th>Agent</th>
+            <th className='num' title='Tournament MAP Elo ± 95% CI'>Elo</th>
+            <th className='num' title={wltTitle}>
+              W–L–T
+            </th>
+            <th className='num' title={ptsTitle}>Points</th>
+            <th className='num' title='Sonneborn-Berger tiebreak score'>S–B</th>
+          </tr>
+        )}
+        pager={{
+          id: 'standings-pager',
+          label: 'Standings pagination',
+          total: entrants.length,
+          singular: 'entrant',
+          plural: 'entrants',
+        }}
+      >
+        {entrants.map((e, idx) => {
+          const rankNum = e.finalRank ?? idx + 1;
+          const href = render.resolveAgentHref(links, e.agentSlug, e.agentName);
+          const liveTb = findLiveTableForEntrant(liveTables, e.agentSlug, e.agentName);
+          const elo = Math.round(e.elo);
+          const ci = Math.round(1.96 * e.se);
+          const ptsStr = e.points.toFixed(1);
+          const sbStr = Math.round(e.sonnebornBerger).toLocaleString('en-US');
 
-              return (
-                <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
-                  <td>
-                    <strong>{rankNum}</strong>
-                    {hasSuperfinal && rankNum <= 2 && <> <span className='muted'>SF</span></>}
-                  </td>
-                  <td>
-                    {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
-                    <code>{e.version}</code>
-                    {liveTb && (
-                      <>
-                        {' '}
-                        <a
-                          href='#live'
-                          className='live-pill'
-                          data-live-table={liveTb.table}
-                          title={`Spectate live on ${liveTb.label}`}
-                        >
-                          {'\u25cf'} T{liveTb.table}
-                        </a>
-                      </>
-                    )}
-                  </td>
-                  <td className='num'>
-                    <strong>{elo}</strong> <span className='muted'>±{ci}</span>
-                  </td>
-                  <td className='num'>{e.gameWins}–{e.gameLosses}–{e.gameTies}</td>
-                  <td className='num'>
-                    <strong>{ptsStr}</strong> <span className='muted'>/ {maxRrGames}</span>
-                  </td>
-                  <td className='num'>{sbStr}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        id='standings-pager'
-        label='Standings pagination'
-        total={entrants.length}
-        singular='entrant'
-        plural='entrants'
-      />
+          return (
+            <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+              <td>
+                <strong>{rankNum}</strong>
+                {hasSuperfinal && rankNum <= 2 && <> <span className='muted'>SF</span></>}
+              </td>
+              <td>
+                {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
+                <code>{e.version}</code>
+                {liveTb && (
+                  <>
+                    {' '}
+                    <a
+                      href='#live'
+                      className='live-pill'
+                      data-live-table={liveTb.table}
+                      title={`Spectate live on ${liveTb.label}`}
+                    >
+                      {'\u25cf'} T{liveTb.table}
+                    </a>
+                  </>
+                )}
+              </td>
+              <td className='num'>
+                <strong>{elo}</strong> <span className='muted'>±{ci}</span>
+              </td>
+              <td className='num'>{e.gameWins}–{e.gameLosses}–{e.gameTies}</td>
+              <td className='num'>
+                <strong>{ptsStr}</strong> <span className='muted'>/ {maxRrGames}</span>
+              </td>
+              <td className='num'>{sbStr}</td>
+            </tr>
+          );
+        })}
+      </util.PaginatedTable>
     </div>
   );
 }
@@ -1440,41 +1434,40 @@ function renderTournamentGamesNode(opts: {
 
   return (
     <>
-      <div className='table-wrap'>
-        <table>
-          <thead>
-            <tr>
-              <th>{isMultiGame ? 'Match' : 'Game'}</th>
-              <th>Player 1</th>
-              <th>{'\u00a0'}</th>
-              <th>Player 2</th>
-              <th>{'\u00a0'}</th>
-              <th className='center'>Result</th>
-              <th className='num'>Completed</th>
-            </tr>
-          </thead>
-          <tbody id='games-tbody'>
-            {liveRows.length === 0 && completedRows.length === 0 ? (
-              <tr className='empty-row'>
-                <td colSpan={7} className='center muted'>
-                  No completed {unitPlural} yet.
-                </td>
-              </tr>
-            ) : (
-              [...liveRows, ...completedRows]
-            )}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        id='games-pager'
-        label={isMultiGame ? 'Matches pagination' : 'Games pagination'}
-        total={totalGameRows}
-        singular={unitSingular}
-        plural={unitPlural}
-        prevLabel={'\u2190 Newer'}
-        nextLabel={'Older \u2192'}
-      />
+      <util.PaginatedTable
+        tbodyId='games-tbody'
+        head={(
+          <tr>
+            <th>{isMultiGame ? 'Match' : 'Game'}</th>
+            <th>Player 1</th>
+            <th>{'\u00a0'}</th>
+            <th>Player 2</th>
+            <th>{'\u00a0'}</th>
+            <th className='center'>Result</th>
+            <th className='num'>Completed</th>
+          </tr>
+        )}
+        pager={{
+          id: 'games-pager',
+          label: isMultiGame ? 'Matches pagination' : 'Games pagination',
+          total: totalGameRows,
+          singular: unitSingular,
+          plural: unitPlural,
+          prevLabel: '\u2190 Newer',
+          nextLabel: 'Older \u2192',
+          server: true,
+        }}
+      >
+        {liveRows.length === 0 && completedRows.length === 0 ? (
+          <tr className='empty-row'>
+            <td colSpan={7} className='center muted'>
+              No completed {unitPlural} yet.
+            </td>
+          </tr>
+        ) : (
+          [...liveRows, ...completedRows]
+        )}
+      </util.PaginatedTable>
       <p className='meta meta-archive' id='games-archive-meta'>
         {archive ? (
           <>
@@ -1655,74 +1648,69 @@ export function renderArenaTournamentsSummaryHtml(opts: {
   );
 
   return String(
-    <>
-      <div className='table-wrap'>
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Name</th>
-              <th>Winner</th>
-              <th className='num'>Entrants</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map((t, idx) => {
-              const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
-              const entrants =
-                entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
-              const hideCls = idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined;
-              const dateCell = t.status === 'running' ? (
-                <td>
-                  <a href={tourHref} className='live-pill'>{'\u25cf'} LIVE</a>
-                </td>
-              ) : (
-                <td>
-                  <util.Time
-                    epoch={t.startsAt}
-                    format='date'
-                    title={[{prefix: 'Starts ', epoch: t.startsAt}]}
-                  />
-                </td>
-              );
-              const displayName = formatTournamentName(t.name);
+    <util.PaginatedTable
+      head={(
+        <tr>
+          <th>Date</th>
+          <th>Name</th>
+          <th>Winner</th>
+          <th className='num'>Entrants</th>
+        </tr>
+      )}
+      pager={{
+        id: 'tournaments-pager',
+        label: 'Tournaments pagination',
+        total: sorted.length,
+        singular: 'tournament',
+        plural: 'tournaments',
+      }}
+    >
+      {sorted.map((t, idx) => {
+        const tourHref = `/arena/tournaments/${encodeURIComponent(t.id)}/`;
+        const entrants =
+          entrantsByTournament?.get(t.id) ?? db.getTournamentEntrants(t.id);
+        const hideCls = idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined;
+        const dateCell = t.status === 'running' ? (
+          <td>
+            <a href={tourHref} className='live-pill'>{'\u25cf'} LIVE</a>
+          </td>
+        ) : (
+          <td>
+            <util.Time
+              epoch={t.startsAt}
+              format='date'
+              title={[{prefix: 'Starts ', epoch: t.startsAt}]}
+            />
+          </td>
+        );
+        const displayName = formatTournamentName(t.name);
 
-              let winnerCell: util.Child = <td className='muted'>-</td>;
-              if (t.status === 'completed') {
-                const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
-                if (winner) {
-                  const wHref = render.resolveAgentHref(links, winner.agentSlug, winner.agentName);
-                  winnerCell = (
-                    <td>
-                      {util.raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
-                      <code>{winner.version}</code>
-                    </td>
-                  );
-                }
-              }
+        let winnerCell: util.Child = <td className='muted'>-</td>;
+        if (t.status === 'completed') {
+          const winner = entrants.find(e => e.finalRank === 1) ?? entrants[0];
+          if (winner) {
+            const wHref = render.resolveAgentHref(links, winner.agentSlug, winner.agentName);
+            winnerCell = (
+              <td>
+                {util.raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
+                <code>{winner.version}</code>
+              </td>
+            );
+          }
+        }
 
-              return (
-                <tr className={hideCls}>
-                  {dateCell}
-                  <td>
-                    <a href={tourHref} className='subtle'><strong>{displayName}</strong></a>
-                  </td>
-                  {winnerCell}
-                  <td className='num'>{entrants.length}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <util.TablePager
-        id='tournaments-pager'
-        label='Tournaments pagination'
-        total={sorted.length}
-        singular='tournament'
-        plural='tournaments'
-      />
-    </>
+        return (
+          <tr className={hideCls}>
+            {dateCell}
+            <td>
+              <a href={tourHref} className='subtle'><strong>{displayName}</strong></a>
+            </td>
+            {winnerCell}
+            <td className='num'>{entrants.length}</td>
+          </tr>
+        );
+      })}
+    </util.PaginatedTable>
   );
 }
 
@@ -2210,7 +2198,8 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       applyTableHash('smooth');
     });
 
-    const pageSize = 25;
+    ${util.UPDATE_TABLE_PAGER_SCRIPT}
+    const pageSize = ${util.TABLE_PAGE_SIZE};
     let standingsPage = 1;
     let gamesPage = 1;
     let gamesFetchSeq = 0;
@@ -2264,12 +2253,6 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       if (standingsPage > totalPages) standingsPage = totalPages;
       if (standingsPage < 1) standingsPage = 1;
       const start = (standingsPage - 1) * pageSize;
-      const hideCls = totalPages <= 1 ? ' hide' : '';
-      const prevDis = standingsPage <= 1 ? ' disabled' : '';
-      const nextDis = standingsPage >= totalPages ? ' disabled' : '';
-      const word = total === 1 ? 'entrant' : 'entrants';
-      const info = 'Page ' + standingsPage + ' of ' + totalPages +
-        ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
 
       if (status === 'scheduled') {
         const ordered = [...standings].sort((a, b) => {
@@ -2290,15 +2273,21 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         bodyEl.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
           '<th>#</th><th>Agent</th><th class="num">Submitted</th>' +
           '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-          '<div class="pager' + hideCls +
-          '" id="standings-pager" aria-label="Entrants pagination" ' +
-          'data-table-pager data-page-size="25" data-singular="entrant" data-plural="entrants">' +
-          '<button type="button" class="pager-btn" id="standings-pager-prev" ' +
-          'data-pager-prev' + prevDis + '>&larr; Prev</button>' +
-          '<span class="pager-info muted" id="standings-pager-info" data-pager-info>' +
-          esc(info) + '</span>' +
-          '<button type="button" class="pager-btn" id="standings-pager-next" ' +
-          'data-pager-next' + nextDis + '>Next &rarr;</button></div>';
+          ${JSON.stringify(String(
+            <util.TablePager
+              id='standings-pager'
+              label='Entrants pagination'
+              total={0}
+              singular='entrant'
+              plural='entrants'
+            />
+          ))};
+        updateTablePager(
+          document.getElementById('standings-pager'),
+          standingsPage,
+          total,
+          pageSize
+        );
         return;
       }
 
@@ -2344,15 +2333,16 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
         '<th class="num" title="' + esc(ptsTitle) + '">Points</th>' +
         '<th class="num" title="Sonneborn-Berger tiebreak score">S–B</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-        '<div class="pager' + hideCls +
-        '" id="standings-pager" aria-label="Standings pagination" ' +
-        'data-table-pager data-page-size="25" data-singular="entrant" data-plural="entrants">' +
-        '<button type="button" class="pager-btn" id="standings-pager-prev" ' +
-        'data-pager-prev' + prevDis + '>&larr; Prev</button>' +
-        '<span class="pager-info muted" id="standings-pager-info" data-pager-info>' +
-        esc(info) + '</span>' +
-        '<button type="button" class="pager-btn" id="standings-pager-next" ' +
-        'data-pager-next' + nextDis + '>Next &rarr;</button></div>';
+        ${JSON.stringify(String(
+          <util.TablePager
+            id='standings-pager'
+            label='Standings pagination'
+            total={0}
+            singular='entrant'
+            plural='entrants'
+          />
+        ))};
+      updateTablePager(document.getElementById('standings-pager'), standingsPage, total, pageSize);
     };
 
     const renderCrosstable = () => {
@@ -2607,22 +2597,14 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
     };
 
     const updateGamesPagerControls = () => {
-      const {total, totalPages} = getGamesPaginationCounts();
-      if (gamesPage > totalPages) gamesPage = totalPages;
-      if (gamesPage < 1) gamesPage = 1;
-      const pager = document.getElementById('games-pager');
-      const prevBtn = document.getElementById('games-pager-prev');
-      const nextBtn = document.getElementById('games-pager-next');
-      const infoEl = document.getElementById('games-pager-info');
-      if (pager && prevBtn && nextBtn && infoEl) {
-        pager.classList.toggle('hide', totalPages <= 1);
-        prevBtn.disabled = gamesPage <= 1;
-        nextBtn.disabled = gamesPage >= totalPages;
-        const word = total === 1 ? unitSingular : unitPlural;
-        infoEl.textContent =
-          'Page ' + gamesPage + ' of ' + totalPages +
-          ' (' + total.toLocaleString('en-US') + ' ' + word + ')';
-      }
+      const {total} = getGamesPaginationCounts();
+      const state = updateTablePager(
+        document.getElementById('games-pager'),
+        gamesPage,
+        total,
+        pageSize
+      );
+      gamesPage = state.page;
     };
 
     const applyPage1Visibility = () => {

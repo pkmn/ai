@@ -1169,7 +1169,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       section: 'battles',
       title: 'Page 2',
       path: '/arena/battles/',
-      click: '#battles-next',
+      click: '#battles-pager-next',
     },
     {
       name: 'arena-battles-idle',
