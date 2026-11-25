@@ -3190,6 +3190,16 @@ describe('createServerApp production HTTP hardening', () => {
     expect(viewerBlock).toContain("form-action 'none';");
   });
 
+  test('nginx serves content-hashed base stylesheet as immutable before generic css/js', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const hashedIdx = conf.indexOf('location ~ ^/index\\.[0-9a-f]+\\.css$ {');
+    const genericIdx = conf.indexOf('location ~* \\.(css|js)$ {');
+    expect(hashedIdx).toBeGreaterThan(0);
+    expect(genericIdx).toBeGreaterThan(hashedIdx);
+    const hashedBlock = conf.slice(hashedIdx, conf.indexOf('}', hashedIdx) + 1);
+    expect(hashedBlock).toContain('Cache-Control "public, max-age=31536000, immutable"');
+  });
+
   test('retains locked seasonal rosters on settling pools ladders', async () => {
     const vgcId = 'gen9championsvgc2026regmc';
     const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];
