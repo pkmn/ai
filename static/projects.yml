@@ -536,19 +536,21 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: Porygon2
+- name: TwinBeam
   active: 2024 # July 3
-  license: MIT
-  source: https://github.com/spktrm/porygon2
   engine:
     - name: "@pkmn/sim"
       url: https://github.com/pkmn/ps/tree/main/sim
     - name: "@pkmn/client"
       url: https://github.com/pkmn/ps/tree/main/client
-  language: Python
+  language: [Python, TypeScript]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    logo: twinbeam.svg
+    owners:
+      spktrm: spktrm.620853
 - name: Optimal Pokémon Battler
   active: 2024 # November 18
   source: https://github.com/Siddapa/optimal-pkmn-battler
