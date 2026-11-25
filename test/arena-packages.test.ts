@@ -375,7 +375,7 @@ describe('arena packages & static assets', () => {
       const origPause = internal.pauseSlot.bind(game);
       let p2Pauses = 0;
       internal.pauseSlot = player => {
-        if (player.slot === 'p2' && ++p2Pauses === 2) {
+        if (player.slot === 'p2' && ++p2Pauses === 1) {
           internal.forceLose('p2', 'crash');
           return;
         }

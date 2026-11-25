@@ -321,7 +321,6 @@ export class TimeSlicedArenaGame {
     // Ignore EPIPE on stdin if child exits mid-write
     proc.stdin.on('error', () => undefined);
 
-    this.pauseSlot(player);
     return player;
   }
 
@@ -570,28 +569,32 @@ export class TimeSlicedArenaGame {
   }
 
   private async waitForPlayerReady(
-    player: SandboxedPlayer,
-    p1: SandboxedPlayer,
-    p2: SandboxedPlayer
+    slot: PlayerSlot,
+    spec: AgentLaunchSpec
   ): Promise<boolean> {
     if (this.ended) return false;
     if (this.onTurn) {
       await this.onTurn({
         phase: 'init',
         turn: 0,
-        activeSlot: player.slot,
+        activeSlot: slot,
         turnStartedAt: Math.floor(Date.now() / 1000),
         turnBudgetSeconds: Math.round(this.readyGraceMillis / 1000),
         incrementSeconds: Math.round(this.timers.fullTurnIncrementMillis / 1000),
         omniscientLog: '',
-        p1: this.buildTurnSlotInfo(p1, 0),
-        p2: this.buildTurnSlotInfo(p2, 1),
+        p1: this.buildTurnSlotInfo(this.p1, 0),
+        p2: this.buildTurnSlotInfo(this.p2, 1),
       });
     }
 
+    // Spawn each slot only when its init slice starts (after the prior slot is paused) so we never
+    // race `arena pause` against `arena run`'s scratch wipe and `limit` bootstrap.
+    const player = this.spawnPlayer(slot, spec);
+    if (slot === 'p1') this.p1 = player;
+    else this.p2 = player;
+
     let remainingBudgetMillis = this.readyGraceMillis;
     let linesRead = 0;
-    this.resumeSlot(player);
     let slotPaused = false;
     const readyStartNs = process.hrtime.bigint();
 
@@ -636,7 +639,7 @@ export class TimeSlicedArenaGame {
       if (this.activeTurnState) {
         this.activeTurnState.decisionStartNs = undefined;
       }
-      if (!slotPaused) {
+      if (!slotPaused && !this.ended) {
         this.pauseSlot(player);
       }
     }
@@ -789,7 +792,7 @@ export class TimeSlicedArenaGame {
       if (this.activeTurnState) {
         this.activeTurnState.decisionStartNs = undefined;
       }
-      if (!slotPaused) {
+      if (!slotPaused && !this.ended) {
         this.pauseSlot(player);
       }
     }
@@ -806,15 +809,12 @@ export class TimeSlicedArenaGame {
     this.timers = resolved.timers;
     this.sendUtm = resolved.sendUtm;
 
-    const p1 = this.spawnPlayer('p1', this.p1Opts.spec);
-    const p2 = this.spawnPlayer('p2', this.p2Opts.spec);
-    this.p1 = p1;
-    this.p2 = p2;
-
     try {
-      const p1Ready = await this.waitForPlayerReady(p1, p1, p2);
-      const p2Ready = p1Ready ? await this.waitForPlayerReady(p2, p1, p2) : false;
-      if (!p1Ready || !p2Ready || this.ended) {
+      const p1Ready = await this.waitForPlayerReady('p1', this.p1Opts.spec);
+      const p2Ready = p1Ready ? await this.waitForPlayerReady('p2', this.p2Opts.spec) : false;
+      const p1 = this.p1;
+      const p2 = this.p2;
+      if (!p1Ready || !p2Ready || !p1 || !p2 || this.ended) {
         await Promise.all([
           this.stopPlayerForRamRead(p1),
           this.stopPlayerForRamRead(p2),
@@ -1010,7 +1010,19 @@ export class TimeSlicedArenaGame {
     };
   }
 
-  private buildTurnSlotInfo(player: SandboxedPlayer, sideIdx: 0 | 1): TurnSlotInfo {
+  private buildTurnSlotInfo(
+    player: SandboxedPlayer | undefined,
+    sideIdx: 0 | 1
+  ): TurnSlotInfo {
+    if (!player) {
+      return {
+        bankSeconds: Math.max(0, Math.round(this.timers.startingBankMillis / 1000)),
+        ram: 64,
+        initMillis: 0,
+        lastTurnMillis: 0,
+        meanTurnMillis: 0,
+      };
+    }
     const slot = sideIdx === 0 ? 'p1' : 'p2';
     const pokemon = this.battle?.getPokemon(slot);
     const info = this.infoCoalescer.getLive(slot);
@@ -1036,8 +1048,22 @@ export class TimeSlicedArenaGame {
     };
   }
 
-  private buildPlayerGameResult(player: SandboxedPlayer, sideIdx: 0 | 1): PlayerGameResult {
+  private buildPlayerGameResult(
+    player: SandboxedPlayer | undefined,
+    sideIdx: 0 | 1
+  ): PlayerGameResult {
     const slot = sideIdx === 0 ? 'p1' : 'p2';
+    if (!player) {
+      return {
+        bankSeconds: Math.max(0, Math.round(this.timers.startingBankMillis / 1000)),
+        peakRam: 64,
+        initMillis: 0,
+        meanTurnMillis: 0,
+        lastTurnMillis: 0,
+        infoCompliance: this.infoCoalescer.getCompliance(slot),
+        errors: engine.emptyProtocolErrorCounts(),
+      };
+    }
     const pokemon = this.battle?.getPokemon(slot);
     const info = this.infoCoalescer.getLive(slot);
     const teamPreviewMillis = player.telemetry.teamPreviewCount > 0

@@ -1174,4 +1174,82 @@ describe('TimeSlicedArenaGame', () => {
     expect(arbiter.computeEffectiveCpuCores(2540, 1000)).toBe(2.5);
     expect(arbiter.computeEffectiveCpuCores(15000, 1000)).toBe(10);
   });
+
+  test('spawns p2 only after p1 emits /ready and skips spawning p2 when p1 crashes on init',
+    async () => {
+      const events: string[] = [];
+      const markerFile = path.join(tmpDir, 'p2-spawned.marker');
+      const p2MarkerScript = path.join(tmpDir, 'p2-marker-agent.js');
+      fs.writeFileSync(
+        p2MarkerScript,
+        [
+          '#!/usr/bin/env node',
+          'const fs = require("fs");',
+          'const readline = require("readline");',
+          `fs.writeFileSync(${JSON.stringify(markerFile)}, "spawned");`,
+          'process.stdout.write("/ready\\n");',
+          'const rl = readline.createInterface({input: process.stdin});',
+          'rl.on("line", line => {',
+          '  if (!line.startsWith("|request|")) return;',
+          '  const req = JSON.parse(line.slice(9));',
+          '  if (req.wait) return;',
+          '  process.stdout.write(req.teamPreview ? "/team 123456\\n" : "default\\n");',
+          '});',
+        ].join('\n'),
+        {mode: 0o755}
+      );
+
+      // 1. Normal game: p1 spawns, emits /ready, pauses; only then does p2 spawn and pause.
+      const game = new arbiter.TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1: {spec: {mode: 'native', target: defaultAgentScript}, teamPacked: TEAM_ONE},
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [p2MarkerScript]},
+          teamPacked: TEAM_TWO,
+        },
+        smokeStopAfterTurn: 1,
+        devMode: true,
+      });
+      const internal = game as unknown as {
+        spawnPlayer: (slot: 'p1' | 'p2', spec: arbiter.AgentLaunchSpec) => unknown;
+        pauseSlot: (player: {slot: 'p1' | 'p2'}) => void;
+      };
+      const origSpawn = internal.spawnPlayer.bind(game);
+      const origPause = internal.pauseSlot.bind(game);
+      internal.spawnPlayer = (slot, spec) => {
+        events.push(`spawn:${slot}`);
+        return origSpawn(slot, spec);
+      };
+      internal.pauseSlot = player => {
+        events.push(`pause:${player.slot}`);
+        origPause(player);
+      };
+      const okRes = await game.run();
+      expect(okRes.endReason).toBe('smoke-complete');
+      expect(events.slice(0, 4)).toEqual(['spawn:p1', 'pause:p1', 'spawn:p2', 'pause:p2']);
+
+      // 2. If p1 crashes before /ready, p2 is never spawned at all.
+      fs.rmSync(markerFile, {force: true});
+      const crashInitScript = path.join(tmpDir, 'crash-init-agent.js');
+      fs.writeFileSync(crashInitScript, '#!/usr/bin/env node\nprocess.exit(1);\n', {mode: 0o755});
+      const failRes = await new arbiter.TimeSlicedArenaGame({
+        format: 'gen9customgame',
+        seed: '1,2,3,4',
+        p1: {
+          spec: {mode: 'native', target: process.execPath, args: [crashInitScript]},
+          teamPacked: TEAM_ONE,
+        },
+        p2: {
+          spec: {mode: 'native', target: process.execPath, args: [p2MarkerScript]},
+          teamPacked: TEAM_TWO,
+        },
+        devMode: true,
+      }).run();
+      expect(failRes.winner).toBe('p2');
+      expect(failRes.endReason).toBe('crash');
+      expect(failRes.p1.exitCode).toBe(1);
+      expect(failRes.p2.exitCode).toBeUndefined();
+      expect(fs.existsSync(markerFile)).toBe(false);
+    });
 });
