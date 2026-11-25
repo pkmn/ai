@@ -197,12 +197,102 @@ static void write_cpu_millis(const char *slot, uint64_t cpu_millis) {
   write_state_u64("cpu_millis", slot, (unsigned long long)cpu_millis);
 }
 
+static char proc_state_char(char p_stat) {
+  switch (p_stat) {
+    case SSTOP: return 'T';
+    case SZOMB: return 'Z';
+    case SRUN: return 'R';
+    case SSLEEP: return 'S';
+    case SIDL: return 'I';
+    default: return '?';
+  }
+}
+
+// List UID processes using immutable kernel `proc_pidpath()` rather than `ps -o comm=`
+// (which reports mutable `argv[0]` on macOS) so agents cannot spoof Apple XPC helper paths.
+static int print_uid_procs(uid_t target_uid) {
+  int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_UID, (int)target_uid};
+  size_t buf_size = 0;
+  if (sysctl(mib, 4, NULL, &buf_size, NULL, 0) < 0) {
+    perror("sysctl KERN_PROC_UID size");
+    return 1;
+  }
+  if (buf_size == 0) {
+    return 0;
+  }
+
+  buf_size += 16 * sizeof(struct kinfo_proc);
+  struct kinfo_proc *procs = NULL;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    procs = malloc(buf_size);
+    if (!procs) {
+      fprintf(stderr, "Out of memory listing processes\n");
+      return 1;
+    }
+    size_t req_size = buf_size;
+    if (sysctl(mib, 4, procs, &req_size, NULL, 0) == 0) {
+      buf_size = req_size;
+      break;
+    }
+    int saved_errno = errno;
+    free(procs);
+    procs = NULL;
+    if (saved_errno != ENOMEM) {
+      errno = saved_errno;
+      perror("sysctl KERN_PROC_UID");
+      return 1;
+    }
+    buf_size *= 2;
+  }
+  if (!procs) {
+    fprintf(stderr, "Failed to size process table for UID %u\n", (unsigned)target_uid);
+    return 1;
+  }
+
+  size_t count = buf_size / sizeof(struct kinfo_proc);
+  pid_t self_pid = getpid();
+  for (size_t i = 0; i < count; i++) {
+    pid_t p = procs[i].kp_proc.p_pid;
+    if (p <= 0 || p == self_pid) continue;
+    pid_t ppid = procs[i].kp_eproc.e_ppid;
+    char st = proc_state_char(procs[i].kp_proc.p_stat);
+    char path[PROC_PIDPATHINFO_MAXSIZE];
+    int path_len = proc_pidpath(p, path, (uint32_t)sizeof(path));
+    if (path_len > 0) {
+      if ((size_t)path_len >= sizeof(path)) path_len = (int)sizeof(path) - 1;
+      path[path_len] = '\0';
+      for (int j = 0; j < path_len; j++) {
+        if ((unsigned char)path[j] < 0x20 || path[j] == 0x7f) {
+          path[j] = '?';
+        }
+      }
+    }
+    printf("%d %d %c %s\n", (int)p, (int)ppid, st, path_len > 0 ? path : "-");
+  }
+
+  free(procs);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   // Fail closed before `fork()`: require root, dedicated slot `p1`/`p2` (UID >= 500), and
   // `/usr/bin/sandbox-exec -f /opt/arena/etc/sandbox.sb`.
   if (geteuid() != 0) {
     fprintf(stderr, "limit must run as root via sudoers\n");
     return 126;
+  }
+  if (argc == 3 && strcmp(argv[1], "--procs") == 0) {
+    const char *slot = argv[2];
+    if (strcmp(slot, "p1") != 0 && strcmp(slot, "p2") != 0) {
+      fprintf(stderr, "Invalid slot: %s\n", slot);
+      return 126;
+    }
+    struct passwd *target_pw = getpwnam(slot);
+    if (target_pw == NULL || target_pw->pw_uid < 500) {
+      fprintf(stderr, "Failed to resolve unprivileged slot user: %s\n", slot);
+      return 126;
+    }
+    return print_uid_procs(target_pw->pw_uid);
   }
   if (argc < 6 || (strcmp(argv[1], "p1") != 0 && strcmp(argv[1], "p2") != 0)) {
     fprintf(

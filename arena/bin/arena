@@ -20,6 +20,11 @@ fi
 
 SCRATCH_DIR="/Volumes/$(echo "$SLOT" | tr 'a-z' 'A-Z')/scratch"
 CONTAINER_NAME="arena-${SLOT}"
+LAUNCHER_USERS="root"
+CURRENT_USER="$(id -un)"
+if [[ "$CURRENT_USER" != "root" && "$CURRENT_USER" != "p1" && "$CURRENT_USER" != "p2" ]]; then
+  LAUNCHER_USERS="root,${CURRENT_USER}"
+fi
 
 # Read cgroup peak memory and CPU time from the Podman VM host WITHOUT executing any binary inside
 # the untrusted container (`podman exec`), so a malicious `/bin/cat` can neither hang the daemon nor
@@ -51,24 +56,43 @@ record_container_peak_ram() {
 
 native_agent_procs() {
   # Exclude macOS `launchd` (PPID 1) per-UID XPC helpers (`/usr/sbin/distnoted`,
-  # `/usr/sbin/cfprefsd`, `/System/Library/*`) that ignore `SIGSTOP` or auto-respawn after
-  # `SIGKILL`. `sandbox.sb` denies `process-exec` on `/usr/sbin` and `/System`.
-  /bin/ps -U "$SLOT" -o pid=,ppid=,state=,comm= 2>/dev/null | awk '
+  # `/usr/sbin/cfprefsd`, `/usr/libexec/*`, `/System/Library/*`) that ignore `SIGSTOP` or
+  # auto-respawn after `SIGKILL`. Query via `limit --procs` (immutable kernel `proc_pidpath()`,
+  # NOT `ps -o comm=` which reports mutable `argv[0]`), since `sandbox.sb` denies `process-exec`
+  # on `/usr/sbin`, `/usr/libexec`, and `/System`. Exit non-zero (fail closed) if `limit` fails.
+  sudo -n /opt/arena/bin/limit --procs "$SLOT" | awk '
     {
       pid = $1; ppid = $2; st = substr($3, 1, 1)
       $1 = $2 = $3 = ""
       sub(/^[ \t]+/, "")
-      if (ppid == 1 && ($0 == "/usr/sbin/distnoted" || $0 == "/usr/sbin/cfprefsd" || index($0, "/System/Library/") == 1)) next
+      if (ppid == 1 && ($0 == "/usr/sbin/distnoted" || $0 == "/usr/sbin/cfprefsd" || index($0, "/usr/libexec/") == 1 || index($0, "/System/Library/") == 1)) next
       print pid ":" st
     }
   ' | sort
 }
 
+# Drain `ps` completely before exiting so `set -o pipefail` never observes SIGPIPE (141).
+# Scope to launcher owners (`root` + invoking non-slot user) so `p1`/`p2` cannot spoof argv.
+native_slot_launcher_alive() {
+  /bin/ps -U "$LAUNCHER_USERS" -o command= 2>/dev/null | awk -v slot="$SLOT" '
+    $0 ~ ("(^|/)limit " slot " ") || $0 ~ ("(^|/)arena run " slot " native ") { found = 1 }
+    END { exit (found ? 0 : 1) }
+  '
+}
+
+container_launcher_alive() {
+  /bin/ps -U "$LAUNCHER_USERS" -o command= 2>/dev/null | awk -v slot="$SLOT" -v cname="$CONTAINER_NAME" '
+    $0 ~ ("(^|/)arena run " slot " container ") || ($0 ~ /(^|\/)podman run / && index($0, cname) > 0) { found = 1 }
+    END { exit (found ? 0 : 1) }
+  '
+}
+
 kill_native_slot_procs() {
-  local pass
+  local pass procs
   for pass in {1..10}; do
     sudo -n /usr/bin/killall -9 -u "$SLOT" 2>/dev/null || true
-    if [[ -z "$(native_agent_procs)" ]]; then
+    procs="$(native_agent_procs)"
+    if [[ -z "$procs" ]]; then
       return 0
     fi
     sleep 0.02
@@ -158,9 +182,15 @@ case "$ACTION" in
   pause)
     if [[ "$MODE" == "container" ]]; then
       paused=0
+      state=""
+      SECONDS=0
       for _ in {1..80}; do
         state="$(podman container inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
         if [[ "$state" == "paused" || "$state" == "exited" || "$state" == "dead" ]]; then
+          paused=1
+          break
+        fi
+        if [[ -z "$state" ]] && ! container_launcher_alive; then
           paused=1
           break
         fi
@@ -171,6 +201,9 @@ case "$ACTION" in
             break
           fi
         fi
+        if (( SECONDS >= 6 )); then
+          break
+        fi
         sleep 0.025
       done
       if (( paused == 0 )); then
@@ -178,23 +211,38 @@ case "$ACTION" in
         exit 1
       fi
     elif [[ "$MODE" == "native" ]]; then
-      # Wait for `limit` to drop its child to UID `$SLOT`, then converge `killall -STOP` across
-      # consecutive process-table snapshots so racing child forks cannot escape `SIGSTOP`. Treat
-      # `:Z` zombies as already stopped: a `:T`-stopped parent cannot reap an already-dead child
-      # until resumed, so waiting for `:Z` to become `:T` deadlocks.
+      # If `arena run` is still wiping scratch / launching `limit`, wait separately before starting
+      # the freeze-convergence loop so startup latency cannot exhaust convergence retries. If the
+      # launcher is already gone with no UID `$SLOT` processes left, the agent has already exited.
+      # Bound loops by wall-clock `SECONDS` so `arena pause` finishes before `arbiter.ts`'s timeout.
       saw_procs=0
+      SECONDS=0
+      for _ in {1..200}; do
+        procs="$(native_agent_procs)"
+        if [[ -n "$procs" ]]; then
+          saw_procs=1
+          break
+        fi
+        if ! native_slot_launcher_alive; then
+          exit 0
+        fi
+        if (( SECONDS >= 5 )); then
+          break
+        fi
+        sleep 0.025
+      done
+      if (( saw_procs == 0 )); then
+        echo "Timed out waiting for UID $SLOT processes to start" >&2
+        exit 1
+      fi
+
+      # Converge `killall -STOP` across consecutive process-table snapshots so racing child forks
+      # cannot escape `SIGSTOP`. Treat `:Z` zombies as already stopped: a `:T`-stopped parent cannot
+      # reap an already-dead child until resumed, so waiting for `:Z` to become `:T` deadlocks.
       converged=0
       prev_snap=""
+      SECONDS=0
       for _ in {1..80}; do
-        if [[ -z "$(native_agent_procs)" ]]; then
-          if (( saw_procs == 1 )); then
-            converged=1
-            break
-          fi
-          sleep 0.025
-          continue
-        fi
-        saw_procs=1
         sudo -n -u "$SLOT" /usr/bin/killall -STOP -u "$SLOT" 2>/dev/null || true
         snap="$(native_agent_procs)"
         if [[ -z "$snap" ]]; then
@@ -209,6 +257,9 @@ case "$ACTION" in
           prev_snap="$snap"
         else
           prev_snap=""
+        fi
+        if (( SECONDS >= 4 )); then
+          break
         fi
         sleep 0.015
       done

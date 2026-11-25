@@ -399,13 +399,15 @@ describe('arena sandbox & tourney-relay', () => {
 
     test('limit binary fails closed when slot privilege drop is unavailable', () => {
       if (process.platform !== 'darwin') return;
-      let status: number | undefined;
-      try {
-        execFileSync(limitBin, ['p1', '/usr/bin/true'], {stdio: 'pipe'});
-      } catch (err) {
-        status = (err as {status?: number}).status;
+      for (const args of [['p1', '/usr/bin/true'], ['--procs', 'p1']]) {
+        let status: number | undefined;
+        try {
+          execFileSync(limitBin, args, {stdio: 'pipe'});
+        } catch (err) {
+          status = (err as {status?: number}).status;
+        }
+        expect(status).toBe(126);
       }
-      expect(status).toBe(126);
     });
   });
 });

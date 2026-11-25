@@ -134,6 +134,7 @@ describe('arena packages & static assets', () => {
       expect(sudoers).not.toContain('/usr/sbin/ipcs');
       expect(sudoers).toContain('/usr/bin/ipcs -m');
       expect(sudoers).toContain('pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit p1');
+      expect(sudoers).toContain('pkmn ALL=(root) NOPASSWD: /opt/arena/bin/limit --procs p1');
       expect(sudoers).toContain('/usr/bin/killall -STOP -u p1');
       expect(sudoers).toContain('/usr/bin/killall -CONT -u p1');
       expect(sudoers).toContain('/usr/bin/find /Volumes/P1/scratch -mindepth 1 -delete');
@@ -146,6 +147,9 @@ describe('arena packages & static assets', () => {
       expect(limitC).not.toContain('.peak_ram');
       expect(limitC).toContain('renameat(');
       expect(limitC).toContain('PRIO_DARWIN_PROCESS');
+      expect(limitC).toContain('proc_pidpath(');
+      expect(arenaScript).toContain('sudo -n /opt/arena/bin/limit --procs "$SLOT"');
+      expect(arenaScript).toContain('/bin/ps -U "$LAUNCHER_USERS" -o command=');
       expect(sandbox).toContain('(subpath "/opt/arena/stats")');
       expect(limitC).toContain('setenv("PKMN_STATS_DIR", "/opt/arena/stats", 1)');
       expect(arenaScript).toContain('--env PKMN_STATS_DIR=/opt/arena/stats');
@@ -215,54 +219,140 @@ describe('arena packages & static assets', () => {
         '87771     1 T    /usr/sbin/cfprefsd',
         '87802     1 S    /usr/sbin/distnoted',
         '87803 87719 S    /usr/sbin/distnoted',
+        '87804     1 S    /usr/libexec/MTLAssetUpgraderD',
+        '87805 87719 S    /usr/libexec/helper',
       ].join('\n');
       const filtered = execFileSync('awk', [match![1]], {
         input: `${samplePs}\n`,
         encoding: 'utf8',
       }).trim().split('\n').sort();
-      expect(filtered).toEqual(['87719:T', '87720:S', '87803:S']);
+      expect(filtered).toEqual(['87719:T', '87720:S', '87803:S', '87805:S']);
     });
 
-    test('converges native pause across :Z zombies without deadlocking', () => {
-      const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
-      const pauseRe = new RegExp(
-        '\\n  pause\\)[\\s\\S]*?\\n    elif \\[\\[ "\\$MODE" == "native" \\]\\]; then' +
-        '([\\s\\S]*?)\\n    fi\\n    ;;'
-      );
-      const pauseMatch = pauseRe.exec(arenaScript);
-      expect(pauseMatch).toBeTruthy();
-      const nativePauseBody = pauseMatch![1];
+    test('converges native pause across :Z zombies and exits cleanly when slot already exited',
+      () => {
+        const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+        const pauseRe = new RegExp(
+          '\\n  pause\\)[\\s\\S]*?\\n    elif \\[\\[ "\\$MODE" == "native" \\]\\]; then' +
+          '([\\s\\S]*?)\\n    fi\\n    ;;'
+        );
+        const pauseMatch = pauseRe.exec(arenaScript);
+        expect(pauseMatch).toBeTruthy();
+        const nativePauseBody = pauseMatch![1];
 
-      const runPauseHarness = (preamble: string) => {
-        const driver = [
-          'set -euo pipefail',
-          'SLOT=p1',
-          'sleep() { :; }',
-          'sudo() { :; }',
-          preamble,
-          nativePauseBody,
-        ].join('\n');
-        return execFileSync('bash', ['-c', driver], {
-          encoding: 'utf8',
-          stdio: ['ignore', 'pipe', 'pipe'],
-          timeout: 5_000,
-        });
-      };
+        const runPauseHarness = (preamble: string) => {
+          const driver = [
+            'set -euo pipefail',
+            'SLOT=p1',
+            'sleep() { :; }',
+            'sudo() { :; }',
+            preamble,
+            nativePauseBody,
+          ].join('\n');
+          return execFileSync('bash', ['-c', driver], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'pipe'],
+            timeout: 5_000,
+          });
+        };
 
-      // 1. Stopped parent (:T) with unreaped zombie child (:Z) must converge cleanly.
-      expect(() => runPauseHarness(
-        'native_agent_procs() { printf "1001:T\\n1002:Z\\n"; }'
-      )).not.toThrow();
+        // 1. Stopped parent (:T) with unreaped zombie child (:Z) must converge cleanly.
+        expect(() => runPauseHarness([
+          'native_agent_procs() { printf "1001:T\\n1002:Z\\n"; }',
+          'native_slot_launcher_alive() { return 0; }',
+        ].join('\n'))).not.toThrow();
 
-      // 2. Live runnable (:R) process never freezes -> fails closed.
-      let failedStderr = '';
-      try {
-        runPauseHarness('native_agent_procs() { printf "1001:R\\n"; }');
-      } catch (err) {
-        failedStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
-      }
-      expect(failedStderr).toContain('Failed to freeze all processes for UID p1');
-    });
+        // 2. Already-exited slot (no procs and no launcher) exits 0 immediately.
+        expect(() => runPauseHarness([
+          'native_agent_procs() { :; }',
+          'native_slot_launcher_alive() { return 1; }',
+        ].join('\n'))).not.toThrow();
+
+        // 3. Slow launcher startup (>80 empty polls) does not eat the convergence budget.
+        const countFile = path.join(tmpDir, 'pause-poll-count');
+        fs.writeFileSync(countFile, '');
+        expect(() => runPauseHarness([
+          `COUNT_FILE=${JSON.stringify(countFile)}`,
+          'native_agent_procs() {',
+          '  printf x >> "$COUNT_FILE"',
+          '  if (( $(wc -c < "$COUNT_FILE") <= 90 )); then return 0; fi',
+          '  printf "1001:T\\n"',
+          '}',
+          'native_slot_launcher_alive() { return 0; }',
+        ].join('\n'))).not.toThrow();
+
+        // 4. Live runnable (:R) process never freezes -> fails closed.
+        let failedStderr = '';
+        try {
+          runPauseHarness([
+            'native_agent_procs() { printf "1001:R\\n"; }',
+            'native_slot_launcher_alive() { return 0; }',
+          ].join('\n'));
+        } catch (err) {
+          failedStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
+        }
+        expect(failedStderr).toContain('Failed to freeze all processes for UID p1');
+
+        // 5. Zombie reaped mid-freeze (empty exit-0 snapshot on pass 2) converges cleanly.
+        const exitMidCountFile = path.join(tmpDir, 'pause-exit-mid-count');
+        fs.writeFileSync(exitMidCountFile, '');
+        expect(() => runPauseHarness([
+          `COUNT_FILE=${JSON.stringify(exitMidCountFile)}`,
+          'native_agent_procs() {',
+          '  printf x >> "$COUNT_FILE"',
+          '  if (( $(wc -c < "$COUNT_FILE") <= 2 )); then printf "1001:Z\\n"; fi',
+          '}',
+          'native_slot_launcher_alive() { return 0; }',
+        ].join('\n'))).not.toThrow();
+
+        // 6. Failing `limit --procs` aborts fail-closed instead of treating empty output as clean.
+        let procErrStderr = '';
+        let procErrStatus: number | undefined;
+        try {
+          runPauseHarness([
+            'native_agent_procs() { echo "limit must run as root via sudoers" >&2; return 126; }',
+            'native_slot_launcher_alive() { return 0; }',
+          ].join('\n'));
+        } catch (err) {
+          procErrStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
+          procErrStatus = (err as {status?: number}).status;
+        }
+        expect(procErrStatus).toBe(126);
+        expect(procErrStderr).toContain('limit must run as root via sudoers');
+
+        // 7. Wall-clock SECONDS guard breaks out of slow loops before arbiter timeout.
+        const wallCountFile = path.join(tmpDir, 'pause-wall-count');
+        fs.writeFileSync(wallCountFile, '');
+        let wallStderr = '';
+        try {
+          runPauseHarness([
+            `COUNT_FILE=${JSON.stringify(wallCountFile)}`,
+            'native_agent_procs() { printf x >> "$COUNT_FILE"; }',
+            'native_slot_launcher_alive() { SECONDS=5; return 0; }',
+          ].join('\n'));
+        } catch (err) {
+          wallStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
+        }
+        expect(wallStderr).toContain('Timed out waiting for UID p1 processes to start');
+        expect(fs.readFileSync(wallCountFile, 'utf8')).toHaveLength(1);
+
+        const freezeWallFile = path.join(tmpDir, 'pause-freeze-wall-count');
+        fs.writeFileSync(freezeWallFile, '');
+        let freezeWallStderr = '';
+        try {
+          runPauseHarness([
+            `COUNT_FILE=${JSON.stringify(freezeWallFile)}`,
+            'sudo() { SECONDS=4; }',
+            'native_agent_procs() { printf x >> "$COUNT_FILE"; printf "1001:R\\n"; }',
+            'native_slot_launcher_alive() { return 0; }',
+          ].join('\n'));
+        } catch (err) {
+          freezeWallStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
+        }
+        expect(freezeWallStderr).toContain('Failed to freeze all processes for UID p1');
+        // 1 call in startup loop + 1 call in freeze loop before SECONDS >= 4 breaks out.
+        expect(fs.readFileSync(freezeWallFile, 'utf8')).toHaveLength(2);
+      });
 
     test('forfeits slot as crash if pauseSlot fails during pre-battle /ready phase', async () => {
       const game = new arbiter.TimeSlicedArenaGame({
