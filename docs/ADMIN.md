@@ -106,7 +106,8 @@ Discord/Smogon standing, inline
 per-ladder qualification toggles, cooldowns, `/info` telemetry status dots, CPU/fault/protocol-error
 aggregates, inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, recent
 `pkmn/wiki` git edits (linking to page, revision, and diff for moderation), plus direct actions
-(refund cooldown, discard a staged version, wipe an unplayed version from the DB and runner
+(refund cooldown, disable/re-enable the 3/24h failed/discarded diagnostic rate limit per project,
+discard a staged version, wipe an unplayed version from the DB and runner
 archives, retire an active version on a ladder, quarantine/unquarantine a version).
 
 ```sh

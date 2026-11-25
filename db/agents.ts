@@ -31,6 +31,7 @@ export interface AgentRow {
   logo?: string;
   status: AgentStatus;
   cooldownRefundedAt?: number;
+  unlimitedSmokeTests: boolean;
   updatedAt: number;
 }
 
@@ -63,6 +64,7 @@ interface RawAgentRow {
   logo: string | null;
   status: AgentStatus;
   cooldown_refunded_at: number | null;
+  unlimited_smoke_tests: number;
   updated_at: number;
 }
 
@@ -74,6 +76,7 @@ function mapAgentRow(raw: RawAgentRow): AgentRow {
     logo: raw.logo ?? undefined,
     status: raw.status,
     cooldownRefundedAt: raw.cooldown_refunded_at ?? undefined,
+    unlimitedSmokeTests: raw.unlimited_smoke_tests === 1,
     updatedAt: raw.updated_at,
   };
 }
@@ -241,7 +244,7 @@ function applyResolvedProjects(
   const selectAgentId = db.prepare('SELECT id FROM agents WHERE slug = ?');
   const selectAllAgents = db.prepare('SELECT id, slug FROM agents');
   const disableAgent = db.prepare(
-    "UPDATE agents SET status = 'disabled', updated_at = ? WHERE id = ?"
+    "UPDATE agents SET status = 'disabled', unlimited_smoke_tests = 0, updated_at = ? WHERE id = ?"
   );
 
   inTransaction(() => {
@@ -606,6 +609,20 @@ export function refundCooldown(
   if (!agent) throw new Error(`Agent "${agentSlug}" not found`);
   db.prepare('UPDATE agents SET cooldown_refunded_at = ?, updated_at = ? WHERE id = ?')
     .run(now, now, agent.id);
+  return getAgentById(db, agent.id)!;
+}
+
+export function setUnlimitedSmokeTests(
+  db: DatabaseSync,
+  agentSlug: string,
+  unlimited: boolean,
+  now = Math.floor(Date.now() / 1000)
+): AgentRow {
+  const agent = getAgentBySlug(db, agentSlug);
+  if (!agent) throw new Error(`Agent "${agentSlug}" not found`);
+  if (agent.status === 'disabled') throw new Error(`Agent "${agent.slug}" is disabled`);
+  db.prepare('UPDATE agents SET unlimited_smoke_tests = ?, updated_at = ? WHERE id = ?')
+    .run(unlimited ? 1 : 0, now, agent.id);
   return getAgentById(db, agent.id)!;
 }
 

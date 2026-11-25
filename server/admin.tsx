@@ -225,6 +225,42 @@ const ADMIN_SCRIPT = `
     };
 
     if (projectsTbody) {
+      const updateRowStatus = (row, slug, st) => {
+        if (!row || !st) return;
+        const labelEl = row.querySelector('.status-label');
+        const reasonEl = row.querySelector('.status-reason');
+        if (labelEl) {
+          labelEl.textContent = st.label;
+          labelEl.className = 'status-label ' + (
+            st.label === 'Eligible' ? 'yes' : st.label === 'Ineligible' ? 'no' : 'muted'
+          );
+        }
+        if (reasonEl) {
+          const reasonText = pkmnTime.text(st.reason || '');
+          reasonEl.textContent = formatAdminReason(reasonText);
+          reasonEl.title = reasonText;
+          reasonEl.classList.toggle('hide', !st.reason);
+        }
+        const head = row.querySelector('.status-head');
+        if (head) {
+          let refundBtn = head.querySelector('button[data-action="refund"]');
+          if (st.nextEligibleAt !== undefined) {
+            if (!refundBtn) {
+              refundBtn = document.createElement('button');
+              refundBtn.type = 'button';
+              refundBtn.className = 'btn-sm';
+              refundBtn.dataset.action = 'refund';
+              refundBtn.dataset.agent = slug;
+              refundBtn.textContent = 'Refund';
+              const limitBtn = head.querySelector('button[data-action="smoke-limit"]');
+              head.insertBefore(refundBtn, limitBtn || null);
+            }
+          } else if (refundBtn) {
+            refundBtn.remove();
+          }
+        }
+      };
+
       projectsTbody.addEventListener('change', async (ev) => {
         const cb = ev.target && ev.target.closest ? ev.target.closest('input.ladder-toggle') : null;
         if (!cb) return;
@@ -237,24 +273,7 @@ const ADMIN_SCRIPT = `
             '/api/admin/agents/' + encodeURIComponent(slug) + '/ladders',
             {slot, qualified}
           );
-          const row = cb.closest('tr');
-          if (row && data.submissionStatus) {
-            const labelEl = row.querySelector('.status-label');
-            const reasonEl = row.querySelector('.status-reason');
-            const st = data.submissionStatus;
-            if (labelEl) {
-              labelEl.textContent = st.label;
-              labelEl.className = 'status-label ' + (
-                st.label === 'Eligible' ? 'yes' : st.label === 'Ineligible' ? 'no' : 'muted'
-              );
-            }
-            if (reasonEl) {
-              const reasonText = pkmnTime.text(st.reason || '');
-              reasonEl.textContent = formatAdminReason(reasonText);
-              reasonEl.title = reasonText;
-              reasonEl.classList.toggle('hide', !st.reason);
-            }
-          }
+          updateRowStatus(cb.closest('tr'), slug, data.submissionStatus);
           showFeedback(
             (qualified ? 'Enabled ' : 'Disabled ') + slot.toUpperCase() + ' for ' + slug + '.',
             false
@@ -285,6 +304,40 @@ const ADMIN_SCRIPT = `
             } catch (err) {
               actionBtn.disabled = false;
               showFeedback(err.message || 'Failed refunding cooldown.', true);
+            }
+            return;
+          }
+          if (action === 'smoke-limit') {
+            const slug = actionBtn.dataset.agent;
+            const nextUnlimited = actionBtn.dataset.unlimited !== 'true';
+            actionBtn.disabled = true;
+            try {
+              const data = await postJson(
+                '/api/admin/agents/' + encodeURIComponent(slug) + '/smoke-limit',
+                {unlimited: nextUnlimited}
+              );
+              const unlimited = Boolean(data.agent && data.agent.unlimitedSmokeTests);
+              actionBtn.dataset.unlimited = unlimited ? 'true' : 'false';
+              actionBtn.className = unlimited ? 'btn-sm btn-warn' : 'btn-sm';
+              actionBtn.textContent = unlimited ? 'Enable 3/24h' : 'Disable 3/24h';
+              actionBtn.title = unlimited
+                ? 'Re-enable the 3-per-24h failed/discarded diagnostic rate limit'
+                : 'Disable the 3-per-24h failed/discarded diagnostic rate limit';
+              const row = actionBtn.closest('tr');
+              if (row) {
+                const noteEl = row.querySelector('.smoke-limit-note');
+                if (noteEl) noteEl.classList.toggle('hide', !unlimited);
+                updateRowStatus(row, slug, data.submissionStatus);
+              }
+              showFeedback(
+                (unlimited ? 'Disabled ' : 'Re-enabled ') +
+                  '3/24h diagnostic limit for ' + slug + '.',
+                false
+              );
+            } catch (err) {
+              showFeedback(err.message || 'Failed updating 3/24h diagnostic limit.', true);
+            } finally {
+              actionBtn.disabled = false;
             }
             return;
           }
@@ -2397,6 +2450,22 @@ function renderProjectRows(
                         Refund
                       </button>
                     )}
+                    {!isDisabled && (
+                      <button
+                        type='button'
+                        className={agent.unlimitedSmokeTests ? 'btn-sm btn-warn' : 'btn-sm'}
+                        data-action='smoke-limit'
+                        data-agent={agent.slug}
+                        data-unlimited={agent.unlimitedSmokeTests ? 'true' : 'false'}
+                        title={
+                          agent.unlimitedSmokeTests
+                            ? 'Re-enable the 3-per-24h failed/discarded diagnostic rate limit'
+                            : 'Disable the 3-per-24h failed/discarded diagnostic rate limit'
+                        }
+                      >
+                        {agent.unlimitedSmokeTests ? 'Enable 3/24h' : 'Disable 3/24h'}
+                      </button>
+                    )}
                   </div>
                   <span
                     className={
@@ -2410,8 +2479,19 @@ function renderProjectRows(
                   >
                     {util.renderLocalizedText(conciseReason)}
                   </span>
+                  {!isDisabled && (
+                    <span
+                      className={
+                        agent.unlimitedSmokeTests
+                          ? 'warn status-note smoke-limit-note'
+                          : 'warn status-note smoke-limit-note hide'
+                      }
+                    >
+                      3/24h limit disabled.
+                    </span>
+                  )}
                   {item.pools.map(p => (
-                    <span className='muted status-reason'>
+                    <span className='muted status-note'>
                       {formatPoolProgress(p)}
                     </span>
                   ))}
@@ -3121,6 +3201,37 @@ export function register(app: polka.Polka, options: Options): Handle {
     } catch (err: any) {
       const status = /not found/i.test(String(err?.message)) ? 404 : 400;
       sendJson(res, status, {error: err?.message || 'Failed refunding cooldown.'});
+    }
+  });
+
+  app.post('/api/admin/agents/:slug/smoke-limit', async (req, res) => {
+    if (!requireAdminMutation(req, res)) return;
+    const slug = decodeParam(req.params.slug);
+    let body: Record<string, unknown>;
+    try {
+      const raw = await util.readBody(req, MAX_ADMIN_BODY_BYTES, 'Admin payload too large.');
+      body = (raw.trim() ? JSON.parse(raw) : {}) as Record<string, unknown>;
+    } catch (err: any) {
+      sendJson(res, err?.status ?? 400, {error: err?.message || 'Malformed JSON body.'});
+      return;
+    }
+    if (typeof body.unlimited !== 'boolean') {
+      sendJson(res, 400, {error: 'Expected {unlimited: boolean}.'});
+      return;
+    }
+    const now = getNow();
+    try {
+      const agent = db.setUnlimitedSmokeTests(slug, body.unlimited, now);
+      sendJson(res, 200, {
+        ok: true,
+        agent,
+        submissionStatus: db.computeAgentSubmissionStatus(agent.id, now),
+      });
+    } catch (err: any) {
+      const status = /not found/i.test(String(err?.message)) ? 404 : 400;
+      sendJson(res, status, {
+        error: err?.message || 'Failed updating 3/24h diagnostic limit.',
+      });
     }
   });
 

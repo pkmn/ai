@@ -1813,6 +1813,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Admin (Expanded)',
       path: '/admin/',
       githubUser: 'scheibo',
+      setup: fixture => withSavepoint(fixture, raw => {
+        raw.exec("UPDATE agents SET unlimited_smoke_tests = 1 WHERE slug = 'awrorus'");
+      }),
       click: 'tr[data-agent-row="0-error"] .row-toggle',
     },
     {

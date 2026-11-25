@@ -476,6 +476,10 @@ export class Database extends SqliteDatabase {
     return agents.refundCooldown(this.db, agentSlug, now);
   }
 
+  setUnlimitedSmokeTests(agentSlug: string, unlimited: boolean, now?: number): agents.AgentRow {
+    return agents.setUnlimitedSmokeTests(this.db, agentSlug, unlimited, now);
+  }
+
   getAgentLadders(agentId: number): ladders.LadderSlot[] {
     return agentLadders.getAgentLadders(this.db, agentId);
   }

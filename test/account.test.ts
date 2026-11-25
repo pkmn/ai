@@ -1736,6 +1736,65 @@ describe('account routes', () => {
         expect(htmlAfterTour).toContain('retry after ');
       });
 
+    test('allows submissions past 3 failed smoke tests when unlimitedSmokeTests is enabled',
+      async () => {
+        openLadders(['gen1ou20261109']);
+        db.setAgentLadders('0-error', ['rby'], currentNow);
+        db.setUnlimitedSmokeTests('0-error', true, currentNow);
+
+        for (let i = 1; i <= 4; i++) {
+          const res = await postSubmission('pre', {
+            version: `0.2.${i}`,
+            package: 'bundle',
+            url: `https://github.com/pkmn/0-error-0.2.${i}.tar.zst`,
+            sha256: SHA_A,
+            ladders: ['RBY'],
+          });
+          expect(res.status).toBe(201);
+          const {versionId} = await res.json() as {versionId: number};
+          db.applySubmissionStatus({
+            versionId,
+            smokeStatus: 'failed',
+            smokeError: 'segfault',
+            now: currentNow + i,
+          });
+        }
+
+        const acctJson = await (await realFetch(`${baseUrl}/account.json`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).json() as {
+          agent: {unlimitedSmokeTests: boolean};
+          submissionStatus: {label: string; canSubmit: boolean};
+        };
+        expect(acctJson.agent.unlimitedSmokeTests).toBe(true);
+        expect(acctJson.submissionStatus).toEqual({label: 'Eligible', canSubmit: true});
+      });
+
+    test('omits 3-per-24h discard warning on /account when unlimitedSmokeTests is enabled',
+      async () => {
+        openLadders(['gen1ou20261109']);
+        db.setAgentLadders('0-error', ['rby'], currentNow);
+        db.setUnlimitedSmokeTests('0-error', true, currentNow);
+        const zero = db.getAgentBySlug('0-error')!;
+        const v1 = db.createSubmission({
+          agentId: zero.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+          sha256: SHA_A,
+          ladderIds: ['gen1ou20261109'],
+          now: currentNow,
+        });
+        db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'staged', now: currentNow + 5});
+
+        const html = await (await realFetch(`${baseUrl}/account`, {
+          headers: {Cookie: cookieFor('pre')},
+        })).text();
+        expect(html).toContain('data-unlimited="true"');
+        expect(html).toContain('discarding deletes the staged build and frees the version label.');
+        expect(html).not.toContain('frees the version label, and counts toward the 3-per-24h');
+      });
+
     test('exposes anonymized smoke-test queue position on /account routes', async () => {
       openLadders(['gen1ou20261109']);
       db.setAgentLadders('foul-play', ['rby'], currentNow);

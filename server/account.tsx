@@ -748,9 +748,14 @@ const ACCOUNT_SCRIPT = `
         const action = btn.getAttribute('data-action');
         if (!versionId || !action) return;
         if (action === 'discard') {
+          const unlimited = btn.getAttribute('data-unlimited') === 'true';
           const ok = window.confirm(
-            'Discard this staged version? It will not enter any ladder or tournament, ' +
-            'counts toward the 3-per-24h retry limit, and restores any staged VGC teams to saved.'
+            unlimited
+              ? 'Discard this staged version? It will not enter any ladder or tournament ' +
+                'and restores any staged VGC teams to saved.'
+              : 'Discard this staged version? It will not enter any ladder or tournament, ' +
+                'counts toward the 3-per-24h retry limit, and restores any staged VGC teams ' +
+                'to saved.'
           );
           if (!ok) return;
         }
@@ -1117,6 +1122,7 @@ function renderStagedSection(opts: {
   openLadderIds: ReadonlySet<string>;
   qualifiedOpenLadderIds: ReadonlySet<string>;
   agentQualified: boolean;
+  unlimitedSmokeTests: boolean;
   tournamentById: Map<string, db.TournamentSubmissionStatus>;
   now: number;
 }): util.Child {
@@ -1182,6 +1188,7 @@ function renderStagedSection(opts: {
                   className='btn btn-secondary staged-action-btn'
                   data-version-id={v.id}
                   data-action='discard'
+                  data-unlimited={opts.unlimitedSmokeTests ? 'true' : undefined}
                 >
                   Discard
                 </button>
@@ -1190,8 +1197,11 @@ function renderStagedSection(opts: {
             <div className='staged-meta muted'>
               Review the diagnostic replay and <tt>STDERR</tt> log in History below before putting
               this version live. Activating archives the artifact and starts the 14-day ladder
-              cooldown; discarding deletes the staged build, frees the version label, and counts
-              toward the 3-per-24h retry limit.
+              cooldown;{' '}
+              {opts.unlimitedSmokeTests
+                ? 'discarding deletes the staged build and frees the version label.'
+                : 'discarding deletes the staged build, frees the version label, and counts ' +
+                  'toward the 3-per-24h retry limit.'}
             </div>
             {renderDiagnosticLinks(v.diagnostics, opts.ladderNameById)}
             <div className='staged-feedback hide' />
@@ -1566,6 +1576,7 @@ export function renderAccountPage(opts: {
         openLadderIds,
         qualifiedOpenLadderIds,
         agentQualified: agent.status === 'qualified',
+        unlimitedSmokeTests: agent.unlimitedSmokeTests,
         tournamentById,
         now,
       })}
@@ -2102,6 +2113,7 @@ export function register(app: polka.Polka, options: Options) {
           name: agent.name,
           status: agent.status,
           qualifiedLadders,
+          unlimitedSmokeTests: agent.unlimitedSmokeTests,
           profileHref: `/projects/${encodeURIComponent(agent.slug)}/`,
         },
         submissionStatus: status,

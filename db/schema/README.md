@@ -69,7 +69,7 @@ erDiagram
 | `schema_migrations` | [`schema-migrations.sql`](schema-migrations.sql) | Applied `db/migration/NNNN-*.sql` scripts. |
 | `config` | [`config.sql`](config.sql) | Singleton operator-tunable Arena coordinator settings (smoke-test cadence). |
 | `ladders` | [`ladders.sql`](ladders.sql) | Permanent/seasonal epochs (`id` decoupled from URL `slot` for rotation). |
-| `agents` | [`agents.sql`](agents.sql) | Registered `projects.yml` Arena projects, derived qualification status, 14-day cooldown. |
+| `agents` | [`agents.sql`](agents.sql) | Registered `projects.yml` Arena projects, derived qualification status, 14-day cooldown, 3/24h smoke-limit override. |
 | `agent_ladders` | [`agent-ladders.sql`](agent-ladders.sql) | Per-slot ladder qualification grants (`rby`/`adv`/`sv`/`rand`/`vgc`) in SQLite. |
 | `developers` | [`developers.sql`](developers.sql) | Co-owners with globally `UNIQUE` GitHub, Smogon, and Discord IDs (1 project/human). |
 | `discord_members` | [`discord-members.sql`](discord-members.sql) | Guild cache backing sub-ms `/auth/discord/validate` for `/chat/logs/`. |

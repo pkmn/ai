@@ -3057,6 +3057,13 @@ describe('per-ladder qualification & migrations', () => {
         continue;
       }
       let sql = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
+      if (file === 'agents.sql') {
+        sql = sql
+          .split('\n')
+          .filter(line => !/^\s*unlimited_smoke_tests\b/.test(line))
+          .join('\n')
+          .replace(/updated_at INTEGER NOT NULL,/, 'updated_at INTEGER NOT NULL');
+      }
       if (file === 'ladder-entries.sql') {
         const addedCols = new RegExp(
           '^\\s*(mean_cpu_cores|cpu_matches|invalid_choices|invalid_cant_move|' +
@@ -3179,6 +3186,7 @@ describe('per-ladder qualification & migrations', () => {
         '0007-staged-smoke-status.sql',
         '0008-discord-watches.sql',
         '0009-info-status.sql',
+        '0010-unlimited-smoke-tests.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -4328,6 +4336,266 @@ describe('discord watches', () => {
       }
     } finally {
       fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('migration 0010-unlimited-smoke-tests.sql is additive matching declarative schema', () => {
+    const sql = fs.readFileSync(
+      root('db', 'migration', '0010-unlimited-smoke-tests.sql'),
+      'utf8'
+    );
+    expect(database.classifyMigrationSql(sql)).toBe('additive');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-smoke-limit-mig-'));
+    try {
+      const preSchemaDir = path.join(tmpDir, 'pre-schema');
+      const preMigrationDir = path.join(tmpDir, 'pre-migration');
+      fs.mkdirSync(preSchemaDir, {recursive: true});
+      fs.mkdirSync(preMigrationDir, {recursive: true});
+      for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
+        if (!file.endsWith('.sql')) continue;
+        let schemaSql = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
+        if (file === 'agents.sql') {
+          schemaSql = schemaSql
+            .split('\n')
+            .filter(line => !/^\s*unlimited_smoke_tests\b/.test(line))
+            .join('\n')
+            .replace(/updated_at INTEGER NOT NULL,/, 'updated_at INTEGER NOT NULL');
+        }
+        fs.writeFileSync(path.join(preSchemaDir, file), schemaSql);
+      }
+      for (const file of fs.readdirSync(database.MIGRATION_DIR)) {
+        if (file === '0010-unlimited-smoke-tests.sql') continue;
+        fs.copyFileSync(
+          path.join(database.MIGRATION_DIR, file),
+          path.join(preMigrationDir, file)
+        );
+      }
+
+      const dbFile = path.join(tmpDir, 'arena.sqlite');
+      const preDb = new database.Database(dbFile, {
+        schemaDir: preSchemaDir,
+        migrationDir: preMigrationDir,
+        now: 1000,
+      });
+      preDb.db.exec(
+        'INSERT INTO agents (slug, name, status, updated_at) ' +
+        "VALUES ('alpha', 'Alpha', 'pending', 1000)"
+      );
+      preDb.close();
+
+      const migrated = new database.Database(dbFile, {now: 2000});
+      const fresh = new database.Database(':memory:', {now: 2000});
+      try {
+        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+        expect(migrated.getAgentBySlug('alpha')?.unlimitedSmokeTests).toBe(false);
+      } finally {
+        migrated.close();
+        fresh.close();
+      }
+    } finally {
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('setUnlimitedSmokeTests bypasses 24h failed ladder smoke-test limit', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLadders(undefined, 1_760_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const t0 = 1_760_000_100;
+      for (let i = 0; i < database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `0.0.${i + 1}`,
+          package: 'bundle',
+          url: `https://example.com/v${i + 1}.tar.zst`,
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: t0 + i * 600,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'boom',
+          now: t0 + i * 600 + 10,
+        });
+      }
+      expect(db.computeAgentSubmissionStatus(alpha.id, t0 + 2_000).canSubmit).toBe(false);
+
+      const updated = db.setUnlimitedSmokeTests('alpha', true, t0 + 2_010);
+      expect(updated.unlimitedSmokeTests).toBe(true);
+      expect(db.computeAgentSubmissionStatus(alpha.id, t0 + 2_020)).toEqual({
+        label: 'Eligible',
+        canSubmit: true,
+      });
+
+      const fourth = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.0.4',
+        package: 'bundle',
+        url: 'https://example.com/v4.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: t0 + 2_020,
+      });
+      expect(fourth.version).toBe('0.0.4');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('setUnlimitedSmokeTests bypasses 24h failed tournament smoke-test limit', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.upsertTournament({
+        id: 't1',
+        name: 'Test Tour',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 2,
+        hardware: 'L4',
+        startsAt: 1_765_000_000,
+        status: 'scheduled',
+      });
+      const alpha = db.getAgentBySlug('alpha')!;
+      const t0 = 1_760_000_100;
+      for (let i = 0; i < database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `t${i + 1}`,
+          package: 'oci',
+          url: `ghcr.io/pkmn/alpha:t${i + 1}`,
+          sha256: 'a'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['t1'],
+          now: t0 + i * 600,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'boom',
+          now: t0 + i * 600 + 10,
+        });
+      }
+      expect(db.computeAgentTournamentStatuses(alpha.id, t0 + 2_000)[0].canSubmit).toBe(false);
+
+      db.setUnlimitedSmokeTests('alpha', true, t0 + 2_010);
+      expect(db.computeAgentTournamentStatuses(alpha.id, t0 + 2_020)[0].canSubmit).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('setUnlimitedSmokeTests restores 24h smoke-test limit when re-enabled', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLadders(undefined, 1_760_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const t0 = 1_760_000_100;
+      db.setUnlimitedSmokeTests('alpha', true, t0);
+      for (let i = 0; i < database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `0.0.${i + 1}`,
+          package: 'bundle',
+          url: `https://example.com/v${i + 1}.tar.zst`,
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: t0 + i * 600,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'staged',
+          now: t0 + i * 600 + 10,
+        });
+        db.discardStagedVersion({versionId: v.id, agentId: alpha.id});
+      }
+      expect(db.computeAgentSubmissionStatus(alpha.id, t0 + 2_000).canSubmit).toBe(true);
+
+      const restored = db.setUnlimitedSmokeTests('alpha', false, t0 + 2_010);
+      expect(restored.unlimitedSmokeTests).toBe(false);
+      const status = db.computeAgentSubmissionStatus(alpha.id, t0 + 2_020);
+      expect(status.canSubmit).toBe(false);
+      expect(status.reason).toContain('Failed smoke test limit reached');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('setUnlimitedSmokeTests keeps 14-day post-activation ladder cooldown enforced', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncLadders(undefined, 1_760_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setUnlimitedSmokeTests('alpha', true, 1_760_000_010);
+      const v1 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/v1.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100,
+      });
+      db.applySubmissionStatus({
+        versionId: v1.id,
+        smokeStatus: 'passed',
+        now: 1_760_000_110,
+      });
+      const status = db.computeAgentSubmissionStatus(alpha.id, 1_760_000_200);
+      expect(status.canSubmit).toBe(false);
+      expect(status.reason).toContain('14-day cooldown active');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('syncProjectsFromYaml preserves unlimitedSmokeTests on active projects', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.setUnlimitedSmokeTests('alpha', true, 1_760_000_010);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_020);
+      expect(db.getAgentBySlug('alpha')?.unlimitedSmokeTests).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('syncProjectsFromYaml resets unlimitedSmokeTests on disabled projects', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      db.setUnlimitedSmokeTests('alpha', true, 1_760_000_010);
+      db.syncProjectsFromYaml('[]\n', undefined, 1_760_000_020);
+      const disabled = db.getAgentBySlug('alpha')!;
+      expect(disabled.status).toBe('disabled');
+      expect(disabled.unlimitedSmokeTests).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('setUnlimitedSmokeTests rejects unknown or disabled agents', () => {
+    const db = new database.Database(':memory:', {now: 1_760_000_000});
+    try {
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+      expect(() => db.setUnlimitedSmokeTests('missing', true, 1_760_000_010))
+        .toThrow(/not found/);
+      db.syncProjectsFromYaml('[]\n', undefined, 1_760_000_020);
+      expect(() => db.setUnlimitedSmokeTests('alpha', true, 1_760_000_030))
+        .toThrow(/disabled/);
+    } finally {
+      db.close();
     }
   });
 

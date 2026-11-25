@@ -28,5 +28,9 @@ CREATE TABLE IF NOT EXISTS agents (
   -- `pkmn refund-cooldown <slug>` (failed smoke tests never start the cooldown in the first place).
   cooldown_refunded_at INTEGER,
   -- Unix timestamp (seconds) when this agent row was created or last updated.
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  -- When 1, bypasses the rolling 24h failed/discarded smoke-test budget (`MAX_FAILED_SMOKE_TESTS`)
+  -- on both ladders and tournaments so staff can let specific projects test freely (e.g. before
+  -- ladders open). Reset to 0 if the project is disabled.
+  unlimited_smoke_tests INTEGER NOT NULL DEFAULT 0 CHECK (unlimited_smoke_tests IN (0, 1))
 );

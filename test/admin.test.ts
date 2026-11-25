@@ -233,6 +233,103 @@ describe('/admin dashboard & API', () => {
     expect(db.getAgentById(zero.id)?.cooldownRefundedAt).toBe(now);
   });
 
+  test('disables 3/24h smoke-test rate limit via admin API', async () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    for (let i = 1; i <= 3; i++) {
+      const v = db.createSubmission({
+        agentId: zero.id,
+        version: `0.1.${i}`,
+        package: 'bundle',
+        url: `https://github.com/pkmn/0-error-0.1.${i}.tar.zst`,
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: now + i * 10,
+      });
+      db.applySubmissionStatus({
+        versionId: v.id,
+        smokeStatus: 'failed',
+        smokeError: 'boom',
+        now: now + i * 10 + 5,
+      });
+    }
+    now += 100;
+    expect(db.computeAgentSubmissionStatus(zero.id, now).canSubmit).toBe(false);
+
+    const res = await fetch(`${baseUrl}/api/admin/agents/0-error/smoke-limit`, {
+      method: 'POST',
+      headers: {Cookie: cookieFor('scheibo'), 'Content-Type': 'application/json'},
+      body: JSON.stringify({unlimited: true}),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as {
+      ok: boolean;
+      agent: {unlimitedSmokeTests: boolean};
+      submissionStatus: {label: string; canSubmit: boolean; nextEligibleAt?: number};
+    };
+    expect(data.ok).toBe(true);
+    expect(data.agent.unlimitedSmokeTests).toBe(true);
+    expect(data.submissionStatus).toEqual({label: 'Eligible', canSubmit: true});
+    expect(db.getAgentById(zero.id)?.unlimitedSmokeTests).toBe(true);
+  });
+
+  test('re-enables 3/24h smoke-test rate limit via admin API', async () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    db.setUnlimitedSmokeTests('0-error', true, now);
+    const res = await fetch(`${baseUrl}/api/admin/agents/0-error/smoke-limit`, {
+      method: 'POST',
+      headers: {Cookie: cookieFor('scheibo'), 'Content-Type': 'application/json'},
+      body: JSON.stringify({unlimited: false}),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as {agent: {unlimitedSmokeTests: boolean}};
+    expect(data.agent.unlimitedSmokeTests).toBe(false);
+    expect(db.getAgentById(zero.id)?.unlimitedSmokeTests).toBe(false);
+  });
+
+  test('rejects invalid smoke-limit admin API payloads with 400 or 404', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const badBody = await fetch(`${baseUrl}/api/admin/agents/0-error/smoke-limit`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: JSON.stringify({unlimited: 'yes'}),
+    });
+    expect(badBody.status).toBe(400);
+
+    const missingAgent = await fetch(`${baseUrl}/api/admin/agents/nope/smoke-limit`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: JSON.stringify({unlimited: true}),
+    });
+    expect(missingAgent.status).toBe(404);
+
+    db.db.prepare("UPDATE agents SET status = 'disabled' WHERE slug = 'newcomer'").run();
+    const disabledAgent = await fetch(`${baseUrl}/api/admin/agents/newcomer/smoke-limit`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: JSON.stringify({unlimited: true}),
+    });
+    expect(disabledAgent.status).toBe(400);
+  });
+
+  test('renders 3/24h smoke-limit toggle buttons on /admin dashboard', async () => {
+    db.setUnlimitedSmokeTests('foul-play', true, now);
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).text();
+    expect(html).toContain('data-action="smoke-limit"');
+    expect(html).toContain('Disable 3/24h');
+    expect(html).toContain('Enable 3/24h');
+    expect(html).toContain('3/24h limit disabled.');
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).json() as admin.AdminSnapshot;
+    const fp = snap.agents.find(a => a.agent.slug === 'foul-play')!;
+    const zero = snap.agents.find(a => a.agent.slug === '0-error')!;
+    expect(fp.agent.unlimitedSmokeTests).toBe(true);
+    expect(zero.agent.unlimitedSmokeTests).toBe(false);
+  });
+
   test('quarantines then unquarantines a version via admin API', async () => {
     const adminCookie = cookieFor('scheibo');
     const zero = db.getAgentBySlug('0-error')!;
@@ -823,6 +920,7 @@ describe('/admin dashboard & API', () => {
       const postEndpoints = [
         {path: '/api/admin/agents/newcomer/ladders', body: {slot: 'rby', qualified: true}},
         {path: '/api/admin/agents/newcomer/refund-cooldown', body: {}},
+        {path: '/api/admin/agents/newcomer/smoke-limit', body: {unlimited: true}},
         {path: '/api/admin/versions/1/discard', body: {}},
         {path: '/api/admin/versions/1/wipe', body: {}},
         {path: '/api/admin/versions/0-error/1.0/quarantine', body: {reason: 'test'}},

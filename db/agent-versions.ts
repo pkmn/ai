@@ -421,7 +421,8 @@ function checkFailedSmokeBudget(
 // `'qualified'` projects (only `'disabled'` projects are blocked), accept at most 1 successful
 // (or currently pending) OCI entry per project, and are never blocked by 14-day ladder cooldowns
 // or unsettled ladder Challengers. Failed tournament smoke tests are still bounded by the rolling
-// 24-hour per-project budget (`MAX_FAILED_SMOKE_TESTS`, clearable via `refundCooldown`).
+// 24-hour per-project budget (`MAX_FAILED_SMOKE_TESTS`, clearable via `refundCooldown` or bypassed
+// when staff set `unlimited_smoke_tests = 1`).
 export function computeAgentTournamentStatuses(
   db: DatabaseSync,
   agentId: number,
@@ -491,7 +492,9 @@ export function computeAgentTournamentStatuses(
   }
 
   const refundedAt = agent.cooldownRefundedAt ?? 0;
-  const failedSmokeBlock = checkFailedSmokeBudget(db, agentId, 'tournament', refundedAt, now);
+  const failedSmokeBlock = agent.unlimitedSmokeTests
+    ? undefined
+    : checkFailedSmokeBudget(db, agentId, 'tournament', refundedAt, now);
 
   return scheduled.map(t => {
     const closesAt = getTournamentClosesAt(t.startsAt);
@@ -589,7 +592,8 @@ export function computeAgentTournamentStatuses(
 //   4. Every active ladder entry must have settled (`matches >= 25` and `se <= 30`) so projects
 //      cannot churn unsettled Challengers before the rating graph absorbs them.
 //   5. Fewer than `MAX_FAILED_SMOKE_TESTS` (3) ladder smoke tests may have failed in the rolling
-//      24-hour window (`FAILED_SMOKE_WINDOW_SECONDS`), unless cleared via `cooldown_refunded_at`.
+//      24-hour window (`FAILED_SMOKE_WINDOW_SECONDS`), unless cleared via `cooldown_refunded_at`
+//      or bypassed via `unlimited_smoke_tests`.
 export function computeAgentSubmissionStatus(
   db: DatabaseSync,
   agentId: number,
@@ -721,7 +725,9 @@ export function computeAgentSubmissionStatus(
     }
   }
 
-  const failedSmokeBlock = checkFailedSmokeBudget(db, agentId, 'ladder', refundedAt, now);
+  const failedSmokeBlock = agent.unlimitedSmokeTests
+    ? undefined
+    : checkFailedSmokeBudget(db, agentId, 'ladder', refundedAt, now);
   if (failedSmokeBlock) {
     return {
       label: 'Ineligible',
