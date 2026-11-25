@@ -752,6 +752,69 @@ describe('/admin dashboard & API', () => {
     expect(adminHandle.getAdminStreamCount()).toBe(0);
   });
 
+  test('hides Projects pager at <= 25 rows and server-side paginates past 25', async () => {
+    const cookie = cookieFor('scheibo');
+    const smallHtml = await (await fetch(`${baseUrl}/admin/`, {headers: {Cookie: cookie}})).text();
+    expect(smallHtml).toContain('class="pager hide" id="projects-pager"');
+
+    // Insert 25 additional agents (28 total) so Projects spans 2 pages of 25.
+    const insertAgent = db.db.prepare(
+      `INSERT INTO agents (slug, name, status, updated_at)
+       VALUES (?, ?, 'pending', ?)`
+    );
+    for (let i = 1; i <= 25; i++) {
+      const num = String(i).padStart(2, '0');
+      insertAgent.run(`z-agent-${num}`, `Z Agent ${num}`, now);
+    }
+
+    const html = await (await fetch(`${baseUrl}/admin/`, {headers: {Cookie: cookie}})).text();
+    expect(html).toContain('Projects (<span id="projects-total">28</span>)');
+    expect(html).toContain('class="pager" id="projects-pager"');
+    expect(html).toContain('Page 1 of 2 (28 projects)');
+    expect(html).toContain('Z Agent 22');
+    expect(html).not.toContain('Z Agent 23');
+
+    const snapshot = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: cookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snapshot.agents).toHaveLength(25);
+    expect(snapshot.totalAgents).toBe(28);
+
+    const p2Res = await fetch(`${baseUrl}/api/admin/projects.json?page=2&limit=25`, {
+      headers: {Cookie: cookie},
+    });
+    expect(p2Res.status).toBe(200);
+    const p2 = await p2Res.json() as {
+      page: number;
+      pageSize: number;
+      total: number;
+      totalPages: number;
+      hasPrev: boolean;
+      hasNext: boolean;
+      projects: admin.AdminAgentItem[];
+      rowsHtml: string;
+    };
+    expect(p2.page).toBe(2);
+    expect(p2.pageSize).toBe(25);
+    expect(p2.total).toBe(28);
+    expect(p2.totalPages).toBe(2);
+    expect(p2.hasPrev).toBe(true);
+    expect(p2.hasNext).toBe(false);
+    expect(p2.projects.map(p => p.agent.slug)).toEqual(['z-agent-23', 'z-agent-24', 'z-agent-25']);
+    expect(p2.rowsHtml).toContain('Z Agent 23');
+    expect(p2.rowsHtml).toContain('Z Agent 25');
+    expect(p2.rowsHtml).toContain('data-detail-for="z-agent-23"');
+
+    const badPage = await fetch(`${baseUrl}/api/admin/projects.json?page=0`, {
+      headers: {Cookie: cookie},
+    });
+    expect(badPage.status).toBe(400);
+    const badLimit = await fetch(`${baseUrl}/api/admin/projects.json?limit=500`, {
+      headers: {Cookie: cookie},
+    });
+    expect(badLimit.status).toBe(400);
+  });
+
   test('enforces auth, admin role, or CSRF rejection across all admin routes',
     async () => {
       const nonAdminCookie = cookieFor('pmariglia', 2002);
@@ -795,6 +858,8 @@ describe('/admin dashboard & API', () => {
       const getEndpoints = [
         '/admin/index.json',
         '/api/admin/stream',
+        '/api/admin/projects.json',
+        '/api/admin/wiki-edits.json',
         '/api/admin/diagnostics/1/log',
         '/api/admin/diagnostics/1/stderr',
       ];
@@ -985,5 +1050,65 @@ describe('/admin recent wiki edits', () => {
     expect(html).toContain('(deleted)');
     expect(html).not.toContain(`href="/wiki/Draft/${deleteSha}"`);
     expect(html).toContain(`href="/wiki/Draft/${deleteSha}?diff=1"`);
+    expect(html).toContain('class="pager hide" id="wiki-pager"');
+  });
+
+  test('server-side paginates /admin Wiki edits past 25 rows', async () => {
+    const cookie = cookieFor('scheibo');
+    const wikiDir = path.join(tmpDir, 'wiki');
+    const git = (...args: string[]) => execFileSync('git', args, {cwd: wikiDir, stdio: 'pipe'});
+    // Add 25 more file edits (including a 2-file commit) -> 28 total edits.
+    for (let i = 1; i <= 23; i++) {
+      const name = `Note_${String(i).padStart(2, '0')}.dj`;
+      fs.writeFileSync(path.join(wikiDir, name), `# Note ${i}\n`, 'utf8');
+      git('add', name);
+      git('commit', '-m', `Add Note ${i}`);
+    }
+    fs.writeFileSync(path.join(wikiDir, 'Pair_A.dj'), '# Pair A\n', 'utf8');
+    fs.writeFileSync(path.join(wikiDir, 'Pair_B.dj'), '# Pair B\n', 'utf8');
+    git('add', 'Pair_A.dj', 'Pair_B.dj');
+    git('commit', '-m', 'Add Pair A and B');
+
+    const html = await (await fetch(`${baseUrl}/admin`, {headers: {Cookie: cookie}})).text();
+    expect(html).toContain('class="pager" id="wiki-pager"');
+    expect(html).toContain('Page 1 of 2 (28 edits)');
+    expect(html).toContain('Add Pair A and B');
+    expect(html).not.toContain('Document 0 ERROR architecture');
+
+    const snapshot = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: cookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snapshot.wikiEdits).toHaveLength(25);
+    expect(snapshot.totalWikiEdits).toBe(28);
+
+    const p2Res = await fetch(`${baseUrl}/api/admin/wiki-edits.json?page=2&limit=25`, {
+      headers: {Cookie: cookie},
+    });
+    expect(p2Res.status).toBe(200);
+    const p2 = await p2Res.json() as {
+      page: number;
+      pageSize: number;
+      total: number;
+      totalPages: number;
+      hasPrev: boolean;
+      hasNext: boolean;
+      edits: wiki.RecentEdit[];
+      rowsHtml: string;
+    };
+    expect(p2.page).toBe(2);
+    expect(p2.pageSize).toBe(25);
+    expect(p2.total).toBe(28);
+    expect(p2.totalPages).toBe(2);
+    expect(p2.hasPrev).toBe(true);
+    expect(p2.hasNext).toBe(false);
+    expect(p2.edits).toHaveLength(3);
+    expect(p2.edits[2].subject).toBe('Document 0 ERROR architecture');
+    expect(p2.rowsHtml).toContain('Document 0 ERROR architecture');
+    expect(p2.rowsHtml).toContain('Remove Draft');
+
+    const badPage = await fetch(`${baseUrl}/api/admin/wiki-edits.json?page=abc`, {
+      headers: {Cookie: cookie},
+    });
+    expect(badPage.status).toBe(400);
   });
 });

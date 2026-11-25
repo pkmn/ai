@@ -565,19 +565,36 @@ export function getAllActiveAgents(db: DatabaseSync): AgentRow[] {
   return rows.map(mapAgentRow);
 }
 
+const AGENTS_ADMIN_ORDER = `
+  ORDER BY
+    CASE status
+      WHEN 'qualified' THEN 0
+      WHEN 'pending' THEN 1
+      ELSE 2
+    END ASC,
+    slug ASC
+`;
+
+export function countAgents(db: DatabaseSync): number {
+  const row = db.prepare('SELECT COUNT(*) AS count FROM agents').get() as {count: number};
+  return row.count;
+}
+
 export function getAllAgents(db: DatabaseSync): AgentRow[] {
-  const rows = db.prepare(`
-    SELECT *
-    FROM agents
-    ORDER BY
-      CASE status
-        WHEN 'qualified' THEN 0
-        WHEN 'pending' THEN 1
-        ELSE 2
-      END ASC,
-      slug ASC
-  `).all() as unknown as RawAgentRow[];
+  const rows = db.prepare(`SELECT * FROM agents ${AGENTS_ADMIN_ORDER}`)
+    .all() as unknown as RawAgentRow[];
   return rows.map(mapAgentRow);
+}
+
+export function getAgentsPage(
+  db: DatabaseSync,
+  limit: number,
+  offset = 0
+): {agents: AgentRow[]; total: number} {
+  const total = countAgents(db);
+  const rows = db.prepare(`SELECT * FROM agents ${AGENTS_ADMIN_ORDER} LIMIT ? OFFSET ?`)
+    .all(limit, offset) as unknown as RawAgentRow[];
+  return {agents: rows.map(mapAgentRow), total};
 }
 
 export function refundCooldown(

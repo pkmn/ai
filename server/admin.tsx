@@ -97,8 +97,10 @@ export interface AdminSnapshot {
   };
   ladders: AdminLadderItem[];
   agents: AdminAgentItem[];
+  totalAgents: number;
   wipeableVersionIds: number[];
   wikiEdits: wiki.RecentEdit[];
+  totalWikiEdits: number;
 }
 
 const MAX_ADMIN_BODY_BYTES = 16 * 1024;
@@ -171,8 +173,25 @@ const ADMIN_SCRIPT = `
       return data;
     };
 
-    document.querySelectorAll('input.ladder-toggle').forEach(cb => {
-      cb.addEventListener('change', async () => {
+    ${util.UPDATE_TABLE_PAGER_SCRIPT}
+
+    const projectsTbody = document.getElementById('projects-tbody');
+
+    const toggleProjectRow = (row) => {
+      const slug = row.dataset.agentRow;
+      if (!slug || !projectsTbody) return;
+      const detailRow = projectsTbody.querySelector('tr[data-detail-for="' + slug + '"]');
+      if (!detailRow) return;
+      const open = detailRow.classList.contains('hide');
+      detailRow.classList.toggle('hide', !open);
+      row.classList.toggle('expanded', open);
+      row.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+
+    if (projectsTbody) {
+      projectsTbody.addEventListener('change', async (ev) => {
+        const cb = ev.target && ev.target.closest ? ev.target.closest('input.ladder-toggle') : null;
+        if (!cb) return;
         const slug = cb.dataset.agent;
         const slot = cb.dataset.slot;
         const qualified = cb.checked;
@@ -211,257 +230,327 @@ const ADMIN_SCRIPT = `
           cb.disabled = false;
         }
       });
-    });
 
-    const toggleProjectRow = (row) => {
-      const slug = row.dataset.agentRow;
-      if (!slug) return;
-      const detailRow = document.querySelector('tr[data-detail-for="' + slug + '"]');
-      if (!detailRow) return;
-      const open = detailRow.classList.contains('hide');
-      detailRow.classList.toggle('hide', !open);
-      row.classList.toggle('expanded', open);
-      row.setAttribute('aria-expanded', open ? 'true' : 'false');
-    };
+      projectsTbody.addEventListener('click', async (ev) => {
+        const actionBtn = ev.target && ev.target.closest
+          ? ev.target.closest('button[data-action]')
+          : null;
+        if (actionBtn) {
+          const action = actionBtn.dataset.action;
+          if (action === 'refund') {
+            const slug = actionBtn.dataset.agent;
+            actionBtn.disabled = true;
+            try {
+              await postJson(
+                '/api/admin/agents/' + encodeURIComponent(slug) + '/refund-cooldown',
+                {}
+              );
+              window.location.reload();
+            } catch (err) {
+              actionBtn.disabled = false;
+              showFeedback(err.message || 'Failed refunding cooldown.', true);
+            }
+            return;
+          }
+          if (action === 'unquarantine') {
+            const slug = actionBtn.dataset.agent;
+            const version = actionBtn.dataset.version;
+            actionBtn.disabled = true;
+            try {
+              await postJson(
+                '/api/admin/versions/' + encodeURIComponent(slug) + '/' +
+                  encodeURIComponent(version) + '/unquarantine',
+                {}
+              );
+              window.location.reload();
+            } catch (err) {
+              actionBtn.disabled = false;
+              showFeedback(err.message || 'Failed unquarantining version.', true);
+            }
+            return;
+          }
+          if (action === 'retire') {
+            const group = actionBtn.closest('.action-group');
+            if (!group || group.querySelector('.confirm-retire')) return;
+            actionBtn.classList.add('hide');
 
-    document.querySelectorAll('tr.project-row').forEach(row => {
-      row.addEventListener('click', (ev) => {
-        if (ev.target && ev.target.closest('a, button, input, label')) return;
-        toggleProjectRow(row);
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = 'btn-sm btn-danger confirm-retire';
+            confirmBtn.textContent = 'Confirm retire';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn-sm';
+            cancelBtn.textContent = 'Cancel';
+
+            const cleanup = () => {
+              confirmBtn.remove();
+              cancelBtn.remove();
+              actionBtn.classList.remove('hide');
+            };
+
+            cancelBtn.addEventListener('click', cleanup);
+            confirmBtn.addEventListener('click', async () => {
+              confirmBtn.disabled = true;
+              cancelBtn.disabled = true;
+              try {
+                await postJson(
+                  '/api/admin/ladders/' + encodeURIComponent(actionBtn.dataset.ladder) +
+                    '/entries/' + encodeURIComponent(actionBtn.dataset.agent) + '/' +
+                    encodeURIComponent(actionBtn.dataset.version) + '/retire',
+                  {}
+                );
+                window.location.reload();
+              } catch (err) {
+                cleanup();
+                showFeedback(err.message || 'Failed retiring entry.', true);
+              }
+            });
+
+            group.appendChild(confirmBtn);
+            group.appendChild(cancelBtn);
+            return;
+          }
+          if (action === 'discard') {
+            const group = actionBtn.closest('.action-group');
+            if (!group || group.querySelector('.confirm-discard')) return;
+            const siblings = Array.from(group.querySelectorAll('button'));
+            siblings.forEach(b => b.classList.add('hide'));
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = 'btn-sm btn-danger confirm-discard';
+            confirmBtn.textContent = 'Confirm discard';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn-sm';
+            cancelBtn.textContent = 'Cancel';
+
+            const cleanup = () => {
+              confirmBtn.remove();
+              cancelBtn.remove();
+              siblings.forEach(b => b.classList.remove('hide'));
+            };
+
+            cancelBtn.addEventListener('click', cleanup);
+            confirmBtn.addEventListener('click', async () => {
+              confirmBtn.disabled = true;
+              cancelBtn.disabled = true;
+              try {
+                await postJson(
+                  '/api/admin/versions/' + encodeURIComponent(actionBtn.dataset.versionId) +
+                    '/discard',
+                  {}
+                );
+                window.location.reload();
+              } catch (err) {
+                cleanup();
+                showFeedback(err.message || 'Failed discarding staged version.', true);
+              }
+            });
+
+            group.appendChild(confirmBtn);
+            group.appendChild(cancelBtn);
+            return;
+          }
+          if (action === 'wipe') {
+            const group = actionBtn.closest('.action-group');
+            if (!group || group.querySelector('.confirm-wipe')) return;
+            const siblings = Array.from(group.querySelectorAll('button'));
+            siblings.forEach(b => b.classList.add('hide'));
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = 'btn-sm btn-danger confirm-wipe';
+            confirmBtn.textContent = 'Confirm wipe';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn-sm';
+            cancelBtn.textContent = 'Cancel';
+
+            const cleanup = () => {
+              confirmBtn.remove();
+              cancelBtn.remove();
+              siblings.forEach(b => b.classList.remove('hide'));
+            };
+
+            cancelBtn.addEventListener('click', cleanup);
+            confirmBtn.addEventListener('click', async () => {
+              confirmBtn.disabled = true;
+              cancelBtn.disabled = true;
+              try {
+                await postJson(
+                  '/api/admin/versions/' + encodeURIComponent(actionBtn.dataset.versionId) +
+                    '/wipe',
+                  {}
+                );
+                window.location.reload();
+              } catch (err) {
+                cleanup();
+                showFeedback(err.message || 'Failed wiping version.', true);
+              }
+            });
+
+            group.appendChild(confirmBtn);
+            group.appendChild(cancelBtn);
+            return;
+          }
+          if (action === 'quarantine') {
+            const group = actionBtn.closest('.action-group');
+            if (!group || group.querySelector('.confirm-quarantine')) return;
+            const siblings = Array.from(group.querySelectorAll('button'));
+            siblings.forEach(b => b.classList.add('hide'));
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'reason-input';
+            input.placeholder = 'Reason (optional)';
+            input.maxLength = 240;
+
+            const confirmBtn = document.createElement('button');
+            confirmBtn.type = 'button';
+            confirmBtn.className = 'btn-sm btn-danger confirm-quarantine';
+            confirmBtn.textContent = 'Confirm';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.type = 'button';
+            cancelBtn.className = 'btn-sm';
+            cancelBtn.textContent = 'Cancel';
+
+            const cleanup = () => {
+              input.remove();
+              confirmBtn.remove();
+              cancelBtn.remove();
+              siblings.forEach(b => b.classList.remove('hide'));
+            };
+
+            cancelBtn.addEventListener('click', cleanup);
+            confirmBtn.addEventListener('click', async () => {
+              confirmBtn.disabled = true;
+              cancelBtn.disabled = true;
+              input.disabled = true;
+              try {
+                await postJson(
+                  '/api/admin/versions/' + encodeURIComponent(actionBtn.dataset.agent) + '/' +
+                    encodeURIComponent(actionBtn.dataset.version) + '/quarantine',
+                  {reason: input.value.trim() || undefined}
+                );
+                window.location.reload();
+              } catch (err) {
+                cleanup();
+                showFeedback(err.message || 'Failed quarantining version.', true);
+              }
+            });
+
+            group.appendChild(input);
+            group.appendChild(confirmBtn);
+            group.appendChild(cancelBtn);
+            input.focus();
+            return;
+          }
+        }
+
+        if (ev.target && ev.target.closest && ev.target.closest('a, button, input, label')) return;
+        const row = ev.target && ev.target.closest ? ev.target.closest('tr.project-row') : null;
+        if (row) toggleProjectRow(row);
       });
-      row.addEventListener('keydown', (ev) => {
-        if (ev.key === 'Enter' || ev.key === ' ') {
-          if (ev.target && ev.target.closest('a, button, input, label')) return;
+
+      projectsTbody.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        if (ev.target && ev.target.closest && ev.target.closest('a, button, input, label')) return;
+        const row = ev.target && ev.target.closest ? ev.target.closest('tr.project-row') : null;
+        if (row) {
           ev.preventDefault();
           toggleProjectRow(row);
         }
       });
-    });
-
-    document.querySelectorAll('button[data-action="refund"]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const slug = btn.dataset.agent;
-        btn.disabled = true;
-        try {
-          await postJson('/api/admin/agents/' + encodeURIComponent(slug) + '/refund-cooldown', {});
-          window.location.reload();
-        } catch (err) {
-          btn.disabled = false;
-          showFeedback(err.message || 'Failed refunding cooldown.', true);
-        }
-      });
-    });
-
-    document.querySelectorAll('button[data-action="unquarantine"]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const slug = btn.dataset.agent;
-        const version = btn.dataset.version;
-        btn.disabled = true;
-        try {
-          await postJson(
-            '/api/admin/versions/' + encodeURIComponent(slug) + '/' +
-              encodeURIComponent(version) + '/unquarantine',
-            {}
-          );
-          window.location.reload();
-        } catch (err) {
-          btn.disabled = false;
-          showFeedback(err.message || 'Failed unquarantining version.', true);
-        }
-      });
-    });
-
-    document.querySelectorAll('button[data-action="retire"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const group = btn.closest('.action-group');
-        if (!group || group.querySelector('.confirm-retire')) return;
-        btn.classList.add('hide');
-
-        const confirmBtn = document.createElement('button');
-        confirmBtn.type = 'button';
-        confirmBtn.className = 'btn-sm btn-danger confirm-retire';
-        confirmBtn.textContent = 'Confirm retire';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'btn-sm';
-        cancelBtn.textContent = 'Cancel';
-
-        const cleanup = () => {
-          confirmBtn.remove();
-          cancelBtn.remove();
-          btn.classList.remove('hide');
-        };
-
-        cancelBtn.addEventListener('click', cleanup);
-        confirmBtn.addEventListener('click', async () => {
-          confirmBtn.disabled = true;
-          cancelBtn.disabled = true;
-          try {
-            await postJson(
-              '/api/admin/ladders/' + encodeURIComponent(btn.dataset.ladder) +
-                '/entries/' + encodeURIComponent(btn.dataset.agent) + '/' +
-                encodeURIComponent(btn.dataset.version) + '/retire',
-              {}
-            );
-            window.location.reload();
-          } catch (err) {
-            cleanup();
-            showFeedback(err.message || 'Failed retiring entry.', true);
-          }
-        });
-
-        group.appendChild(confirmBtn);
-        group.appendChild(cancelBtn);
-      });
-    });
-
-    document.querySelectorAll('button[data-action="discard"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const group = btn.closest('.action-group');
-        if (!group || group.querySelector('.confirm-discard')) return;
-        const siblings = Array.from(group.querySelectorAll('button'));
-        siblings.forEach(b => b.classList.add('hide'));
-
-        const confirmBtn = document.createElement('button');
-        confirmBtn.type = 'button';
-        confirmBtn.className = 'btn-sm btn-danger confirm-discard';
-        confirmBtn.textContent = 'Confirm discard';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'btn-sm';
-        cancelBtn.textContent = 'Cancel';
-
-        const cleanup = () => {
-          confirmBtn.remove();
-          cancelBtn.remove();
-          siblings.forEach(b => b.classList.remove('hide'));
-        };
-
-        cancelBtn.addEventListener('click', cleanup);
-        confirmBtn.addEventListener('click', async () => {
-          confirmBtn.disabled = true;
-          cancelBtn.disabled = true;
-          try {
-            await postJson(
-              '/api/admin/versions/' + encodeURIComponent(btn.dataset.versionId) + '/discard',
-              {}
-            );
-            window.location.reload();
-          } catch (err) {
-            cleanup();
-            showFeedback(err.message || 'Failed discarding staged version.', true);
-          }
-        });
-
-        group.appendChild(confirmBtn);
-        group.appendChild(cancelBtn);
-      });
-    });
-
-    document.querySelectorAll('button[data-action="wipe"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const group = btn.closest('.action-group');
-        if (!group || group.querySelector('.confirm-wipe')) return;
-        const siblings = Array.from(group.querySelectorAll('button'));
-        siblings.forEach(b => b.classList.add('hide'));
-
-        const confirmBtn = document.createElement('button');
-        confirmBtn.type = 'button';
-        confirmBtn.className = 'btn-sm btn-danger confirm-wipe';
-        confirmBtn.textContent = 'Confirm wipe';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'btn-sm';
-        cancelBtn.textContent = 'Cancel';
-
-        const cleanup = () => {
-          confirmBtn.remove();
-          cancelBtn.remove();
-          siblings.forEach(b => b.classList.remove('hide'));
-        };
-
-        cancelBtn.addEventListener('click', cleanup);
-        confirmBtn.addEventListener('click', async () => {
-          confirmBtn.disabled = true;
-          cancelBtn.disabled = true;
-          try {
-            await postJson(
-              '/api/admin/versions/' + encodeURIComponent(btn.dataset.versionId) + '/wipe',
-              {}
-            );
-            window.location.reload();
-          } catch (err) {
-            cleanup();
-            showFeedback(err.message || 'Failed wiping version.', true);
-          }
-        });
-
-        group.appendChild(confirmBtn);
-        group.appendChild(cancelBtn);
-      });
-    });
+    }
 
     ${account.buildDiagnosticReplayClientJs({
       apiPrefix: '/api/admin/diagnostics',
       rowSelector: 'tr.battle-row[data-diag-ids]',
     })}
 
-    document.querySelectorAll('button[data-action="quarantine"]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const group = btn.closest('.action-group');
-        if (!group || group.querySelector('.confirm-quarantine')) return;
-        const siblings = Array.from(group.querySelectorAll('button'));
-        siblings.forEach(b => b.classList.add('hide'));
+    const wireServerPager = (opts) => {
+      const pager = document.getElementById(opts.pagerId);
+      const tbody = document.getElementById(opts.tbodyId);
+      if (!pager || !tbody) return;
+      const prevBtn = pager.querySelector('[data-pager-prev]');
+      const nextBtn = pager.querySelector('[data-pager-next]');
+      const pageSize = Number(pager.dataset.pageSize) || ${util.TABLE_PAGE_SIZE};
+      let currentPage = 1;
+      let fetchSeq = 0;
 
-        const input = document.createElement('input');
-        input.type = 'text';
-        input.className = 'reason-input';
-        input.placeholder = 'Reason (optional)';
-        input.maxLength = 240;
-
-        const confirmBtn = document.createElement('button');
-        confirmBtn.type = 'button';
-        confirmBtn.className = 'btn-sm btn-danger confirm-quarantine';
-        confirmBtn.textContent = 'Confirm';
-
-        const cancelBtn = document.createElement('button');
-        cancelBtn.type = 'button';
-        cancelBtn.className = 'btn-sm';
-        cancelBtn.textContent = 'Cancel';
-
-        const cleanup = () => {
-          input.remove();
-          confirmBtn.remove();
-          cancelBtn.remove();
-          siblings.forEach(b => b.classList.remove('hide'));
-        };
-
-        cancelBtn.addEventListener('click', cleanup);
-        confirmBtn.addEventListener('click', async () => {
-          confirmBtn.disabled = true;
-          cancelBtn.disabled = true;
-          input.disabled = true;
-          try {
-            await postJson(
-              '/api/admin/versions/' + encodeURIComponent(btn.dataset.agent) + '/' +
-                encodeURIComponent(btn.dataset.version) + '/quarantine',
-              {reason: input.value.trim() || undefined}
-            );
-            window.location.reload();
-          } catch (err) {
-            cleanup();
-            showFeedback(err.message || 'Failed quarantining version.', true);
+      const loadPage = async (targetPage) => {
+        const seq = ++fetchSeq;
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        try {
+          const qs = '?page=' + targetPage + '&limit=' + pageSize;
+          const res = await fetch(opts.endpoint + qs, {
+            cache: 'no-cache',
+            headers: {Accept: 'application/json'},
+          });
+          if (!res.ok) throw new Error('Request failed (' + res.status + ')');
+          const data = await res.json();
+          if (seq !== fetchSeq) return;
+          if (typeof data.rowsHtml === 'string') {
+            tbody.innerHTML = data.rowsHtml;
+            pkmnTime.localize(tbody);
           }
-        });
+          const state = updateTablePager(
+            pager,
+            data.page || targetPage,
+            data.total || 0,
+            data.pageSize || pageSize
+          );
+          currentPage = state.page;
+          if (opts.onData) opts.onData(data);
+          const sec = document.getElementById(opts.sectionId);
+          if (sec) sec.scrollIntoView();
+        } catch (err) {
+          if (seq !== fetchSeq) return;
+          showFeedback((err && err.message) || opts.errorMsg, true);
+          if (prevBtn) prevBtn.disabled = currentPage <= 1;
+          if (nextBtn) nextBtn.disabled = false;
+        }
+      };
 
-        group.appendChild(input);
-        group.appendChild(confirmBtn);
-        group.appendChild(cancelBtn);
-        input.focus();
-      });
+      if (prevBtn) {
+        prevBtn.addEventListener('click', () => {
+          if (currentPage > 1) void loadPage(currentPage - 1);
+        });
+      }
+      if (nextBtn) {
+        nextBtn.addEventListener('click', () => {
+          void loadPage(currentPage + 1);
+        });
+      }
+    };
+
+    const projectsTotalEl = document.getElementById('projects-total');
+    wireServerPager({
+      pagerId: 'projects-pager',
+      tbodyId: 'projects-tbody',
+      sectionId: 'projects',
+      endpoint: '/api/admin/projects.json',
+      errorMsg: 'Failed loading projects page.',
+      onData: (data) => {
+        if (projectsTotalEl && typeof data.total === 'number') {
+          projectsTotalEl.textContent = String(data.total);
+        }
+      },
+    });
+
+    wireServerPager({
+      pagerId: 'wiki-pager',
+      tbodyId: 'wiki-tbody',
+      sectionId: 'wiki',
+      endpoint: '/api/admin/wiki-edits.json',
+      errorMsg: 'Failed loading wiki edits page.',
     });
 
     const formatAge = (sec) => {
@@ -1219,33 +1308,14 @@ function computeRunnerHealth(arenaHandle: arena.Handle | undefined, now: number)
   return {status: liveMatch ? 'online' : 'idle', liveMatch};
 }
 
-export function buildAdminSnapshot(
+export function buildAdminAgentsPage(
   database: db.Database,
-  adminLogin: string,
-  arenaHandle?: arena.Handle,
   now = Math.floor(Date.now() / 1000),
-  systemSnapshot?: AdminSystemSnapshot,
-  wikiEdits: wiki.RecentEdit[] = []
-): AdminSnapshot {
-  const currentLadders = database.getCurrentLadders();
-  const ladderSummaries = database.getLadderAdminSummaries(now);
-  const ladders: AdminLadderItem[] = currentLadders.map(ladder => ({
-    ladder,
-    summary: ladderSummaries.get(ladder.id) ?? {
-      ladderId: ladder.id,
-      activeAgents: 0,
-      activeEntries: 0,
-      unsettledEntries: 0,
-      quarantinedEntries: 0,
-      totalMatches: 0,
-      matches24h: 0,
-      harvestedTeams: 0,
-      lockedPools: 0,
-      savedPools: 0,
-    },
-  }));
-
-  const allAgents = database.getAllAgents();
+  limit = util.TABLE_PAGE_SIZE,
+  offset = 0,
+  currentLadders = database.getCurrentLadders()
+): {agents: AdminAgentItem[]; total: number} {
+  const {agents: pageAgents, total} = database.getAgentsPage(limit, offset);
   const devsByAgent = database.getDevelopersByAgent();
   const laddersByAgent = database.getAgentLaddersByAgent();
   const entriesByAgent = database.getAdminEntriesByAgent();
@@ -1253,7 +1323,7 @@ export function buildAdminSnapshot(
   const tourneysByAgent = database.getTournamentEntrantsByAgent();
   const poolLadders = currentLadders.filter(l => l.team === 'pools' && l.teams);
 
-  const agents: AdminAgentItem[] = allAgents.map(agent => {
+  const agents: AdminAgentItem[] = pageAgents.map(agent => {
     const agentPools = poolsByAgent.get(agent.id);
     const pools: AdminPoolProgress[] = [];
     for (const pl of poolLadders) {
@@ -1280,6 +1350,43 @@ export function buildAdminSnapshot(
       versions: database.getVersionsForAgent(agent.id),
     };
   });
+
+  return {agents, total};
+}
+
+export function buildAdminSnapshot(
+  database: db.Database,
+  adminLogin: string,
+  arenaHandle?: arena.Handle,
+  now = Math.floor(Date.now() / 1000),
+  systemSnapshot?: AdminSystemSnapshot,
+  wikiEditsPage: {edits: wiki.RecentEdit[]; total: number} = {edits: [], total: 0}
+): AdminSnapshot {
+  const currentLadders = database.getCurrentLadders();
+  const ladderSummaries = database.getLadderAdminSummaries(now);
+  const ladders: AdminLadderItem[] = currentLadders.map(ladder => ({
+    ladder,
+    summary: ladderSummaries.get(ladder.id) ?? {
+      ladderId: ladder.id,
+      activeAgents: 0,
+      activeEntries: 0,
+      unsettledEntries: 0,
+      quarantinedEntries: 0,
+      totalMatches: 0,
+      matches24h: 0,
+      harvestedTeams: 0,
+      lockedPools: 0,
+      savedPools: 0,
+    },
+  }));
+
+  const {agents, total: totalAgents} = buildAdminAgentsPage(
+    database,
+    now,
+    util.TABLE_PAGE_SIZE,
+    0,
+    currentLadders
+  );
 
   const pendingSubmissions: AdminPendingItem[] = database.getPendingSubmissions().map(p => {
     const ver = database.getVersionById(p.versionId);
@@ -1314,11 +1421,6 @@ export function buildAdminSnapshot(
       : {}),
   };
 
-  const stagedCount = agents.reduce(
-    (sum, item) => sum + item.versions.filter(v => v.smokeStatus === 'staged').length,
-    0
-  );
-
   return {
     generatedAt: now,
     admin: adminLogin,
@@ -1326,14 +1428,16 @@ export function buildAdminSnapshot(
     health: {
       runner: computeRunnerHealth(arenaHandle, now),
       pendingSubmissions,
-      stagedCount,
+      stagedCount: database.countStagedVersions(),
       unsentDmCount: database.getPendingVersionDms().length,
       discordMemberCount: database.countDiscordMembers(),
     },
     ladders,
     agents,
+    totalAgents,
     wipeableVersionIds: database.getWipeableVersionIds(),
-    wikiEdits,
+    wikiEdits: wikiEditsPage.edits,
+    totalWikiEdits: wikiEditsPage.total,
   };
 }
 
@@ -1831,58 +1935,294 @@ function renderProjectDetailPanel(
   );
 }
 
-function renderWikiEditsSection(edits: wiki.RecentEdit[]): util.Child {
+function renderWikiEditRows(edits: wiki.RecentEdit[]): util.Html {
+  return (
+    <>
+      {edits.map(edit => {
+        const ghUrl = `https://github.com/${encodeURIComponent(edit.author)}`;
+        const isProject = edit.slug.startsWith('projects/');
+        return (
+          <tr>
+            <td className='muted'>
+              <util.Time epoch={edit.timestamp} format='date' />
+            </td>
+            <td>
+              <a href={edit.deleted ? edit.historyHref : edit.pageHref} className='subtle'>
+                {isProject && <span className='muted'>projects/</span>}
+                {edit.title}
+              </a>
+              {edit.deleted && <span className='muted'> (deleted)</span>}
+            </td>
+            <td>
+              {edit.deleted
+                ? <code>{edit.shortSha}</code>
+                : <code><a href={edit.revisionHref}>{edit.shortSha}</a></code>}{' '}
+              (<a href={edit.diffHref}>diff</a>)
+            </td>
+            <td>
+              <a href={ghUrl} className='subtle'>{edit.displayAuthor}</a>
+            </td>
+            <td className='wrap'>{edit.subject}</td>
+          </tr>
+        );
+      })}
+    </>
+  );
+}
+
+function renderWikiEditsSection(edits: wiki.RecentEdit[], total: number): util.Child {
   return (
     <section id='wiki'>
       <h3><a href='#wiki' className='subtle'>Wiki</a></h3>
-      {edits.length === 0 ? (
+      {total === 0 ? (
         <p className='muted'>No wiki edits yet.</p>
       ) : (
-        <div className='table-wrap'>
-          <table>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Page</th>
-                <th>Revision</th>
-                <th>Author</th>
-                <th>Summary</th>
-              </tr>
-            </thead>
-            <tbody>
-              {edits.map(edit => {
-                const ghUrl = `https://github.com/${encodeURIComponent(edit.author)}`;
-                const isProject = edit.slug.startsWith('projects/');
-                return (
-                  <tr>
-                    <td className='muted'>
-                      <util.Time epoch={edit.timestamp} format='date' />
-                    </td>
-                    <td>
-                      <a href={edit.deleted ? edit.historyHref : edit.pageHref} className='subtle'>
-                        {isProject && <span className='muted'>projects/</span>}
-                        {edit.title}
-                      </a>
-                      {edit.deleted && <span className='muted'> (deleted)</span>}
-                    </td>
-                    <td>
-                      {edit.deleted
-                        ? <code>{edit.shortSha}</code>
-                        : <code><a href={edit.revisionHref}>{edit.shortSha}</a></code>}{' '}
-                      (<a href={edit.diffHref}>diff</a>)
-                    </td>
-                    <td>
-                      <a href={ghUrl} className='subtle'>{edit.displayAuthor}</a>
-                    </td>
-                    <td className='wrap'>{edit.subject}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <util.PaginatedTable
+          tbodyId='wiki-tbody'
+          head={(
+            <tr>
+              <th>Date</th>
+              <th>Page</th>
+              <th>Revision</th>
+              <th>Author</th>
+              <th>Summary</th>
+            </tr>
+          )}
+          pager={{
+            id: 'wiki-pager',
+            label: 'Wiki edits pagination',
+            total,
+            singular: 'edit',
+            plural: 'edits',
+            prevLabel: '\u2190 Newer',
+            nextLabel: 'Older \u2192',
+            server: true,
+          }}
+        >
+          {renderWikiEditRows(edits)}
+        </util.PaginatedTable>
       )}
     </section>
+  );
+}
+
+function renderProjectRows(
+  agents: AdminAgentItem[],
+  ladderNameById: ReadonlyMap<string, string>,
+  wipeableVersionIds: ReadonlySet<number>
+): util.Html {
+  return (
+    <>
+      {agents.map(item => {
+        const {agent, developers, qualifiedLadders, submissionStatus} = item;
+        const qualifiedSet = new Set(qualifiedLadders);
+        const isDisabled = agent.status === 'disabled';
+        const statusClass = submissionStatus.label === 'Eligible'
+          ? 'yes'
+          : submissionStatus.label === 'Ineligible' ? 'no' : 'muted';
+        const hasCooldown = submissionStatus.nextEligibleAt !== undefined;
+        const activeEntries = item.entries.filter(e => e.role !== 'quarantined');
+        const quarantinedEntries = item.entries.filter(e => e.role === 'quarantined');
+        const stagedVersions = item.versions.filter(v => v.smokeStatus === 'staged');
+        const linkedDiscord = developers.filter(
+          d => Boolean(d.discordId && d.discordUsername)
+        );
+        const badSmogon = developers.find(
+          d => d.smogonStanding === 'bad' || d.smogonStanding === 'missing'
+        );
+        const conciseReason = formatAdminReason(submissionStatus.reason);
+
+        return (
+          <>
+            <tr
+              className={isDisabled ? 'project-row secondary' : 'project-row'}
+              data-agent-row={agent.slug}
+              tabIndex={0}
+              aria-expanded='false'
+            >
+              <td>
+                <span className='row-toggle' aria-hidden='true'>{'\u25b8'}</span>
+                <a
+                  href={`/projects/${encodeURIComponent(agent.slug)}/`}
+                  className='subtle'
+                >
+                  <strong>{agent.name}</strong>
+                </a>
+                {isDisabled && <> <span className='muted'>(disabled)</span></>}
+                {badSmogon && (
+                  <>
+                    {' '}
+                    <span
+                      className='no'
+                      title={
+                        `${badSmogon.githubLogin} / ${badSmogon.smogonUsername}: ` +
+                        `Smogon ${badSmogon.smogonStanding}`
+                      }
+                    >
+                      (Smogon {badSmogon.smogonStanding})
+                    </span>
+                  </>
+                )}
+              </td>
+              <td className='wrap'>
+                {linkedDiscord.length === 0 ? (
+                  <span
+                    className='muted'
+                    title={
+                      developers.length > 0
+                        ? 'No Discord linked ' +
+                          `(${developers.map(d => d.githubLogin).join(', ')})`
+                        : 'Unowned'
+                    }
+                  >
+                    —
+                  </span>
+                ) : (
+                  <div className='discord-list'>
+                    {linkedDiscord.map(dev => (
+                      <a
+                        href={`https://discord.com/users/${encodeURIComponent(dev.discordId!)}`}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        title={
+                          `DM @${dev.discordUsername} on Discord · ` +
+                          `GitHub: ${dev.githubLogin} · ` +
+                          `Smogon: ${dev.smogonUsername} (${dev.smogonStanding})`
+                        }
+                      >
+                        @{dev.discordUsername}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </td>
+              <td>
+                <div className='ladder-checks'>
+                  {ALL_SLOTS.map(slot => (
+                    <label className={isDisabled ? 'disabled' : undefined}>
+                      <input
+                        type='checkbox'
+                        className='ladder-toggle'
+                        data-agent={agent.slug}
+                        data-slot={slot}
+                        checked={qualifiedSet.has(slot)}
+                        disabled={isDisabled}
+                      />
+                      {SLOT_LABELS[slot]}
+                    </label>
+                  ))}
+                </div>
+              </td>
+              <td className='wrap'>
+                <div className='status-cell'>
+                  <div className='status-head'>
+                    <span className={`status-label ${statusClass}`}>
+                      {submissionStatus.label}
+                    </span>
+                    {hasCooldown && (
+                      <button
+                        type='button'
+                        className='btn-sm'
+                        data-action='refund'
+                        data-agent={agent.slug}
+                      >
+                        Refund
+                      </button>
+                    )}
+                  </div>
+                  <span
+                    className={
+                      conciseReason
+                        ? 'muted status-reason'
+                        : 'muted status-reason hide'
+                    }
+                    {...(submissionStatus.reason
+                      ? util.localizedTitleFromText(submissionStatus.reason)
+                      : {})}
+                  >
+                    {util.renderLocalizedText(conciseReason)}
+                  </span>
+                  {item.pools.map(p => (
+                    <span className='muted status-reason'>
+                      {formatPoolProgress(p)}
+                    </span>
+                  ))}
+                </div>
+              </td>
+              <td className='wrap'>
+                {activeEntries.length === 0 &&
+                  quarantinedEntries.length === 0 &&
+                  stagedVersions.length === 0 &&
+                  item.tournaments.length === 0 ? (
+                    <span className='muted'>—</span>
+                  ) : (
+                    <div className='chip-list'>
+                      {activeEntries.map(e => {
+                        const faults = formatFaultCounts(
+                          e.crashes,
+                          e.timeouts,
+                          e.ooms,
+                          e.invalidChoices
+                        );
+                        const tip = faults.length > 0
+                          ? `${e.ladderName} ${e.version} ` +
+                            `(${e.matches} matches · ${faults.join(', ')})`
+                          : `${e.ladderName} ${e.version} (${e.matches} matches)`;
+                        return (
+                          <span
+                            className={faults.length > 0 ? 'chip chip-warn' : 'chip'}
+                            title={tip}
+                          >
+                            {e.ladderName} {e.version}
+                          </span>
+                        );
+                      })}
+                      {quarantinedEntries.map(e => (
+                        <span
+                          className='chip chip-bad'
+                          title={`Quarantined on ${e.ladderName}`}
+                        >
+                          {e.ladderName} {e.version} [Q]
+                        </span>
+                      ))}
+                      {stagedVersions.map(v => (
+                        <span
+                          className='chip chip-warn'
+                          title={
+                            `Staged version ${v.version} awaiting owner activation ` +
+                            'or discard'
+                          }
+                        >
+                          {v.version} [staged]
+                        </span>
+                      ))}
+                      {item.tournaments.map(t => {
+                        const tName = formatTournamentName(t.tournamentName);
+                        return (
+                          <span
+                            className='chip'
+                            {...util.localizedTitle([
+                              `${tName} (${t.version})`,
+                              {epoch: t.startsAt},
+                            ])}
+                          >
+                            {tName}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+              </td>
+            </tr>
+            <tr className='detail-row hide' data-detail-for={agent.slug}>
+              <td colSpan={5}>
+                {renderProjectDetailPanel(item, ladderNameById, wipeableVersionIds)}
+              </td>
+            </tr>
+          </>
+        );
+      })}
+    </>
   );
 }
 
@@ -1908,238 +2248,40 @@ export function renderAdminPage(opts: {
       {renderLaddersSection(snapshot.ladders)}
 
       <section id='projects'>
-        <h3><a href='#projects' className='subtle'>Projects ({snapshot.agents.length})</a></h3>
-        {snapshot.agents.length === 0 ? (
+        <h3>
+          <a href='#projects' className='subtle'>
+            Projects (<span id='projects-total'>{snapshot.totalAgents}</span>)
+          </a>
+        </h3>
+        {snapshot.totalAgents === 0 ? (
           <p className='muted'>No Arena projects registered yet.</p>
         ) : (
-          <div className='table-wrap'>
-            <table>
-              <thead>
-                <tr>
-                  <th>Project</th>
-                  <th>Discord</th>
-                  <th>Ladders</th>
-                  <th>Eligibility</th>
-                  <th>Entered</th>
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.agents.map(item => {
-                  const {agent, developers, qualifiedLadders, submissionStatus} = item;
-                  const qualifiedSet = new Set(qualifiedLadders);
-                  const isDisabled = agent.status === 'disabled';
-                  const statusClass = submissionStatus.label === 'Eligible'
-                    ? 'yes'
-                    : submissionStatus.label === 'Ineligible' ? 'no' : 'muted';
-                  const hasCooldown = submissionStatus.nextEligibleAt !== undefined;
-                  const activeEntries = item.entries.filter(e => e.role !== 'quarantined');
-                  const quarantinedEntries = item.entries.filter(e => e.role === 'quarantined');
-                  const stagedVersions = item.versions.filter(v => v.smokeStatus === 'staged');
-                  const linkedDiscord = developers.filter(
-                    d => Boolean(d.discordId && d.discordUsername)
-                  );
-                  const badSmogon = developers.find(
-                    d => d.smogonStanding === 'bad' || d.smogonStanding === 'missing'
-                  );
-                  const conciseReason = formatAdminReason(submissionStatus.reason);
-
-                  return (
-                    <>
-                      <tr
-                        className={isDisabled ? 'project-row secondary' : 'project-row'}
-                        data-agent-row={agent.slug}
-                        tabIndex={0}
-                        aria-expanded='false'
-                      >
-                        <td>
-                          <span className='row-toggle' aria-hidden='true'>{'\u25b8'}</span>
-                          <a
-                            href={`/projects/${encodeURIComponent(agent.slug)}/`}
-                            className='subtle'
-                          >
-                            <strong>{agent.name}</strong>
-                          </a>
-                          {isDisabled && <> <span className='muted'>(disabled)</span></>}
-                          {badSmogon && (
-                            <>
-                              {' '}
-                              <span
-                                className='no'
-                                title={
-                                  `${badSmogon.githubLogin} / ${badSmogon.smogonUsername}: ` +
-                                  `Smogon ${badSmogon.smogonStanding}`
-                                }
-                              >
-                                (Smogon {badSmogon.smogonStanding})
-                              </span>
-                            </>
-                          )}
-                        </td>
-                        <td className='wrap'>
-                          {linkedDiscord.length === 0 ? (
-                            <span
-                              className='muted'
-                              title={
-                                developers.length > 0
-                                  ? 'No Discord linked ' +
-                                    `(${developers.map(d => d.githubLogin).join(', ')})`
-                                  : 'Unowned'
-                              }
-                            >
-                              —
-                            </span>
-                          ) : (
-                            <div className='discord-list'>
-                              {linkedDiscord.map(dev => (
-                                <a
-                                  href={`https://discord.com/users/${encodeURIComponent(dev.discordId!)}`}
-                                  target='_blank'
-                                  rel='noopener noreferrer'
-                                  title={
-                                    `DM @${dev.discordUsername} on Discord · ` +
-                                    `GitHub: ${dev.githubLogin} · ` +
-                                    `Smogon: ${dev.smogonUsername} (${dev.smogonStanding})`
-                                  }
-                                >
-                                  @{dev.discordUsername}
-                                </a>
-                              ))}
-                            </div>
-                          )}
-                        </td>
-                        <td>
-                          <div className='ladder-checks'>
-                            {ALL_SLOTS.map(slot => (
-                              <label className={isDisabled ? 'disabled' : undefined}>
-                                <input
-                                  type='checkbox'
-                                  className='ladder-toggle'
-                                  data-agent={agent.slug}
-                                  data-slot={slot}
-                                  checked={qualifiedSet.has(slot)}
-                                  disabled={isDisabled}
-                                />
-                                {SLOT_LABELS[slot]}
-                              </label>
-                            ))}
-                          </div>
-                        </td>
-                        <td className='wrap'>
-                          <div className='status-cell'>
-                            <div className='status-head'>
-                              <span className={`status-label ${statusClass}`}>
-                                {submissionStatus.label}
-                              </span>
-                              {hasCooldown && (
-                                <button
-                                  type='button'
-                                  className='btn-sm'
-                                  data-action='refund'
-                                  data-agent={agent.slug}
-                                >
-                                  Refund
-                                </button>
-                              )}
-                            </div>
-                            <span
-                              className={
-                                conciseReason
-                                  ? 'muted status-reason'
-                                  : 'muted status-reason hide'
-                              }
-                              {...(submissionStatus.reason
-                                ? util.localizedTitleFromText(submissionStatus.reason)
-                                : {})}
-                            >
-                              {util.renderLocalizedText(conciseReason)}
-                            </span>
-                            {item.pools.map(p => (
-                              <span className='muted status-reason'>
-                                {formatPoolProgress(p)}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className='wrap'>
-                          {activeEntries.length === 0 &&
-                            quarantinedEntries.length === 0 &&
-                            stagedVersions.length === 0 &&
-                            item.tournaments.length === 0 ? (
-                              <span className='muted'>—</span>
-                            ) : (
-                              <div className='chip-list'>
-                                {activeEntries.map(e => {
-                                  const faults = formatFaultCounts(
-                                    e.crashes,
-                                    e.timeouts,
-                                    e.ooms,
-                                    e.invalidChoices
-                                  );
-                                  const tip = faults.length > 0
-                                    ? `${e.ladderName} ${e.version} ` +
-                                      `(${e.matches} matches · ${faults.join(', ')})`
-                                    : `${e.ladderName} ${e.version} (${e.matches} matches)`;
-                                  return (
-                                    <span
-                                      className={faults.length > 0 ? 'chip chip-warn' : 'chip'}
-                                      title={tip}
-                                    >
-                                      {e.ladderName} {e.version}
-                                    </span>
-                                  );
-                                })}
-                                {quarantinedEntries.map(e => (
-                                  <span
-                                    className='chip chip-bad'
-                                    title={`Quarantined on ${e.ladderName}`}
-                                  >
-                                    {e.ladderName} {e.version} [Q]
-                                  </span>
-                                ))}
-                                {stagedVersions.map(v => (
-                                  <span
-                                    className='chip chip-warn'
-                                    title={
-                                      `Staged version ${v.version} awaiting owner activation ` +
-                                      'or discard'
-                                    }
-                                  >
-                                    {v.version} [staged]
-                                  </span>
-                                ))}
-                                {item.tournaments.map(t => {
-                                  const tName = formatTournamentName(t.tournamentName);
-                                  return (
-                                    <span
-                                      className='chip'
-                                      {...util.localizedTitle([
-                                        `${tName} (${t.version})`,
-                                        {epoch: t.startsAt},
-                                      ])}
-                                    >
-                                      {tName}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            )}
-                        </td>
-                      </tr>
-                      <tr className='detail-row hide' data-detail-for={agent.slug}>
-                        <td colSpan={5}>
-                          {renderProjectDetailPanel(item, ladderNameById, wipeableVersionIds)}
-                        </td>
-                      </tr>
-                    </>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <util.PaginatedTable
+            tbodyId='projects-tbody'
+            head={(
+              <tr>
+                <th>Project</th>
+                <th>Discord</th>
+                <th>Ladders</th>
+                <th>Eligibility</th>
+                <th>Entered</th>
+              </tr>
+            )}
+            pager={{
+              id: 'projects-pager',
+              label: 'Projects pagination',
+              total: snapshot.totalAgents,
+              singular: 'project',
+              plural: 'projects',
+              server: true,
+            }}
+          >
+            {renderProjectRows(snapshot.agents, ladderNameById, wipeableVersionIds)}
+          </util.PaginatedTable>
         )}
       </section>
 
-      {renderWikiEditsSection(snapshot.wikiEdits)}
+      {renderWikiEditsSection(snapshot.wikiEdits, snapshot.totalWikiEdits)}
 
       <script>{ADMIN_SCRIPT}</script>
     </>
@@ -2300,6 +2442,53 @@ export function register(app: polka.Polka, options: Options): Handle {
     return requireAdmin(req, res, true);
   };
 
+  const serializeAdminAgentItem = (item: AdminAgentItem) => ({
+    ...item,
+    versions: item.versions.map(v => ({
+      id: v.id,
+      version: v.version,
+      package: v.package,
+      sha256: v.sha256,
+      ladders: v.ladders,
+      tournaments: v.tournaments,
+      unpackedBytes: v.unpackedBytes,
+      smokeStatus: v.smokeStatus,
+      smokeError: v.smokeError,
+      smokeDurationMillis: v.smokeDurationMillis,
+      smokeInitMillis: v.smokeInitMillis,
+      smokeTeamPreviewMillis: v.smokeTeamPreviewMillis,
+      smokeTurnMillis: v.smokeTurnMillis,
+      smokePeakRam: v.smokePeakRam,
+      smokeInfoStatus: v.smokeInfoStatus,
+      diagnostics: v.diagnostics,
+      submittedAt: v.submittedAt,
+      activatedAt: v.activatedAt,
+      notified: v.notified,
+      activeLadderNames: v.activeLadderNames,
+      tournamentNames: v.tournamentNames,
+    })),
+  });
+
+  const parseAdminPagination = (
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): {page: number; limit: number; offset: number} | undefined => {
+    const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
+    const rawPage = parsedUrl.searchParams.get('page');
+    const page = rawPage ? Number(rawPage) : 1;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 100_000) {
+      sendJson(res, 400, {error: 'page must be an integer between 1 and 100000.'});
+      return undefined;
+    }
+    const rawLimit = parsedUrl.searchParams.get('limit');
+    const limit = rawLimit ? Number(rawLimit) : util.TABLE_PAGE_SIZE;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      sendJson(res, 400, {error: 'limit must be an integer between 1 and 100.'});
+      return undefined;
+    }
+    return {page, limit, offset: (page - 1) * limit};
+  };
+
   const handleGetAdmin = async (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2311,37 +2500,14 @@ export function register(app: polka.Polka, options: Options): Handle {
 
     const now = getNow();
     const sys = collectSystemSnapshot(now);
-    const wikiEdits = options.wiki ? await options.wiki.getRecentEdits() : [];
-    const snapshot = buildAdminSnapshot(db, login, arenaHandle, now, sys, wikiEdits);
+    const wikiEditsPage = options.wiki
+      ? await options.wiki.getRecentEditsPage(util.TABLE_PAGE_SIZE, 0)
+      : {edits: [], total: 0};
+    const snapshot = buildAdminSnapshot(db, login, arenaHandle, now, sys, wikiEditsPage);
     if (wantsJson) {
       sendJson(res, 200, {
         ...snapshot,
-        agents: snapshot.agents.map(item => ({
-          ...item,
-          versions: item.versions.map(v => ({
-            id: v.id,
-            version: v.version,
-            package: v.package,
-            sha256: v.sha256,
-            ladders: v.ladders,
-            tournaments: v.tournaments,
-            unpackedBytes: v.unpackedBytes,
-            smokeStatus: v.smokeStatus,
-            smokeError: v.smokeError,
-            smokeDurationMillis: v.smokeDurationMillis,
-            smokeInitMillis: v.smokeInitMillis,
-            smokeTeamPreviewMillis: v.smokeTeamPreviewMillis,
-            smokeTurnMillis: v.smokeTurnMillis,
-            smokePeakRam: v.smokePeakRam,
-            smokeInfoStatus: v.smokeInfoStatus,
-            diagnostics: v.diagnostics,
-            submittedAt: v.submittedAt,
-            activatedAt: v.activatedAt,
-            notified: v.notified,
-            activeLadderNames: v.activeLadderNames,
-            tournamentNames: v.tournamentNames,
-          })),
-        })),
+        agents: snapshot.agents.map(serializeAdminAgentItem),
       });
       return;
     }
@@ -2357,6 +2523,48 @@ export function register(app: polka.Polka, options: Options): Handle {
   app.get('/admin', (req, res) => handleGetAdmin(req, res, false));
   app.get('/admin.json', (req, res) => handleGetAdmin(req, res, true));
   app.get('/admin/index.json', (req, res) => handleGetAdmin(req, res, true));
+
+  app.get('/api/admin/projects.json', (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const paging = parseAdminPagination(req, res);
+    if (!paging) return;
+    const {page, limit, offset} = paging;
+    const {agents, total} = buildAdminAgentsPage(db, getNow(), limit, offset);
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
+    const wipeableVersionIds = new Set(db.getWipeableVersionIds());
+    sendJson(res, 200, {
+      page,
+      pageSize: limit,
+      total,
+      totalPages,
+      hasPrev: page > 1,
+      hasNext: page < totalPages,
+      projects: agents.map(serializeAdminAgentItem),
+      rowsHtml: renderProjectRows(agents, ladderNameById, wipeableVersionIds).toString(),
+    });
+  });
+
+  app.get('/api/admin/wiki-edits.json', async (req, res) => {
+    if (!requireAdmin(req, res, true)) return;
+    const paging = parseAdminPagination(req, res);
+    if (!paging) return;
+    const {page, limit, offset} = paging;
+    const {edits, total} = options.wiki
+      ? await options.wiki.getRecentEditsPage(limit, offset)
+      : {edits: [], total: 0};
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    sendJson(res, 200, {
+      page,
+      pageSize: limit,
+      total,
+      totalPages,
+      hasPrev: page > 1,
+      hasNext: page < totalPages,
+      edits,
+      rowsHtml: renderWikiEditRows(edits).toString(),
+    });
+  });
 
   app.get('/api/admin/stream', (req, res) => {
     if (!requireAdmin(req, res, true)) return;

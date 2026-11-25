@@ -870,6 +870,10 @@ export class Database extends SqliteDatabase {
     return agents.getAllAgents(this.db);
   }
 
+  getAgentsPage(limit: number, offset = 0): {agents: agents.AgentRow[]; total: number} {
+    return agents.getAgentsPage(this.db, limit, offset);
+  }
+
   getAgentParticipatedLadders(agentId: number): ladders.LadderRow[] {
     return entries.getAgentParticipatedLadders(this.db, agentId);
   }

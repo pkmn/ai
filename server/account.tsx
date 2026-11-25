@@ -295,21 +295,24 @@ export function buildDiagnosticReplayClientJs(opts: {
       void loadDiagReplayInto(wrap, allIds[0], allIds, allLabels);
     };
 
-    document.querySelectorAll(${JSON.stringify(opts.rowSelector)}).forEach(row => {
-      row.addEventListener('click', ev => {
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
-        toggleDiagRow(row);
-      });
-      row.addEventListener('keydown', ev => {
-        if (ev.key !== 'Enter' && ev.key !== ' ') return;
-        if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
-          return;
-        }
+    const diagRowSelector = ${JSON.stringify(opts.rowSelector)};
+    document.addEventListener('click', ev => {
+      if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+        return;
+      }
+      const row = ev.target && ev.target.closest ? ev.target.closest(diagRowSelector) : null;
+      if (row) toggleDiagRow(row);
+    });
+    document.addEventListener('keydown', ev => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      if (ev.target && ev.target.closest && ev.target.closest('a,button,summary,details,input')) {
+        return;
+      }
+      const row = ev.target && ev.target.closest ? ev.target.closest(diagRowSelector) : null;
+      if (row) {
         ev.preventDefault();
         toggleDiagRow(row);
-      });
+      }
     });
   `;
 }
