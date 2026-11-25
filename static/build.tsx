@@ -301,6 +301,7 @@ export function syncStaticLiveBanner(
 export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   header?: Html | string;
   content: Html | string;
+  preconnect?: readonly string[];
 }
 
 const BUILT_STYLESHEET_RE = /^index\.[0-9a-f]{8}\.css$/;
@@ -371,14 +372,18 @@ export class Renderer extends site.page.Renderer {
       ? withBanner
       : (withBanner ? `${withBanner}\n  ${TOP_CONTROLS}` : TOP_CONTROLS);
 
+    const preconnectTags = (page.preconnect ?? [])
+      .map(origin => `<link rel="preconnect" href="${escapeHtml(origin)}">`)
+      .join('');
+
     if (this.minify) {
       const transform = (s: string) => {
         const cleaned = IS_PRODUCTION ? s : s.replace(GTAG_RE, '');
-        const withTheme = cleaned.replace(
+        const withHead = cleaned.replace(
           '</head>',
-          `<script>${EARLY_THEME_SCRIPT}</script></head>`
+          `${preconnectTags}<script>${EARLY_THEME_SCRIPT}</script></head>`
         );
-        return replace ? replace(withTheme) : withTheme;
+        return replace ? replace(withHead) : withHead;
       };
       return super.render({
         ...page,
@@ -409,6 +414,7 @@ export class Renderer extends site.page.Renderer {
       '<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">',
       '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">',
       `<link rel="canonical" href="${this.siteConfig.url}${page.path}">`,
+      preconnectTags,
       analytics,
       `<link rel="stylesheet" href="${stylesheetHref}">`,
       styleTag,

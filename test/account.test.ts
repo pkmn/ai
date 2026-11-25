@@ -513,6 +513,9 @@ describe('account routes', () => {
         const html = await res.text();
         expect(html).toContain('>Pending<');
         expect(html).toContain('<fieldset class="form-fieldset" disabled>');
+        expect(html).toContain(
+          '<link rel="preconnect" href="https://play.pokemonshowdown.com">'
+        );
       });
 
     test('blocks ladder submissions from Pending projects with 403', async () => {

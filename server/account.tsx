@@ -1798,6 +1798,7 @@ export function renderAccountPage(opts: {
     header: injectLiveBanner(header('Account'), liveTournament),
     path: '/account/',
     style: STYLE,
+    preconnect: [util.SHOWDOWN_ORIGIN],
     content,
   }, s => s.replace('</title>', '</title><meta name="robots" content="noindex">'));
 }

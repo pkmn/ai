@@ -498,6 +498,9 @@ describe('empty Arena SSR views', () => {
     const battlesHtml = await h.getText('/arena/battles/');
     expect(battlesHtml).toContain('No battle currently running — Arena is idle.');
     expect(battlesHtml).toContain('No completed battles yet.');
+    expect(battlesHtml).toContain(
+      '<link rel="preconnect" href="https://play.pokemonshowdown.com">'
+    );
   });
 });
 
@@ -751,6 +754,9 @@ describe('populated Arena leaderboard views', () => {
     expect(metaProfileHtml).toContain('<td class="num">1500 <span class="muted">±0</span></td>');
     expect(metaProfileHtml).toContain('class="h2h-table"');
     expect(metaProfileHtml).toContain('Top 10');
+    expect(metaProfileHtml).toContain(
+      '<link rel="preconnect" href="https://play.pokemonshowdown.com">'
+    );
 
     const athenaProfileHtml = await h.getText('/projects/athena/');
     expect(athenaProfileHtml).toContain('class="table-wrap reign hide"');
@@ -1386,6 +1392,7 @@ describe('tournament SSR views', () => {
     expect(metaCsp).toContain("form-action 'none'");
     expect(metaCsp).not.toContain('frame-ancestors');
     expect(metaCsp).not.toContain('sandbox');
+    expect(viewerHtml).toContain('<link rel="preconnect" href="https://play.pokemonshowdown.com">');
   });
 
   test('renders ongoing or completed tournament summaries on /arena/', async () => {
@@ -1397,6 +1404,7 @@ describe('tournament SSR views', () => {
     expect(arenaHubHtml).toContain('LIVE');
     expect(arenaHubHtml).toContain('href="/projects/jaxcalibur/"');
     expect(arenaHubHtml).toContain('<td class="muted">-</td>');
+    expect(arenaHubHtml).not.toContain('rel="preconnect"');
   });
 
   test('renders tournament pages with event switcher or per-event rules', async () => {
@@ -1428,6 +1436,9 @@ describe('tournament SSR views', () => {
     expect(tourney2Html).toContain('sandbox="allow-scripts"');
     expect(tourney2Html).not.toContain('allow-same-origin');
     expect(tourney2Html).toContain('data-live-table="1"');
+    expect(tourney2Html).toContain(
+      '<link rel="preconnect" href="https://play.pokemonshowdown.com">'
+    );
   });
 
   test('renders simultaneous thinking clocks on live tournament pages', async () => {

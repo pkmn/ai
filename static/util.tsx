@@ -14,6 +14,8 @@ export const ROOT = path.basename(path.dirname(__dirname)) === 'build'
 
 export const root = (...paths: string[]) => path.join(ROOT, ...paths);
 
+export const SHOWDOWN_ORIGIN = 'https://play.pokemonshowdown.com';
+
 export const slugify = (s: string) =>
   s.normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')

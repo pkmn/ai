@@ -4248,6 +4248,7 @@ function renderBattlesPage(opts: {
     ),
     path: '/arena/battles/',
     style: ARENA_STYLE,
+    preconnect: [util.SHOWDOWN_ORIGIN],
     content,
   });
 }

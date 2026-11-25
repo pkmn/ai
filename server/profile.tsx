@@ -2551,6 +2551,7 @@ export function renderAgentProfileHtml(opts: {
     header: profileHeader,
     path: `/projects/${agent.slug}/`,
     style: `${render.ARENA_STYLE}\n${PROFILE_STYLE}`,
+    preconnect: [util.SHOWDOWN_ORIGIN],
     content,
   });
 }

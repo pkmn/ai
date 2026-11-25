@@ -1498,10 +1498,10 @@ const VIEWER_SCRIPT_HASH =
 // live in `config/nginx.conf` because browsers reject them in `<meta>`.
 export const VIEWER_META_CSP = [
   "default-src 'none'",
-  `script-src ${VIEWER_SCRIPT_HASH} https://play.pokemonshowdown.com`,
-  "style-src 'unsafe-inline' https://play.pokemonshowdown.com",
-  'img-src https://play.pokemonshowdown.com data:',
-  'media-src https://play.pokemonshowdown.com',
+  `script-src ${VIEWER_SCRIPT_HASH} ${util.SHOWDOWN_ORIGIN}`,
+  `style-src 'unsafe-inline' ${util.SHOWDOWN_ORIGIN}`,
+  `img-src ${util.SHOWDOWN_ORIGIN} data:`,
+  `media-src ${util.SHOWDOWN_ORIGIN}`,
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
@@ -1514,6 +1514,7 @@ export function renderBattleViewerPage(publicDir: string) {
         <meta name='viewport' content='width=device-width, initial-scale=1' />
         <meta name='robots' content='noindex' />
         <meta http-equiv='Content-Security-Policy' content={VIEWER_META_CSP} />
+        <link rel='preconnect' href={util.SHOWDOWN_ORIGIN} />
         <title>Battle Viewer | pkmn.ai</title>
         <style id='viewer-style'>{VIEWER_STYLE}</style>
       </head>
@@ -3463,6 +3464,7 @@ export function renderTournamentPage(opts: {
     header: pageHeader,
     path: `/arena/tournaments/${t.id}/`,
     style: `${render.ARENA_STYLE}\n${TOURNAMENTS_STYLE}`,
+    preconnect: [util.SHOWDOWN_ORIGIN],
     content,
   });
 
