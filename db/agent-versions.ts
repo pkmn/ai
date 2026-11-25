@@ -1063,7 +1063,9 @@ export function applySubmissionStatus(
   return inTransaction(() => {
     const prev = getVersionById(db, input.versionId);
     if (!prev) {
-      throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 404});
+      // Return 409 (not 404) so the runner's FIFO outbox drops stale status reports for wiped
+      // versions instead of wedging behind transient proxy-404 retries.
+      throw Object.assign(new Error(`Unknown versionId ${input.versionId}`), {status: 409});
     }
     const agent = getAgentById(db, prev.agentId)!;
     // Ladder submissions stay locally staged on the Mac mini after diagnostic fetch, so their
@@ -1572,6 +1574,47 @@ export function wipeVersion(
     db.prepare('DELETE FROM smoke_diagnostics WHERE version_id = ?').run(versionId);
     db.prepare('DELETE FROM agent_versions WHERE id = ?').run(versionId);
 
+    if (ver.smokeStatus === 'staged') {
+      teams.revertPendingTeamsToSaved(db, ver.ladders, ver.agentId);
+    }
+
+    // Update `pools` team rosters before evaluating `canSettleLadder` below so dropping the last
+    // unplayed agent's `'active'` pool on a `'settling'` ladder accurately triggers archival.
+    const inFlightLadders = new Set<string>();
+    const inFlightRows = db.prepare(`
+      SELECT ladders_json FROM agent_versions
+      WHERE agent_id = ? AND smoke_status IN ('pending', 'staged')
+    `).all(ver.agentId) as Array<{ladders_json: string}>;
+    for (const r of inFlightRows) {
+      for (const lid of JSON.parse(r.ladders_json) as string[]) {
+        inFlightLadders.add(lid);
+      }
+    }
+
+    for (const ladderId of touchedLadderIds) {
+      const ladder = getLadder(db, ladderId);
+      if (ladder?.team !== 'pools' || ladder.status === 'archived') continue;
+      const hasEntry = db.prepare(`
+        SELECT 1 FROM ladder_entries le
+        JOIN agent_versions av ON av.id = le.version_id
+        WHERE le.ladder_id = ? AND av.agent_id = ?
+        LIMIT 1
+      `).get(ladderId, ver.agentId);
+      if (hasEntry) continue;
+      const hasAgentMatch = db.prepare(`
+        SELECT 1 FROM matches m
+        JOIN agent_versions av ON av.id = m.p1_version_id OR av.id = m.p2_version_id
+        WHERE m.ladder_id = ? AND av.agent_id = ?
+        LIMIT 1
+      `).get(ladderId, ver.agentId);
+      if (hasAgentMatch) continue;
+      if (inFlightLadders.has(ladderId)) {
+        teams.demoteActiveTeamsToPending(db, ladderId, ver.agentId);
+      } else {
+        teams.revertActiveTeamsToSaved(db, ladderId, ver.agentId);
+      }
+    }
+
     const dayUtc = formatUtcDate(now);
     for (const row of entryRows) {
       entries.promoteRemainingActiveToChampion(db, row.ladder_id, ver.agentId);
@@ -1602,31 +1645,6 @@ export function wipeVersion(
             AND top10_total_seconds = 0
             AND top100_total_seconds = 0
         `).run(ver.agentId, row.ladder_id);
-      }
-    }
-
-    if (ver.smokeStatus === 'staged') {
-      teams.revertPendingTeamsToSaved(db, ver.ladders, ver.agentId);
-    }
-
-    for (const ladderId of touchedLadderIds) {
-      const ladder = getLadder(db, ladderId);
-      if (ladder?.team !== 'pools' || ladder.status === 'archived') continue;
-      const hasEntry = db.prepare(`
-        SELECT 1 FROM ladder_entries le
-        JOIN agent_versions av ON av.id = le.version_id
-        WHERE le.ladder_id = ? AND av.agent_id = ?
-        LIMIT 1
-      `).get(ladderId, ver.agentId);
-      if (hasEntry) continue;
-      const hasAgentMatch = db.prepare(`
-        SELECT 1 FROM matches m
-        JOIN agent_versions av ON av.id = m.p1_version_id OR av.id = m.p2_version_id
-        WHERE m.ladder_id = ? AND av.agent_id = ?
-        LIMIT 1
-      `).get(ladderId, ver.agentId);
-      if (!hasAgentMatch) {
-        teams.revertActiveTeamsToSaved(db, ladderId, ver.agentId);
       }
     }
 

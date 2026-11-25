@@ -246,9 +246,11 @@ export function recordCompletedMatch(
     const v1 = getVersionById(db, m.p1VersionId);
     const v2 = getVersionById(db, m.p2VersionId);
     if (!v1 || !v2) {
+      // Return 409 (not 404) so the runner's FIFO outbox treats matches for wiped versions as
+      // permanently rejected instead of retrying them forever behind transient proxy-404 logic.
       throw Object.assign(
         new Error(`Unknown versionId in match (${m.p1VersionId} vs ${m.p2VersionId})`),
-        {status: 404}
+        {status: 409}
       );
     }
 

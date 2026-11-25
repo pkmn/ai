@@ -1445,6 +1445,49 @@ describe('Coordinator', () => {
       }
     });
 
+  test('flushOutbox drops 409 match-complete for wiped version without blocking later items',
+    async () => {
+      const stateDb = new arenaDb.Database(':memory:');
+      try {
+        const delivered: string[] = [];
+        const fakeClient = {
+          completeMatch: (payload: serverArena.MatchCompletePayload) => {
+            if (payload.match.id === 'wiped-m1') {
+              return Promise.reject(
+                Object.assign(new Error('Unknown versionId in match (51 vs 52)'), {status: 409})
+              );
+            }
+            delivered.push(payload.match.id);
+            return Promise.resolve({ok: true, duplicate: false, archivedLadder: false});
+          },
+        } as unknown as serverArena.Client;
+        const coord = new coordinator.Coordinator({
+          client: fakeClient,
+          stateDb,
+          baselineSpec: {mode: 'native', target: '_baseline'},
+        });
+        stateDb.enqueueOutbox(
+          'match-complete',
+          {
+            match: {id: 'wiped-m1', ladderId: 'gen1ou', p1VersionId: 51, p2VersionId: 52},
+          } as unknown as serverArena.MatchCompletePayload
+        );
+        stateDb.enqueueOutbox(
+          'match-complete',
+          {
+            match: {id: 'healthy-m2', ladderId: 'gen1ou', p1VersionId: 52, p2VersionId: 53},
+          } as unknown as serverArena.MatchCompletePayload
+        );
+
+        const flushed = await coord.flushOutbox();
+        expect(flushed).toBe(1);
+        expect(delivered).toEqual(['healthy-m2']);
+        expect(stateDb.listOutbox()).toEqual([]);
+      } finally {
+        stateDb.close();
+      }
+    });
+
   test('arena DB migration 0001-staged-local-agents upgrades existing local_agents rows', () => {
     const migTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-mig-0001-'));
     try {

@@ -480,6 +480,9 @@ export class Coordinator {
           }
           this.cleanupUnpackedAgent(row.mode, row.target);
           this.stateDb.deleteLocalAgent(row.versionId);
+          this.faultCounters.delete(row.versionId);
+          this.quarantinedVersions.delete(row.versionId);
+          this.brokenUntilByVersion.delete(row.versionId);
         } catch (err) {
           console.error(`Failed pruning wiped version ${row.versionId} (${row.target}):`, err);
         }

@@ -266,3 +266,36 @@ export function revertActiveTeamsToSaved(
     WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
   `).run(ladderId, agentId);
 }
+
+// Demotes an agent's `'active'` pool to `'pending'` when an admin wipes the agent's last
+// `ladder_entries` version on a `pools` ladder while another `'pending'` or `'staged'` version is
+// still in flight for that ladder (preserving its roster for smoke testing and activation).
+export function demoteActiveTeamsToPending(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number
+) {
+  const hasActive = db.prepare(`
+    SELECT 1 FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+    LIMIT 1
+  `).get(ladderId, agentId);
+  if (!hasActive) return;
+  const hasPending = db.prepare(`
+    SELECT 1 FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'pending'
+    LIMIT 1
+  `).get(ladderId, agentId);
+  if (hasPending) {
+    db.prepare(`
+      DELETE FROM agent_ladder_teams
+      WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+    `).run(ladderId, agentId);
+    return;
+  }
+  db.prepare(`
+    UPDATE agent_ladder_teams
+    SET status = 'pending'
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+  `).run(ladderId, agentId);
+}

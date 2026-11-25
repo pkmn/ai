@@ -5066,4 +5066,257 @@ describe('discord watches', () => {
       db.close();
     }
   });
+
+  test('wipeVersion archives settling pools ladder when dropping below min active pools', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLadders(undefined, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const ladderId = 'gen9championsvgc2026regmc';
+      const slugs = ['alpha', 'beta', 'gamma', 'delta'];
+      const versions: Record<string, number> = {};
+      for (const [i, slug] of slugs.entries()) {
+        const agent = db.getAgentBySlug(slug)!;
+        db.setAgentLadders(agent.id, ['vgc'], 1_700_000_000);
+        const v = db.createSubmission({
+          agentId: agent.id,
+          version: '1.0',
+          package: 'bundle',
+          url: `https://example.com/${slug}-1.0.tar.zst`,
+          sha256: String(i + 1).repeat(64),
+          ladderIds: [ladderId],
+          teamsByLadder: {[ladderId]: [`${slug}-t1`, `${slug}-t2`]},
+          now: 1_700_000_000,
+        });
+        db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: 1_700_000_010});
+        versions[slug] = v.id;
+      }
+      db.setLadderAnchor(ladderId, 'alpha', '1.0', 1_700_000_015);
+      db.setLadderStatus(ladderId, 'active', 1_700_000_020);
+      db.recordCompletedMatch({
+        match: {
+          id: 'vgc-settle-1',
+          ladderId,
+          p1VersionId: versions.alpha,
+          p2VersionId: versions.beta,
+          seed: '1,2,3,4',
+          category: 'WW',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          game1Turns: 8,
+          game2Turns: 8,
+          game1EndReason: 'normal',
+          game2EndReason: 'normal',
+          p1Game1PeakRam: 10,
+          p1Game2PeakRam: 10,
+          p2Game1PeakRam: 10,
+          p2Game2PeakRam: 10,
+          p1Game1InitMillis: 10,
+          p1Game2InitMillis: 10,
+          p2Game1InitMillis: 10,
+          p2Game2InitMillis: 10,
+          p1Game1MeanTurnMillis: 10,
+          p1Game2MeanTurnMillis: 10,
+          p2Game1MeanTurnMillis: 10,
+          p2Game2MeanTurnMillis: 10,
+          p1Game1BankSeconds: 100,
+          p1Game2BankSeconds: 100,
+          p2Game1BankSeconds: 100,
+          p2Game2BankSeconds: 100,
+          completedAt: 1_700_000_030,
+        },
+      });
+      const {oldLadder} = db.rotateLadder({
+        oldLadderId: ladderId,
+        archivedName: 'VGC Reg M-C',
+        now: 1_700_000_040,
+      });
+      expect(oldLadder.status).toBe('settling');
+
+      // Wiping the 4th (unplayed) agent drops active pools from 4 to 3 (< min=4), so the
+      // settling ladder must auto-archive instead of wedging in `'settling'`.
+      db.wipeVersion(versions.delta, 1_700_000_050);
+      expect(db.getActiveRosterForLadder(ladderId)).toHaveLength(3);
+      expect(db.getLadder(ladderId)?.status).toBe('archived');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('wipeVersion demotes active pools to pending for a concurrent staged upgrade', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLadders(undefined, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const ladderId = 'gen9championsvgc2026regmc';
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['vgc'], 1_700_000_000);
+      const v1 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [ladderId],
+        teamsByLadder: {[ladderId]: ['t1', 't2']},
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.refundCooldown(alpha.slug, 1_700_000_020);
+
+      // Submit v1.1 reusing the locked `'active'` pool (no `teamsByLadder` override).
+      const v2 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.1',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.1.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: [ladderId],
+        now: 1_700_000_030,
+      });
+      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'staged', now: 1_700_000_040});
+
+      db.wipeVersion(v1.id, 1_700_000_050);
+      expect(db.hasActiveLadderTeams(ladderId, alpha.id)).toBe(false);
+      expect(db.getTeamsForAgentLadder(ladderId, alpha.id, 'pending')).toEqual(['t1', 't2']);
+
+      db.activateStagedVersion({versionId: v2.id, agentId: alpha.id, now: 1_700_000_060});
+      expect(db.hasActiveLadderTeams(ladderId, alpha.id)).toBe(true);
+      expect(db.getTeamsForAgentLadder(ladderId, alpha.id, 'active')).toEqual(['t1', 't2']);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('wipeVersion demotes active pools to pending for a concurrent pending upgrade', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLadders(undefined, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const ladderId = 'gen9championsvgc2026regmc';
+      const alpha = db.getAgentBySlug('alpha')!;
+      db.setAgentLadders(alpha.id, ['vgc'], 1_700_000_000);
+      const v1 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [ladderId],
+        teamsByLadder: {[ladderId]: ['t1', 't2']},
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.refundCooldown(alpha.slug, 1_700_000_020);
+      const v2 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.1',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.1.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: [ladderId],
+        now: 1_700_000_030,
+      });
+
+      db.wipeVersion(v1.id, 1_700_000_040);
+      const pending = db.getPendingSubmissions().find(p => p.versionId === v2.id);
+      expect(pending?.teamsByLadder[ladderId]).toEqual(['t1', 't2']);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('recordCompletedMatch rejects a wiped versionId with 409', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLaddersFromYaml(sampleLadders, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const beta = db.getAgentBySlug('beta')!;
+      db.setAgentLadders(alpha.id, ['rby'], 1_700_000_000);
+      db.setAgentLadders(beta.id, ['rby'], 1_700_000_000);
+      const va = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/a.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      const vb = db.createSubmission({
+        agentId: beta.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/b.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_700_000_000,
+      });
+      db.applySubmissionStatus({versionId: va.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.applySubmissionStatus({versionId: vb.id, smokeStatus: 'passed', now: 1_700_000_010});
+      db.wipeVersion(va.id, 1_700_000_020);
+
+      let caught: {status?: number} | undefined;
+      try {
+        db.recordCompletedMatch({
+          match: {
+            id: 'wiped-match-1',
+            ladderId: 'gen1ou20261109',
+            p1VersionId: va.id,
+            p2VersionId: vb.id,
+            seed: '1,2,3,4',
+            category: 'WW',
+            game1Outcome: 'W',
+            game2Outcome: 'W',
+            game1Turns: 8,
+            game2Turns: 8,
+            game1EndReason: 'normal',
+            game2EndReason: 'normal',
+            p1Game1PeakRam: 10,
+            p1Game2PeakRam: 10,
+            p2Game1PeakRam: 10,
+            p2Game2PeakRam: 10,
+            p1Game1InitMillis: 10,
+            p1Game2InitMillis: 10,
+            p2Game1InitMillis: 10,
+            p2Game2InitMillis: 10,
+            p1Game1MeanTurnMillis: 10,
+            p1Game2MeanTurnMillis: 10,
+            p2Game1MeanTurnMillis: 10,
+            p2Game2MeanTurnMillis: 10,
+            p1Game1BankSeconds: 100,
+            p1Game2BankSeconds: 100,
+            p2Game1BankSeconds: 100,
+            p2Game2BankSeconds: 100,
+            completedAt: 1_700_000_030,
+          },
+        });
+      } catch (err) {
+        caught = err as {status?: number};
+      }
+      expect(caught?.status).toBe(409);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('applySubmissionStatus rejects a wiped versionId with 409', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      let caught: {status?: number} | undefined;
+      try {
+        db.applySubmissionStatus({
+          versionId: 99999,
+          smokeStatus: 'quarantined',
+          now: 1_700_000_010,
+        });
+      } catch (err) {
+        caught = err as {status?: number};
+      }
+      expect(caught?.status).toBe(409);
+    } finally {
+      db.close();
+    }
+  });
 });

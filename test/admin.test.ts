@@ -894,6 +894,100 @@ describe('/admin dashboard & API', () => {
     expect(ok.status).toBe(200);
     expect(db.getVersionById(vUnplayed.id)).toBeUndefined();
   });
+
+  test('blocks wiping a version currently playing a live match', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const a1 = db.getAgentBySlug('0-error')!;
+    const a2 = db.getAgentBySlug('foul-play')!;
+    const v1 = db.createSubmission({
+      agentId: a1.id,
+      version: '0.1',
+      package: 'bundle',
+      url: 'https://example.com/0-error-0.1.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    const v2 = db.createSubmission({
+      agentId: a2.id,
+      version: '1.0',
+      package: 'bundle',
+      url: 'https://example.com/fp-1.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: now + 10});
+    db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: now + 10});
+
+    const hbRes = await fetch(`${baseUrl}/api/arena/heartbeat`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ARENA_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        heartbeatSeq: 1,
+        matchId: 'live-wipe-guard-1',
+        ladderId: 'gen1ou20261109',
+        format: 'gen1ou',
+        game: 1,
+        turn: 2,
+        activeSlot: 'p1',
+        turnStartedAt: now + 20,
+        turnBudgetSeconds: 30,
+        incrementSeconds: 5,
+        p1: {
+          slug: '0-error',
+          name: '0 ERROR',
+          version: '0.1',
+          bankSeconds: 120,
+          lastTurnMillis: 25,
+          meanTurnMillis: 25,
+          ram: 64,
+        },
+        p2: {
+          slug: 'foul-play',
+          name: 'Foul Play',
+          version: '1.0',
+          bankSeconds: 120,
+          lastTurnMillis: 25,
+          meanTurnMillis: 25,
+          ram: 64,
+        },
+      }),
+    });
+    expect(hbRes.status).toBe(200);
+
+    const html = await (await fetch(`${baseUrl}/admin`, {headers: {Cookie: adminCookie}})).text();
+    expect(html).not.toContain(`data-action="wipe" data-version-id="${v1.id}"`);
+    expect(html).not.toContain(`data-action="wipe" data-version-id="${v2.id}"`);
+
+    const blocked = await fetch(`${baseUrl}/api/admin/versions/${v1.id}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(blocked.status).toBe(409);
+    expect(db.getVersionById(v1.id)).toBeDefined();
+
+    // Once the live match clears via an idle heartbeat, wiping is permitted again.
+    await fetch(`${baseUrl}/api/arena/heartbeat`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ARENA_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({idle: true}),
+    });
+    const allowed = await fetch(`${baseUrl}/api/admin/versions/${v1.id}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(allowed.status).toBe(200);
+    expect(db.getVersionById(v1.id)).toBeUndefined();
+  });
 });
 
 describe('/admin recent wiki edits', () => {
