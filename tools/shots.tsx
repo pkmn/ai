@@ -1884,6 +1884,69 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           .waitFor({state: 'visible', timeout: 5000});
       },
     },
+    {
+      name: 'admin-paginated',
+      section: 'account',
+      title: 'Admin (Paginated)',
+      path: '/admin/',
+      githubUser: 'scheibo',
+      setup: async fixture => {
+        const undoDb = withSavepoint(fixture, raw => {
+          const insertAgent = raw.prepare(
+            `INSERT INTO agents (slug, name, status, updated_at)
+             VALUES (?, ?, 'pending', ?)`
+          );
+          for (let i = 1; i <= 22; i++) {
+            const num = String(i).padStart(2, '0');
+            insertAgent.run(
+              `extra-agent-${num}`,
+              `Extra Agent ${num}`,
+              NOW_SECONDS - i * 3600
+            );
+          }
+        });
+        for (let i = 1; i <= 26; i++) {
+          const num = String(i).padStart(2, '0');
+          await fixture.wikiInstance.savePage(
+            `Entry_${num}`,
+            `# Entry ${num}\n\nMock wiki entry ${num} for admin pagination.\n`,
+            'scheibo',
+            `Add wiki note ${num}`
+          );
+        }
+        return () => {
+          undoDb();
+          execFileSync('git', ['reset', '--hard', fixture.sha], {
+            cwd: fixture.wikiDir,
+            stdio: 'ignore',
+          });
+          execFileSync('git', ['clean', '-fd'], {
+            cwd: fixture.wikiDir,
+            stdio: 'ignore',
+          });
+        };
+      },
+      act: async page => {
+        const projNext = page.locator('#projects-pager-next');
+        await projNext.waitFor({state: 'visible', timeout: 5000});
+        await projNext.click();
+        await page.waitForFunction(
+          () => (document.getElementById('projects-pager-info')?.textContent ?? '')
+            .startsWith('Page 2 of'),
+          undefined,
+          {timeout: 5000}
+        );
+        const wikiNext = page.locator('#wiki-pager-next');
+        await wikiNext.waitFor({state: 'visible', timeout: 5000});
+        await wikiNext.click();
+        await page.waitForFunction(
+          () => (document.getElementById('wiki-pager-info')?.textContent ?? '')
+            .startsWith('Page 2 of'),
+          undefined,
+          {timeout: 5000}
+        );
+      },
+    },
 
     // =========================================================================
     // 7. Wiki
