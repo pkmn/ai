@@ -646,13 +646,6 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
-- name: mikumiku
-  site: https://www.smogon.com/forums/threads/3789199/
-  active: 2026 # ???
-  engine: Custom
-  platform:
-    - name: Pokémon Showdown!
-      url: https://github.com/smogon/pokemon-showdown
 - name: nessie
   site: https://www.smogon.com/forums/threads/3789213/
   active: 2026 # ???
@@ -714,6 +707,19 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: mikumiku
+  site: https://www.smogon.com/forums/threads/3789199/
+  active: 2026 # September 24
+  engine:
+    - name: pikapro-engine
+      url: https://github.com/spedr/pikapro-engine
+  language: [Rust, Python]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      spedr: Shao.45406
 - name: Porimon
   paper: Zhuo:2026
   active: 2026 # September 26
