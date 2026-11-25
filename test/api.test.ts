@@ -3179,6 +3179,17 @@ describe('createServerApp production HTTP hardening', () => {
     expect(sevenZBlock).toContain('expires 30d;');
   });
 
+  test('nginx hardens /arena/viewer/ CSP directives', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    const viewerIdx = conf.indexOf('location ^~ /arena/viewer/ {');
+    expect(viewerIdx).toBeGreaterThan(0);
+    const viewerBlock = conf.slice(viewerIdx, conf.indexOf('}', viewerIdx) + 1);
+    expect(viewerBlock).toContain('sandbox allow-scripts;');
+    expect(viewerBlock).toContain("frame-ancestors 'self';");
+    expect(viewerBlock).toContain("base-uri 'none';");
+    expect(viewerBlock).toContain("form-action 'none';");
+  });
+
   test('retains locked seasonal rosters on settling pools ladders', async () => {
     const vgcId = 'gen9championsvgc2026regmc';
     const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];

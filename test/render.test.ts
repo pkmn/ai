@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -1370,6 +1371,21 @@ describe('tournament SSR views', () => {
     expect(viewerHtml).toContain('class="icon-muted"');
     expect(viewerHtml).toContain('class="icon-sound"');
     expect(viewerHtml).toContain('id="sound" aria-label="Sound" aria-pressed="false"');
+
+    const metaMatch =
+      /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(viewerHtml);
+    expect(metaMatch).not.toBeNull();
+    const metaCsp = metaMatch![1].replace(/&#39;/g, "'");
+    const scriptMatch = /<script>([\s\S]*?)<\/script>/.exec(viewerHtml);
+    expect(scriptMatch).not.toBeNull();
+    const expectedHash =
+      `'sha256-${crypto.createHash('sha256').update(scriptMatch![1], 'utf8').digest('base64')}'`;
+    expect(metaCsp).toContain(`script-src ${expectedHash} https://play.pokemonshowdown.com`);
+    expect(metaCsp).not.toMatch(/script-src[^;]*'unsafe-inline'/);
+    expect(metaCsp).toContain("base-uri 'none'");
+    expect(metaCsp).toContain("form-action 'none'");
+    expect(metaCsp).not.toContain('frame-ancestors');
+    expect(metaCsp).not.toContain('sandbox');
   });
 
   test('renders ongoing or completed tournament summaries on /arena/', async () => {

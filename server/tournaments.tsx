@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -1488,19 +1489,31 @@ function renderTournamentGamesNode(opts: {
   );
 }
 
+const VIEWER_SCRIPT_HASH =
+  `'sha256-${crypto.createHash('sha256').update(VIEWER_SCRIPT, 'utf8').digest('base64')}'`;
+
+// Delivered via `<meta>` so every build pins the exact inline `VIEWER_SCRIPT` digest without
+// coupling `config/nginx.conf` reloads to viewer edits or tripping WebKit's opaque-origin `'self'`
+// block inside `sandbox="allow-scripts"`. Frame-level directives (`sandbox`, `frame-ancestors`)
+// live in `config/nginx.conf` because browsers reject them in `<meta>`.
+export const VIEWER_META_CSP = [
+  "default-src 'none'",
+  `script-src ${VIEWER_SCRIPT_HASH} https://play.pokemonshowdown.com`,
+  "style-src 'unsafe-inline' https://play.pokemonshowdown.com",
+  'img-src https://play.pokemonshowdown.com data:',
+  'media-src https://play.pokemonshowdown.com',
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 export function renderBattleViewerPage(publicDir: string) {
-  const csp =
-    "default-src 'none'; script-src 'unsafe-inline' https://play.pokemonshowdown.com; " +
-    "style-src 'unsafe-inline' https://play.pokemonshowdown.com; " +
-    'img-src https://play.pokemonshowdown.com data:; ' +
-    'media-src https://play.pokemonshowdown.com;';
   const viewerDoc = (
     <html lang='en'>
       <head>
         <meta charset='utf-8' />
         <meta name='viewport' content='width=device-width, initial-scale=1' />
         <meta name='robots' content='noindex' />
-        <meta http-equiv='Content-Security-Policy' content={csp} />
+        <meta http-equiv='Content-Security-Policy' content={VIEWER_META_CSP} />
         <title>Battle Viewer | pkmn.ai</title>
         <style id='viewer-style'>{VIEWER_STYLE}</style>
       </head>
