@@ -1400,6 +1400,51 @@ describe('Coordinator', () => {
       }
     });
 
+  test('syncActivatedAgents deletes wiped hot or cold bundles while preserving archived ones',
+    async () => {
+      const h = createMockCoordHarness('prune-wiped');
+      try {
+        const wipedDir = path.join(h.dirs.agents, 'mocca-0.1-v51');
+        const wipedArchive = path.join(h.dirs.cold, 'mocca-0.1-v51.tar.zst');
+        const keptArchive = path.join(h.dirs.cold, 'legacy-1.0-v52.tar.zst');
+        fs.mkdirSync(wipedDir, {recursive: true});
+        fs.mkdirSync(h.dirs.cold, {recursive: true});
+        fs.writeFileSync(path.join(wipedDir, 'run'), '#!/bin/sh\n', {mode: 0o755});
+        fs.writeFileSync(wipedArchive, 'fake-zst');
+        fs.writeFileSync(keptArchive, 'fake-zst');
+
+        h.stateDb.upsertLocalAgent({
+          versionId: 51,
+          agentId: 1,
+          slug: 'mocca',
+          version: '0.1',
+          mode: 'native',
+          target: 'mocca-0.1-v51',
+          residency: 'hot',
+          unpackedBytes: 1024,
+        });
+        h.stateDb.upsertLocalAgent({
+          versionId: 52,
+          agentId: 2,
+          slug: 'legacy',
+          version: '1.0',
+          mode: 'native',
+          target: 'legacy-1.0-v52',
+          residency: 'cold',
+          unpackedBytes: 2048,
+        });
+
+        await h.coord.syncActivatedAgents([], {stagedVersionIds: [], knownVersionIds: [52]});
+        expect(h.stateDb.getLocalAgent(51)).toBeUndefined();
+        expect(fs.existsSync(wipedDir)).toBe(false);
+        expect(fs.existsSync(wipedArchive)).toBe(false);
+        expect(h.stateDb.getLocalAgent(52)?.residency).toBe('cold');
+        expect(fs.existsSync(keptArchive)).toBe(true);
+      } finally {
+        h.stateDb.close();
+      }
+    });
+
   test('arena DB migration 0001-staged-local-agents upgrades existing local_agents rows', () => {
     const migTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-arena-mig-0001-'));
     try {

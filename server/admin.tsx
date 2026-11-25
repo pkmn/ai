@@ -97,6 +97,7 @@ export interface AdminSnapshot {
   };
   ladders: AdminLadderItem[];
   agents: AdminAgentItem[];
+  wipeableVersionIds: number[];
   wikiEdits: wiki.RecentEdit[];
 }
 
@@ -319,7 +320,8 @@ const ADMIN_SCRIPT = `
       btn.addEventListener('click', () => {
         const group = btn.closest('.action-group');
         if (!group || group.querySelector('.confirm-discard')) return;
-        btn.classList.add('hide');
+        const siblings = Array.from(group.querySelectorAll('button'));
+        siblings.forEach(b => b.classList.add('hide'));
 
         const confirmBtn = document.createElement('button');
         confirmBtn.type = 'button';
@@ -334,7 +336,7 @@ const ADMIN_SCRIPT = `
         const cleanup = () => {
           confirmBtn.remove();
           cancelBtn.remove();
-          btn.classList.remove('hide');
+          siblings.forEach(b => b.classList.remove('hide'));
         };
 
         cancelBtn.addEventListener('click', cleanup);
@@ -358,6 +360,50 @@ const ADMIN_SCRIPT = `
       });
     });
 
+    document.querySelectorAll('button[data-action="wipe"]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = btn.closest('.action-group');
+        if (!group || group.querySelector('.confirm-wipe')) return;
+        const siblings = Array.from(group.querySelectorAll('button'));
+        siblings.forEach(b => b.classList.add('hide'));
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'btn-sm btn-danger confirm-wipe';
+        confirmBtn.textContent = 'Confirm wipe';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn-sm';
+        cancelBtn.textContent = 'Cancel';
+
+        const cleanup = () => {
+          confirmBtn.remove();
+          cancelBtn.remove();
+          siblings.forEach(b => b.classList.remove('hide'));
+        };
+
+        cancelBtn.addEventListener('click', cleanup);
+        confirmBtn.addEventListener('click', async () => {
+          confirmBtn.disabled = true;
+          cancelBtn.disabled = true;
+          try {
+            await postJson(
+              '/api/admin/versions/' + encodeURIComponent(btn.dataset.versionId) + '/wipe',
+              {}
+            );
+            window.location.reload();
+          } catch (err) {
+            cleanup();
+            showFeedback(err.message || 'Failed wiping version.', true);
+          }
+        });
+
+        group.appendChild(confirmBtn);
+        group.appendChild(cancelBtn);
+      });
+    });
+
     ${account.buildDiagnosticReplayClientJs({
       apiPrefix: '/api/admin/diagnostics',
       rowSelector: 'tr.battle-row[data-diag-ids]',
@@ -367,7 +413,8 @@ const ADMIN_SCRIPT = `
       btn.addEventListener('click', () => {
         const group = btn.closest('.action-group');
         if (!group || group.querySelector('.confirm-quarantine')) return;
-        btn.classList.add('hide');
+        const siblings = Array.from(group.querySelectorAll('button'));
+        siblings.forEach(b => b.classList.add('hide'));
 
         const input = document.createElement('input');
         input.type = 'text';
@@ -389,7 +436,7 @@ const ADMIN_SCRIPT = `
           input.remove();
           confirmBtn.remove();
           cancelBtn.remove();
-          btn.classList.remove('hide');
+          siblings.forEach(b => b.classList.remove('hide'));
         };
 
         cancelBtn.addEventListener('click', cleanup);
@@ -1285,6 +1332,7 @@ export function buildAdminSnapshot(
     },
     ladders,
     agents,
+    wipeableVersionIds: database.getWipeableVersionIds(),
     wikiEdits,
   };
 }
@@ -1371,7 +1419,8 @@ function formatPoolProgress(p: AdminPoolProgress): string {
 
 function renderProjectDetailPanel(
   item: AdminAgentItem,
-  ladderNameById: ReadonlyMap<string, string>
+  ladderNameById: ReadonlyMap<string, string>,
+  wipeableVersionIds: ReadonlySet<number>
 ): util.Child {
   const {agent, entries, versions, pools, tournaments} = item;
   const activeMeta: util.Child[] = [];
@@ -1753,6 +1802,21 @@ function renderProjectDetailPanel(
                               Unquarantine
                             </button>
                           )}
+                          {wipeableVersionIds.has(v.id) && (
+                            <button
+                              type='button'
+                              className='btn-sm btn-danger'
+                              data-action='wipe'
+                              data-version-id={String(v.id)}
+                              data-agent={agent.slug}
+                              data-version={v.version}
+                              title={
+                                `Wipe unplayed version ${v.version} from DB and runner archives`
+                              }
+                            >
+                              Wipe
+                            </button>
+                          )}
                         </span>
                       </td>
                     </tr>
@@ -1829,6 +1893,7 @@ export function renderAdminPage(opts: {
 }): string {
   const {snapshot, allLadders, liveTournament} = opts;
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
+  const wipeableVersionIds = new Set(snapshot.wipeableVersionIds);
   const {pendingSubmissions, stagedCount, unsentDmCount} = snapshot.health;
 
   const content = (
@@ -2062,7 +2127,7 @@ export function renderAdminPage(opts: {
                       </tr>
                       <tr className='detail-row hide' data-detail-for={agent.slug}>
                         <td colSpan={5}>
-                          {renderProjectDetailPanel(item, ladderNameById)}
+                          {renderProjectDetailPanel(item, ladderNameById, wipeableVersionIds)}
                         </td>
                       </tr>
                     </>
@@ -2434,6 +2499,35 @@ export function register(app: polka.Polka, options: Options): Handle {
     } catch (err: any) {
       const status = typeof err?.status === 'number' ? err.status : 400;
       sendJson(res, status, {error: err?.message || 'Failed discarding staged version.'});
+    }
+  });
+
+  app.post('/api/admin/versions/:id/wipe', (req, res) => {
+    if (!requireAdminMutation(req, res)) return;
+    const versionId = parsePositiveIntParam(req.params.id);
+    if (versionId === undefined) {
+      sendJson(res, 400, {error: 'Invalid version ID.'});
+      return;
+    }
+    const now = getNow();
+    try {
+      const activePoolsIds = db
+        .getLadders()
+        .filter(l => l.team === 'pools' && l.status !== 'archived')
+        .map(l => l.id);
+      const result = db.wipeVersion(versionId, now);
+      const pubDir = options.publicDir ?? arena.PUBLIC_DIR;
+      for (const id of activePoolsIds) {
+        if (db.getLadder(id)?.status === 'archived') {
+          arena.promoteArchivedPoolsLogs(pubDir, id);
+        }
+      }
+      const safe = {...result.version};
+      delete safe.authTokenEncoding;
+      sendJson(res, 200, {ok: true, version: safe});
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      sendJson(res, status, {error: err?.message || 'Failed wiping version.'});
     }
   });
 

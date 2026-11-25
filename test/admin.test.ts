@@ -751,6 +751,7 @@ describe('/admin dashboard & API', () => {
         {path: '/api/admin/agents/newcomer/ladders', body: {slot: 'rby', qualified: true}},
         {path: '/api/admin/agents/newcomer/refund-cooldown', body: {}},
         {path: '/api/admin/versions/1/discard', body: {}},
+        {path: '/api/admin/versions/1/wipe', body: {}},
         {path: '/api/admin/versions/0-error/1.0/quarantine', body: {reason: 'test'}},
         {path: '/api/admin/versions/0-error/1.0/unquarantine', body: {}},
         {path: '/api/admin/ladders/gen1ou20261109/entries/0-error/1.0/retire', body: {}},
@@ -794,6 +795,97 @@ describe('/admin dashboard & API', () => {
           .toBe(403);
       }
     });
+
+  test('wipes an unplayed version via admin API while blocking played versions', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const a1 = db.getAgentBySlug('0-error')!;
+    const a2 = db.getAgentBySlug('foul-play')!;
+    const a3 = db.getAgentBySlug('newcomer')!;
+    db.setAgentLadders('newcomer', ['rby'], now);
+    const vUnplayed = db.createSubmission({
+      agentId: a1.id,
+      version: '0.1',
+      package: 'bundle',
+      url: 'https://example.com/0-error-0.1.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    const vPlayed = db.createSubmission({
+      agentId: a2.id,
+      version: '1.0',
+      package: 'bundle',
+      url: 'https://example.com/fp-1.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    const vOpp = db.createSubmission({
+      agentId: a3.id,
+      version: '0.2',
+      package: 'bundle',
+      url: 'https://example.com/newcomer-0.2.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now,
+    });
+    db.applySubmissionStatus({versionId: vUnplayed.id, smokeStatus: 'passed', now: now + 10});
+    db.applySubmissionStatus({versionId: vPlayed.id, smokeStatus: 'passed', now: now + 10});
+    db.applySubmissionStatus({versionId: vOpp.id, smokeStatus: 'passed', now: now + 10});
+    db.recordCompletedMatch({
+      match: {
+        id: 'admin-wipe-match-1',
+        ladderId: 'gen1ou20261109',
+        p1VersionId: vPlayed.id,
+        p2VersionId: vOpp.id,
+        seed: '1,2,3,4',
+        category: 'WW',
+        game1Outcome: 'W',
+        game2Outcome: 'W',
+        game1Turns: 8,
+        game2Turns: 8,
+        game1EndReason: 'normal',
+        game2EndReason: 'normal',
+        p1Game1PeakRam: 10,
+        p1Game2PeakRam: 10,
+        p2Game1PeakRam: 10,
+        p2Game2PeakRam: 10,
+        p1Game1InitMillis: 10,
+        p1Game2InitMillis: 10,
+        p2Game1InitMillis: 10,
+        p2Game2InitMillis: 10,
+        p1Game1MeanTurnMillis: 10,
+        p1Game2MeanTurnMillis: 10,
+        p2Game1MeanTurnMillis: 10,
+        p2Game2MeanTurnMillis: 10,
+        p1Game1BankSeconds: 100,
+        p1Game2BankSeconds: 100,
+        p2Game1BankSeconds: 100,
+        p2Game2BankSeconds: 100,
+        completedAt: now + 15 * 86400 + 20,
+      },
+    });
+
+    const htmlRes = await fetch(`${baseUrl}/admin`, {headers: {Cookie: adminCookie}});
+    const html = await htmlRes.text();
+    expect(html).toContain(`data-action="wipe" data-version-id="${vUnplayed.id}"`);
+    expect(html).not.toContain(`data-action="wipe" data-version-id="${vPlayed.id}"`);
+
+    const blocked = await fetch(`${baseUrl}/api/admin/versions/${vPlayed.id}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(blocked.status).toBe(409);
+
+    const ok = await fetch(`${baseUrl}/api/admin/versions/${vUnplayed.id}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(ok.status).toBe(200);
+    expect(db.getVersionById(vUnplayed.id)).toBeUndefined();
+  });
 });
 
 describe('/admin recent wiki edits', () => {

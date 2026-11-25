@@ -718,6 +718,18 @@ export class Database extends SqliteDatabase {
     return versions.getStagedLadderVersionIds(this.db);
   }
 
+  getAllVersionIds(): number[] {
+    return versions.getAllVersionIds(this.db);
+  }
+
+  getWipeableVersionIds(): number[] {
+    return versions.getWipeableVersionIds(this.db);
+  }
+
+  wipeVersion(versionId: number, now?: number): versions.WipeVersionResult {
+    return versions.wipeVersion(this.db, this.txRunner, versionId, now);
+  }
+
   getSmokeDiagnosticsForVersion(versionId: number): smokeDiagnostics.Row[] {
     return smokeDiagnostics.getForVersion(this.db, versionId);
   }

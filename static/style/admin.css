@@ -325,7 +325,7 @@ tr.project-row.expanded .row-toggle {
 
 .action-group {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.3rem 0.45ch;
   align-items: center;
 }

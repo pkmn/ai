@@ -286,12 +286,18 @@ export async function runDaemon(opts: {
               .map(e => e.versionId)),
           ];
           const stagedVersionIds = initialSnap.stagedVersionIds;
+          const knownVersionIds = initialSnap.knownVersionIds;
           if (
-            (activatedVersionIds.length || stagedVersionIds !== undefined) &&
+            (
+              activatedVersionIds.length ||
+              stagedVersionIds !== undefined ||
+              knownVersionIds !== undefined
+            ) &&
             !shouldYieldForMaintenance?.()
           ) {
             await coord.syncActivatedAgents(activatedVersionIds, {
               stagedVersionIds,
+              knownVersionIds,
               shouldYield: shouldYieldForMaintenance,
             });
           }

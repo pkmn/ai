@@ -242,3 +242,27 @@ export function revertPendingTeamsToSaved(
     revert.run(ladderId, agentId);
   }
 }
+
+// Restores an agent's `'active'` pool back to `'saved'` when an admin wipes the agent's last
+// unplayed version on a `pools` ladder, preserving validated pastes without keeping them locked.
+export function revertActiveTeamsToSaved(
+  db: DatabaseSync,
+  ladderId: string,
+  agentId: number
+) {
+  const hasActive = db.prepare(`
+    SELECT 1 FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+    LIMIT 1
+  `).get(ladderId, agentId);
+  if (!hasActive) return;
+  db.prepare(`
+    DELETE FROM agent_ladder_teams
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'saved'
+  `).run(ladderId, agentId);
+  db.prepare(`
+    UPDATE agent_ladder_teams
+    SET status = 'saved'
+    WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
+  `).run(ladderId, agentId);
+}

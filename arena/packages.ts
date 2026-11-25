@@ -1114,6 +1114,18 @@ export function archiveColdAgent(
   return coldArchive;
 }
 
+export function deleteColdAgentArchive(
+  target: string,
+  opts: {dirs?: Dirs} = {}
+): boolean {
+  const dirs = opts.dirs ?? PROD_DIRS;
+  assertArchiveVolumeMounted(dirs.cold);
+  const coldArchive = path.join(dirs.cold, `${target}.tar.zst`);
+  const existed = fs.existsSync(coldArchive);
+  fs.rmSync(coldArchive, {force: true});
+  return existed;
+}
+
 export function evictColdAgentsIfNeeded(
   stateDb: db.Database,
   opts: {

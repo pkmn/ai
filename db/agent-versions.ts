@@ -134,6 +134,11 @@ export interface DiscardStagedVersionInput {
   agentId: number;
 }
 
+export interface WipeVersionResult {
+  version: AgentVersionRow;
+  agent: AgentRow;
+}
+
 export interface ApplySubmissionStatusResult {
   version: AgentVersionRow;
   agent: AgentRow;
@@ -1411,6 +1416,222 @@ export function getStagedLadderVersionIds(db: DatabaseSync): number[] {
     ORDER BY id ASC
   `).all() as Array<{id: number}>;
   return rows.map(r => r.id);
+}
+
+export function getAllVersionIds(db: DatabaseSync): number[] {
+  const rows = db.prepare(
+    'SELECT id FROM agent_versions ORDER BY id ASC'
+  ).all() as Array<{id: number}>;
+  return rows.map(r => r.id);
+}
+
+export function getWipeableVersionIds(db: DatabaseSync): number[] {
+  const rows = db.prepare(`
+    SELECT av.id
+    FROM agent_versions av
+    WHERE av.smoke_status != 'pending'
+      AND NOT EXISTS (
+        SELECT 1 FROM matches m
+        WHERE m.p1_version_id = av.id OR m.p2_version_id = av.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM pair_aggregates pa
+        WHERE pa.low_version_id = av.id OR pa.high_version_id = av.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ladder_entries le
+        JOIN ladders l ON l.id = le.ladder_id
+        WHERE le.version_id = av.id
+          AND (le.matches > 0 OR le.is_anchor = 1 OR l.status = 'archived')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tournament_matches tm
+        WHERE tm.p1_version_id = av.id OR tm.p2_version_id = av.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM tournament_entrants te
+        JOIN tournaments t ON t.id = te.tournament_id
+        WHERE te.version_id = av.id
+          AND t.status IN ('running', 'completed')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_ladder_stats als
+        WHERE als.max_elo_version_id = av.id
+      )
+    ORDER BY av.id ASC
+  `).all() as Array<{id: number}>;
+  return rows.map(r => r.id);
+}
+
+// Permanently deletes an unplayed `agent_versions` row and its dependent zero-match rows so staff
+// can reclaim a version label, refund its cooldown/smoke budget, and trigger automatic runner
+// cleanup of its hot/cold bundles without disturbing `sqlite_sequence` or played match history.
+export function wipeVersion(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  versionId: number,
+  now = Math.floor(Date.now() / 1000)
+): WipeVersionResult {
+  return inTransaction(() => {
+    const ver = getVersionById(db, versionId);
+    if (!ver) {
+      throw Object.assign(new Error(`Unknown versionId ${versionId}`), {status: 404});
+    }
+    const agent = getAgentById(db, ver.agentId);
+    if (!agent) {
+      throw Object.assign(new Error(`Unknown agentId ${ver.agentId}`), {status: 404});
+    }
+    if (ver.smokeStatus === 'pending') {
+      throw Object.assign(
+        new Error(`Version "${ver.version}" is pending smoke testing and cannot be wiped.`),
+        {status: 409}
+      );
+    }
+
+    const hasMatch = db.prepare(`
+      SELECT 1 FROM matches WHERE p1_version_id = ? OR p2_version_id = ? LIMIT 1
+    `).get(versionId, versionId);
+    const hasPair = db.prepare(`
+      SELECT 1 FROM pair_aggregates WHERE low_version_id = ? OR high_version_id = ? LIMIT 1
+    `).get(versionId, versionId);
+    const entryRows = db.prepare(`
+      SELECT le.ladder_id, le.matches, le.is_anchor, l.status AS ladder_status, l.team
+      FROM ladder_entries le
+      JOIN ladders l ON l.id = le.ladder_id
+      WHERE le.version_id = ?
+    `).all(versionId) as Array<{
+      ladder_id: string;
+      matches: number;
+      is_anchor: number;
+      ladder_status: string;
+      team: string;
+    }>;
+    if (hasMatch || hasPair || entryRows.some(r => r.matches > 0)) {
+      throw Object.assign(
+        new Error(`Version "${ver.version}" has played ladder matches and cannot be wiped.`),
+        {status: 409}
+      );
+    }
+    if (entryRows.some(r => r.is_anchor === 1)) {
+      throw Object.assign(
+        new Error(`Version "${ver.version}" is pinned as a ladder anchor and cannot be wiped.`),
+        {status: 409}
+      );
+    }
+    if (entryRows.some(r => r.ladder_status === 'archived')) {
+      throw Object.assign(
+        new Error(`Version "${ver.version}" belongs to an archived ladder and cannot be wiped.`),
+        {status: 409}
+      );
+    }
+
+    const hasTourneyMatch = db.prepare(`
+      SELECT 1 FROM tournament_matches WHERE p1_version_id = ? OR p2_version_id = ? LIMIT 1
+    `).get(versionId, versionId);
+    if (hasTourneyMatch) {
+      throw Object.assign(
+        new Error(`Version "${ver.version}" has played tournament matches and cannot be wiped.`),
+        {status: 409}
+      );
+    }
+    const lockedTourney = db.prepare(`
+      SELECT 1 FROM tournament_entrants te
+      JOIN tournaments t ON t.id = te.tournament_id
+      WHERE te.version_id = ? AND t.status IN ('running', 'completed')
+      LIMIT 1
+    `).get(versionId);
+    if (lockedTourney) {
+      throw Object.assign(
+        new Error(
+          `Version "${ver.version}" is entered in a running or completed tournament and ` +
+          'cannot be wiped.'
+        ),
+        {status: 409}
+      );
+    }
+    const peakRef = db.prepare(
+      'SELECT 1 FROM agent_ladder_stats WHERE max_elo_version_id = ? LIMIT 1'
+    ).get(versionId);
+    if (peakRef) {
+      throw Object.assign(
+        new Error(
+          `Version "${ver.version}" is referenced by ladder peak stats and cannot be wiped.`
+        ),
+        {status: 409}
+      );
+    }
+
+    const touchedLadderIds = new Set<string>([
+      ...ver.ladders,
+      ...entryRows.map(r => r.ladder_id),
+    ]);
+
+    db.prepare('DELETE FROM rating_snapshots WHERE version_id = ?').run(versionId);
+    db.prepare('DELETE FROM ladder_entries WHERE version_id = ?').run(versionId);
+    db.prepare('DELETE FROM tournament_entrants WHERE version_id = ?').run(versionId);
+    db.prepare('DELETE FROM smoke_diagnostics WHERE version_id = ?').run(versionId);
+    db.prepare('DELETE FROM agent_versions WHERE id = ?').run(versionId);
+
+    const dayUtc = formatUtcDate(now);
+    for (const row of entryRows) {
+      entries.promoteRemainingActiveToChampion(db, row.ladder_id, ver.agentId);
+      const ladder = getLadder(db, row.ladder_id);
+      if (ladder && ladder.status !== 'archived') {
+        entries.recomputeLadderRatings(db, row.ladder_id, now, undefined, dayUtc);
+      }
+      if (ladder?.status === 'settling' && !canSettleLadder(db, ladder)) {
+        archiveLadderInPlace(db, ladder.id, now);
+      }
+      const remainingEntries = db.prepare(`
+        SELECT 1 FROM ladder_entries le
+        JOIN agent_versions av ON av.id = le.version_id
+        WHERE le.ladder_id = ? AND av.agent_id = ?
+        LIMIT 1
+      `).get(row.ladder_id, ver.agentId);
+      if (!remainingEntries) {
+        db.prepare(`
+          DELETE FROM agent_ladder_stats
+          WHERE agent_id = ? AND ladder_id = ?
+            AND best_rank IS NULL
+            AND max_lcb IS NULL
+            AND max_elo IS NULL
+            AND max_gxe IS NULL
+            AND max_win_streak = 0
+            AND max_loss_streak = 0
+            AND top1_total_seconds = 0
+            AND top10_total_seconds = 0
+            AND top100_total_seconds = 0
+        `).run(ver.agentId, row.ladder_id);
+      }
+    }
+
+    if (ver.smokeStatus === 'staged') {
+      teams.revertPendingTeamsToSaved(db, ver.ladders, ver.agentId);
+    }
+
+    for (const ladderId of touchedLadderIds) {
+      const ladder = getLadder(db, ladderId);
+      if (ladder?.team !== 'pools' || ladder.status === 'archived') continue;
+      const hasEntry = db.prepare(`
+        SELECT 1 FROM ladder_entries le
+        JOIN agent_versions av ON av.id = le.version_id
+        WHERE le.ladder_id = ? AND av.agent_id = ?
+        LIMIT 1
+      `).get(ladderId, ver.agentId);
+      if (hasEntry) continue;
+      const hasAgentMatch = db.prepare(`
+        SELECT 1 FROM matches m
+        JOIN agent_versions av ON av.id = m.p1_version_id OR av.id = m.p2_version_id
+        WHERE m.ladder_id = ? AND av.agent_id = ?
+        LIMIT 1
+      `).get(ladderId, ver.agentId);
+      if (!hasAgentMatch) {
+        teams.revertActiveTeamsToSaved(db, ladderId, ver.agentId);
+      }
+    }
+
+    return {version: ver, agent};
+  });
 }
 
 export function quarantineVersion(

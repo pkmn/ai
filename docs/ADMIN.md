@@ -103,8 +103,8 @@ runner health, smoke queue & staged counts, ladder readiness, linked Discord/Smo
 per-ladder qualification toggles, cooldowns, `/info` telemetry status dots, CPU/fault/protocol-error
 aggregates, inline expandable diagnostic smoke-run replays with `STDERR`/`log` downloads, recent
 `pkmn/wiki` git edits (linking to page, revision, and diff for moderation), plus direct actions
-(refund cooldown, discard a staged version, retire an active version on a ladder,
-quarantine/unquarantine a version).
+(refund cooldown, discard a staged version, wipe an unplayed version from the DB and runner
+archives, retire an active version on a ladder, quarantine/unquarantine a version).
 
 ```sh
 npm run pkmn -- quarantine foul-play 1.2.0 --reason "Repeated protocol framing timeouts on SV"

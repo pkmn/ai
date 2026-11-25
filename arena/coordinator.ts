@@ -314,11 +314,15 @@ export class Coordinator {
 
   // Promotes locally staged builds to hot + cold-archived once activated (avoiding a second pull
   // and allowing one-time auth tokens to be scrubbed right after the diagnostic fetch), falls back
-  // to fetching activated artifacts if a staged copy is absent on disk, and prunes local staged
-  // builds that were discarded on the server.
+  // to fetching activated artifacts if a staged copy is absent on disk, prunes discarded local
+  // staged builds, and deletes local/archived bundles for versions wiped from the server DB.
   async syncActivatedAgents(
     versionIds: readonly number[],
-    opts: {stagedVersionIds?: readonly number[]; shouldYield?: () => boolean} = {}
+    opts: {
+      stagedVersionIds?: readonly number[];
+      knownVersionIds?: readonly number[];
+      shouldYield?: () => boolean;
+    } = {}
   ): Promise<number> {
     if (this.draining || opts.shouldYield?.()) return 0;
     const nowSeconds = Math.floor(Date.now() / 1000);
@@ -456,6 +460,29 @@ export class Coordinator {
         }
         this.cleanupUnpackedAgent(row.mode, row.target);
         this.stateDb.deleteLocalAgent(row.versionId);
+      }
+    }
+
+    if (opts.knownVersionIds !== undefined && !this.draining && !opts.shouldYield?.()) {
+      const knownSet = new Set(opts.knownVersionIds);
+      const outboxIds = this.getOutboxSubmissionVersionIds();
+      for (const row of this.stateDb.listLocalAgents()) {
+        if (
+          knownSet.has(row.versionId) ||
+          activatedSet.has(row.versionId) ||
+          outboxIds.has(row.versionId)
+        ) {
+          continue;
+        }
+        try {
+          if (row.residency !== 'staged') {
+            packages.deleteColdAgentArchive(row.target, {dirs: this.dirs});
+          }
+          this.cleanupUnpackedAgent(row.mode, row.target);
+          this.stateDb.deleteLocalAgent(row.versionId);
+        } catch (err) {
+          console.error(`Failed pruning wiped version ${row.versionId} (${row.target}):`, err);
+        }
       }
     }
 
