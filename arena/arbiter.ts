@@ -343,11 +343,26 @@ export class TimeSlicedArenaGame {
     }
     try {
       execFileSync(ARENA_BIN, ['pause', player.slot, player.spec.mode], {
-        stdio: 'ignore',
-        timeout: 10_000,
+        stdio: ['ignore', 'ignore', 'pipe'],
+        timeout: 15_000,
       });
-    } catch {
+    } catch (err) {
+      const execErr = err as {
+        stderr?: Buffer | string;
+        signal?: string | null;
+        code?: string;
+        message?: string;
+      };
+      const stderrText = Buffer.isBuffer(execErr.stderr)
+        ? execErr.stderr.toString('utf8').trim()
+        : typeof execErr.stderr === 'string'
+          ? execErr.stderr.trim()
+          : '';
+      const detail =
+        stderrText || execErr.code || execErr.signal || execErr.message || 'unknown error';
+      console.error(`[arena] pause ${player.slot} (${player.spec.mode}) failed: ${detail}`);
       if (!player.lifecycle.exited) {
+        player.io.stderrBuf.append(`[arena] pause failed: ${detail}\n`);
         this.cleanupSlot(player);
         this.forceLose(player.slot, 'crash');
       }

@@ -281,10 +281,15 @@ describe('arena packages & static assets', () => {
           'native_slot_launcher_alive() { return 0; }',
         ].join('\n'))).not.toThrow();
 
-        // 4. Live runnable (:R) process never freezes -> fails closed.
+        // 4. Live runnable (:R) process never freezes -> fails closed with diagnostics.
         let failedStderr = '';
         try {
           runPauseHarness([
+            'sudo() {',
+            '  if [[ "$*" == *"limit --procs"* ]]; then',
+            '    printf "1001 1000 R /opt/arena/agents/test/run\\n"',
+            '  fi',
+            '}',
             'native_agent_procs() { printf "1001:R\\n"; }',
             'native_slot_launcher_alive() { return 0; }',
           ].join('\n'));
@@ -292,6 +297,7 @@ describe('arena packages & static assets', () => {
           failedStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
         }
         expect(failedStderr).toContain('Failed to freeze all processes for UID p1');
+        expect(failedStderr).toContain('procs=1001 1000 R /opt/arena/agents/test/run');
 
         // 5. Zombie reaped mid-freeze (empty exit-0 snapshot on pass 2) converges cleanly.
         const exitMidCountFile = path.join(tmpDir, 'pause-exit-mid-count');

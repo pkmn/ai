@@ -207,7 +207,7 @@ case "$ACTION" in
         sleep 0.025
       done
       if (( paused == 0 )); then
-        echo "Timed out waiting to pause container $CONTAINER_NAME" >&2
+        echo "Timed out waiting to pause container $CONTAINER_NAME (state=${state:-missing})" >&2
         exit 1
       fi
     elif [[ "$MODE" == "native" ]]; then
@@ -264,7 +264,8 @@ case "$ACTION" in
         sleep 0.015
       done
       if (( converged == 0 )); then
-        echo "Failed to freeze all processes for UID $SLOT" >&2
+        diag="$(sudo -n /opt/arena/bin/limit --procs "$SLOT" 2>/dev/null | tr '\n' ';' | sed 's/;$//' || true)"
+        echo "Failed to freeze all processes for UID $SLOT (procs=${diag:-none})" >&2
         exit 1
       fi
     fi
