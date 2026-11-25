@@ -100,6 +100,7 @@ describe('/admin dashboard & API', () => {
     notifyHb = () => adminHandle.notifyHeartbeat();
 
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    server.keepAliveTimeout = 65_000;
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const addr = server.address() as {port: number};
     baseUrl = `http://127.0.0.1:${addr.port}`;
@@ -969,6 +970,9 @@ describe('/admin recent wiki edits', () => {
     git('init');
     git('config', 'user.email', 'test@pkmn.ai');
     git('config', 'user.name', 'scheibo');
+    git('config', 'commit.gpgsign', 'false');
+    git('config', 'gc.auto', '0');
+    git('config', 'maintenance.auto', 'false');
 
     fs.writeFileSync(path.join(wikiDir, 'projects', '0_ERROR.dj'), '# 0 ERROR\n', 'utf8');
     git('add', 'projects/0_ERROR.dj');
@@ -997,6 +1001,7 @@ describe('/admin recent wiki edits', () => {
       now: () => 1_760_000_000,
     });
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    server.keepAliveTimeout = 65_000;
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
   });
@@ -1057,13 +1062,23 @@ describe('/admin recent wiki edits', () => {
     const cookie = cookieFor('scheibo');
     const wikiDir = path.join(tmpDir, 'wiki');
     const git = (...args: string[]) => execFileSync('git', args, {cwd: wikiDir, stdio: 'pipe'});
-    // Add 25 more file edits (including a 2-file commit) -> 28 total edits.
-    for (let i = 1; i <= 23; i++) {
+    // Add 25 more file edits across multiple commits (including a 2-file commit) -> 28 total.
+    const batch1: string[] = [];
+    for (let i = 1; i <= 12; i++) {
       const name = `Note_${String(i).padStart(2, '0')}.dj`;
       fs.writeFileSync(path.join(wikiDir, name), `# Note ${i}\n`, 'utf8');
-      git('add', name);
-      git('commit', '-m', `Add Note ${i}`);
+      batch1.push(name);
     }
+    git('add', ...batch1);
+    git('commit', '-m', 'Add Notes 1-12');
+    const batch2: string[] = [];
+    for (let i = 13; i <= 23; i++) {
+      const name = `Note_${String(i).padStart(2, '0')}.dj`;
+      fs.writeFileSync(path.join(wikiDir, name), `# Note ${i}\n`, 'utf8');
+      batch2.push(name);
+    }
+    git('add', ...batch2);
+    git('commit', '-m', 'Add Notes 13-23');
     fs.writeFileSync(path.join(wikiDir, 'Pair_A.dj'), '# Pair A\n', 'utf8');
     fs.writeFileSync(path.join(wikiDir, 'Pair_B.dj'), '# Pair B\n', 'utf8');
     git('add', 'Pair_A.dj', 'Pair_B.dj');
