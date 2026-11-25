@@ -1531,6 +1531,7 @@ describe('account routes', () => {
       const agent = db.getAgentBySlug('0-error')!;
       const dev = db.getDeveloperByGitHub('pre')!;
       for (let i = 1; i <= 27; i++) {
+        const submittedAt = 1_760_000_000 + i * 15 * 86400;
         const sub = db.createSubmission({
           agentId: agent.id,
           developerId: dev.id,
@@ -1539,13 +1540,15 @@ describe('account routes', () => {
           url: `https://github.com/pkmn/0-error-${i}.tar.zst`,
           sha256: SHA_A,
           ladderIds: ['gen1ou20261109'],
-          now: 1_760_000_000 + i * 86400,
+          now: submittedAt,
         });
         db.applySubmissionStatus({
           versionId: sub.id,
-          smokeStatus: 'failed',
-          now: 1_760_000_000 + i * 86400 + 1,
+          smokeStatus: 'passed',
+          now: submittedAt + 1,
         });
+        db.db.prepare('UPDATE ladder_entries SET settled_at = ? WHERE version_id = ?')
+          .run(submittedAt + 2, sub.id);
       }
 
       const res = await realFetch(`${baseUrl}/account`, {

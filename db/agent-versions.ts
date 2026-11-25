@@ -22,6 +22,7 @@ export type AccountStatusLabel = 'Pending' | 'Qualified' | 'Eligible' | 'Ineligi
 export const COOLDOWN_SECONDS = 14 * 24 * 60 * 60;
 export const FAILED_SMOKE_WINDOW_SECONDS = 24 * 60 * 60;
 export const MAX_FAILED_SMOKE_TESTS = 3;
+export const MAX_RETAINED_FAILED_VERSIONS = 5;
 export const SETTLED_MAX_SE = 30;
 export const SETTLED_MIN_MATCHES = 25;
 
@@ -1044,6 +1045,41 @@ const VALID_TRANSITIONS: Record<SmokeStatus, ReadonlySet<Exclude<SmokeStatus, 'p
   quarantined: new Set(),
 };
 
+// Retains only the newest `MAX_RETAINED_FAILED_VERSIONS` failed/discarded attempts per project
+// and scope (ladder vs tournament) so repeated diagnostic testing bounds `agent_versions` and
+// cascading `smoke_diagnostics` storage without perturbing the rolling 3/24h budget. Always pins
+// `keepVersionId` first so discarding an older staged tournament version never deletes itself.
+function pruneFailedDiagnosticVersions(
+  db: DatabaseSync,
+  agentId: number,
+  ladderIds: readonly string[],
+  tournamentIds: readonly string[],
+  keepVersionId: number
+) {
+  const scopes: Array<'ladder' | 'tournament'> = [];
+  if (ladderIds.length > 0) scopes.push('ladder');
+  if (tournamentIds.length > 0) scopes.push('tournament');
+  for (const scope of scopes) {
+    const scopeClause = scope === 'ladder' ? "ladders_json != '[]'" : "tournaments_json != '[]'";
+    db.prepare(`
+      DELETE FROM agent_versions
+      WHERE id IN (
+        SELECT id
+        FROM agent_versions
+        WHERE agent_id = ?
+          AND smoke_status IN ('failed', 'discarded')
+          AND activated_at IS NULL
+          AND ${scopeClause}
+        ORDER BY
+          CASE WHEN id = ? THEN 0 ELSE 1 END ASC,
+          submitted_at DESC,
+          id DESC
+        LIMIT -1 OFFSET ?
+      )
+    `).run(agentId, keepVersionId, MAX_RETAINED_FAILED_VERSIONS);
+  }
+}
+
 // Applies smoke-test or quarantine outcomes from the Arena runner:
 //   - Scrubs `auth_token_encoding = NULL` on every terminal/failed/quarantined/discarded status
 //     and on tournament-only `'staged'` builds; ladder `'staged'` builds retain the encrypted token
@@ -1180,8 +1216,10 @@ export function applySubmissionStatus(
       );
     } else if (input.smokeStatus === 'failed') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
+      pruneFailedDiagnosticVersions(db, prev.agentId, ladderIds, tournamentIds, prev.id);
     } else if (input.smokeStatus === 'discarded') {
       teams.revertPendingTeamsToSaved(db, ladderIds, prev.agentId);
+      pruneFailedDiagnosticVersions(db, prev.agentId, ladderIds, tournamentIds, prev.id);
     } else if (input.smokeStatus === 'quarantined') {
       teams.deletePendingTeams(db, ladderIds, prev.agentId);
       if (tournamentIds.length > 0) {
@@ -1393,6 +1431,7 @@ export function discardStagedVersion(
     `).run(prev.id);
 
     teams.revertPendingTeamsToSaved(db, prev.ladders, prev.agentId);
+    pruneFailedDiagnosticVersions(db, prev.agentId, prev.ladders, prev.tournaments, prev.id);
     return getVersionById(db, prev.id)!;
   });
 }

@@ -5662,3 +5662,350 @@ describe('discord watches', () => {
     }
   });
 });
+
+describe('diagnostic version pruning', () => {
+  const sampleProjects = `
+- name: Alpha
+  arena:
+    owners:
+      dev1: '1001'
+`;
+
+  function makeDiag(opts: {
+    ladderId?: string;
+    tournamentId?: string;
+    battleLog?: string;
+    p1Stderr?: string;
+    p2Stderr?: string;
+  }): database.SmokeDiagnosticInput {
+    return {
+      ladderId: opts.ladderId,
+      tournamentId: opts.tournamentId,
+      format: opts.tournamentId ? 'gen9ou' : 'gen1ou',
+      turns: 5,
+      endReason: 'crash',
+      durationMillis: 1200,
+      battleLog: opts.battleLog ?? '|turn|1\n',
+      p1Stderr: opts.p1Stderr,
+      p2Stderr: opts.p2Stderr,
+      infoStatus: 'full',
+    };
+  }
+
+  function setupDb(now = 1_760_000_000) {
+    const db = new database.Database(':memory:', {now});
+    db.syncLadders(undefined, now);
+    db.syncProjectsFromYaml(sampleProjects, undefined, now);
+    db.setAgentLadders('alpha', ['rby'], now);
+    db.setUnlimitedSmokeTests('alpha', true, now);
+    const alpha = db.getAgentBySlug('alpha')!;
+    return {db, alpha, now};
+  }
+
+  test('prunes failed ladder versions beyond retention cap with cascading diagnostics', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      const ids: number[] = [];
+      for (let i = 1; i <= database.MAX_RETAINED_FAILED_VERSIONS + 2; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `0.0.${i}`,
+          package: 'bundle',
+          url: `https://example.com/v${i}.tar.zst`,
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: now + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: `crash ${i}`,
+          diagnostics: [makeDiag({ladderId: 'gen1ou20261109', p1Stderr: `err ${i}`})],
+          now: now + i * 60 + 10,
+        });
+        ids.push(v.id);
+      }
+
+      const remaining = db.getVersionsForAgent(alpha.id);
+      expect(remaining.map(v => v.id)).toEqual(
+        ids.slice(-database.MAX_RETAINED_FAILED_VERSIONS).reverse()
+      );
+      expect(db.getSmokeDiagnosticsForVersion(ids[0])).toEqual([]);
+      expect(db.getSmokeDiagnosticsForVersion(ids[1])).toEqual([]);
+      expect(db.getSmokeDiagnosticsForVersion(ids[ids.length - 1])).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('prunes discarded staged ladder versions beyond retention cap', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      const ids: number[] = [];
+      for (let i = 1; i <= database.MAX_RETAINED_FAILED_VERSIONS + 2; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `0.1.${i}`,
+          package: 'bundle',
+          url: `https://example.com/s${i}.tar.zst`,
+          sha256: 'b'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: now + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'staged',
+          diagnostics: [makeDiag({ladderId: 'gen1ou20261109'})],
+          now: now + i * 60 + 10,
+        });
+        db.discardStagedVersion({versionId: v.id, agentId: alpha.id});
+        ids.push(v.id);
+      }
+
+      const remaining = db.getVersionsForAgent(alpha.id);
+      expect(remaining.map(v => v.id)).toEqual(
+        ids.slice(-database.MAX_RETAINED_FAILED_VERSIONS).reverse()
+      );
+      expect(db.getSmokeDiagnosticsForVersion(ids[0])).toEqual([]);
+      expect(db.getSmokeDiagnosticsForVersion(ids[1])).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('preserves passed versions when pruning old failed ladder attempts', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      const passed = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/1.0.0.tar.zst',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now + 10,
+      });
+      db.applySubmissionStatus({
+        versionId: passed.id,
+        smokeStatus: 'passed',
+        diagnostics: [makeDiag({ladderId: 'gen1ou20261109', battleLog: '|turn|9\n'})],
+        now: now + 20,
+      });
+      db.refundCooldown('alpha', now + 30);
+
+      for (let i = 1; i <= database.MAX_RETAINED_FAILED_VERSIONS + 2; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `1.1.${i}`,
+          package: 'bundle',
+          url: `https://example.com/f${i}.tar.zst`,
+          sha256: 'd'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: now + 100 + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'oom',
+          diagnostics: [makeDiag({ladderId: 'gen1ou20261109'})],
+          now: now + 100 + i * 60 + 10,
+        });
+      }
+
+      expect(db.getVersionById(passed.id)?.smokeStatus).toBe('passed');
+      expect(db.getSmokeDiagnosticsForVersion(passed.id)).toHaveLength(1);
+      const failed = db.getVersionsForAgent(alpha.id).filter(v => v.smokeStatus === 'failed');
+      expect(failed).toHaveLength(database.MAX_RETAINED_FAILED_VERSIONS);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('prunes failed tournament attempts independently of failed ladder attempts', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      db.upsertTournament({
+        id: 't-prune-1',
+        name: 'Tournament #1',
+        format: 'gen9ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 2,
+        hardware: 'test',
+        status: 'scheduled',
+        startsAt: now + 7 * 86_400,
+      });
+
+      const ladderIds: number[] = [];
+      for (let i = 1; i <= database.MAX_FAILED_SMOKE_TESTS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `1.0.${i}`,
+          package: 'bundle',
+          url: `https://example.com/l${i}.tar.zst`,
+          sha256: 'a'.repeat(64),
+          ladderIds: ['gen1ou20261109'],
+          now: now + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'ladder fail',
+          now: now + i * 60 + 10,
+        });
+        ladderIds.push(v.id);
+      }
+
+      const tourneyIds: number[] = [];
+      for (let i = 1; i <= database.MAX_RETAINED_FAILED_VERSIONS + 2; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `2.0.${i}`,
+          package: 'oci',
+          url: `ghcr.io/pkmn/alpha:t${i}`,
+          sha256: 'b'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['t-prune-1'],
+          now: now + 1_000 + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'tourney fail',
+          now: now + 1_000 + i * 60 + 10,
+        });
+        tourneyIds.push(v.id);
+      }
+
+      const versions = db.getVersionsForAgent(alpha.id);
+      expect(versions.filter(v => v.ladders.length > 0).map(v => v.id)).toEqual(
+        [...ladderIds].reverse()
+      );
+      expect(versions.filter(v => v.tournaments.length > 0).map(v => v.id)).toEqual(
+        tourneyIds.slice(-database.MAX_RETAINED_FAILED_VERSIONS).reverse()
+      );
+
+      db.setUnlimitedSmokeTests('alpha', false, now + 2_000);
+      const ladderStatus = db.computeAgentSubmissionStatus(alpha.id, now + 2_010);
+      expect(ladderStatus.canSubmit).toBe(false);
+      expect(ladderStatus.reason).toContain('Failed smoke test limit reached');
+    } finally {
+      db.close();
+    }
+  });
+
+  test('retains newly discarded older tournament version when newer failures fill cap', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      for (const id of ['t-old', 't-new']) {
+        db.upsertTournament({
+          id,
+          name: `Tournament ${id}`,
+          format: 'gen9ou',
+          version: '0.11.0',
+          gamesPerMatchup: 2,
+          parallelTables: 2,
+          hardware: 'test',
+          status: 'scheduled',
+          startsAt: now + 7 * 86_400,
+        });
+      }
+
+      const olderStaged = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.9.0',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/alpha:old',
+        sha256: 'a'.repeat(64),
+        ladderIds: [],
+        tournamentIds: ['t-old'],
+        now: now + 10,
+      });
+      db.applySubmissionStatus({
+        versionId: olderStaged.id,
+        smokeStatus: 'staged',
+        diagnostics: [makeDiag({tournamentId: 't-old'})],
+        now: now + 20,
+      });
+
+      const newerFailedIds: number[] = [];
+      for (let i = 1; i <= database.MAX_RETAINED_FAILED_VERSIONS; i++) {
+        const v = db.createSubmission({
+          agentId: alpha.id,
+          version: `1.0.${i}`,
+          package: 'oci',
+          url: `ghcr.io/pkmn/alpha:new${i}`,
+          sha256: 'b'.repeat(64),
+          ladderIds: [],
+          tournamentIds: ['t-new'],
+          now: now + 100 + i * 60,
+        });
+        db.applySubmissionStatus({
+          versionId: v.id,
+          smokeStatus: 'failed',
+          smokeError: 'crash',
+          now: now + 100 + i * 60 + 10,
+        });
+        newerFailedIds.push(v.id);
+      }
+
+      const discarded = db.discardStagedVersion({versionId: olderStaged.id, agentId: alpha.id});
+      expect(discarded.id).toBe(olderStaged.id);
+      expect(discarded.smokeStatus).toBe('discarded');
+
+      const remainingIds = db.getVersionsForAgent(alpha.id).map(v => v.id);
+      expect(remainingIds).toHaveLength(database.MAX_RETAINED_FAILED_VERSIONS);
+      expect(remainingIds).toContain(olderStaged.id);
+      expect(remainingIds).not.toContain(newerFailedIds[0]);
+      expect(remainingIds).toContain(newerFailedIds[newerFailedIds.length - 1]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('getSmokeDiagnosticSummariesForAgent detects empty vs non-empty logs', () => {
+    const {db, alpha, now} = setupDb();
+    try {
+      const v = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.5.0',
+        package: 'bundle',
+        url: 'https://example.com/0.5.0.tar.zst',
+        sha256: 'e'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now + 10,
+      });
+      db.applySubmissionStatus({
+        versionId: v.id,
+        smokeStatus: 'staged',
+        diagnostics: [
+          makeDiag({ladderId: 'gen1ou20261109', battleLog: '', p1Stderr: undefined, p2Stderr: ''}),
+          makeDiag({
+            ladderId: 'gen1ou20261109',
+            battleLog: '|turn|1\n',
+            p1Stderr: 'p1 warn',
+            p2Stderr: undefined,
+          }),
+        ],
+        now: now + 20,
+      });
+
+      const summaries = db.getSmokeDiagnosticSummariesForAgent(alpha.id).get(v.id)!;
+      expect(summaries).toHaveLength(2);
+      expect(summaries[0]).toMatchObject({
+        hasLog: false,
+        hasStderr: false,
+        hasP1Stderr: false,
+        hasP2Stderr: false,
+      });
+      expect(summaries[1]).toMatchObject({
+        hasLog: true,
+        hasStderr: true,
+        hasP1Stderr: true,
+        hasP2Stderr: false,
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
