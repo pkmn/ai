@@ -177,20 +177,22 @@ function getWorker(version: string): WorkerEntry {
 
   worker.on('message', (msg: WorkerMessage) => {
     switch (msg.type) {
-      case 'battle:chunk': {
+      case 'battle:chunks': {
         const b = entry.battles.get(msg.battleId);
         if (!b) return;
-        if (msg.channel === 'omniscient') {
-          if (msg.p1Pokemon !== undefined) b.p1Pokemon = msg.p1Pokemon;
-          if (msg.p2Pokemon !== undefined) b.p2Pokemon = msg.p2Pokemon;
-          b.logLines.push(msg.chunk);
-        } else {
-          if (msg.waveId !== undefined) b.waveId = msg.waveId;
-          if (msg.activeSides !== undefined && msg.activeSides > 0) {
-            b.activeSides = msg.activeSides;
+        for (const item of msg.chunks) {
+          if (item.channel === 'omniscient') {
+            if (item.p1Pokemon !== undefined) b.p1Pokemon = item.p1Pokemon;
+            if (item.p2Pokemon !== undefined) b.p2Pokemon = item.p2Pokemon;
+            b.logLines.push(item.chunk);
+          } else {
+            if (item.waveId !== undefined) b.waveId = item.waveId;
+            if (item.activeSides !== undefined && item.activeSides > 0) {
+              b.activeSides = item.activeSides;
+            }
           }
+          b[item.channel].push(item.chunk);
         }
-        b[msg.channel].push(msg.chunk);
         break;
       }
       case 'battle:wrote': {

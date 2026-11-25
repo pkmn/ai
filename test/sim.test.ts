@@ -435,6 +435,46 @@ describe('multi-version @pkmn/sim support', () => {
     await battle.destroy();
   });
 
+  test('createBattle delivers player requests in the same microtask batch as omniscient updates',
+    async () => {
+      const battle = sim.createBattle();
+      let p1SawReq = false;
+      let p2SawReq = false;
+      let bothReadyAtNextTick = false;
+
+      const watchPlayer = async (stream: AsyncIterable<string>, onReq: () => void) => {
+        for await (const chunk of stream) {
+          if (chunk.includes('|request|')) onReq();
+        }
+      };
+      const watchOmni = (async () => {
+        for await (const chunk of battle.streams.omniscient) {
+          if (chunk.includes('|teampreview')) {
+            await new Promise<void>(resolve => process.nextTick(resolve));
+            bothReadyAtNextTick = p1SawReq && p2SawReq;
+          }
+        }
+      })();
+
+      const p1Task = watchPlayer(battle.streams.p1, () => {
+        p1SawReq = true;
+      });
+      const p2Task = watchPlayer(battle.streams.p2, () => {
+        p2SawReq = true;
+      });
+
+      const t1 = 'Pikachu||lightball|static|thunderbolt|Timid|,,4,252,,252|||||';
+      const t2 = 'Charmander|||blaze|ember|Timid|,,4,252,,252|||||';
+      const start = JSON.stringify({formatid: 'gen9customgame', seed: [1, 2, 3, 4]});
+      await battle.write(`>start ${start}`);
+      await battle.write(`>player p1 ${JSON.stringify({name: 'A', team: t1})}`);
+      await battle.write(`>player p2 ${JSON.stringify({name: 'B', team: t2})}`);
+      await battle.destroy();
+      await Promise.all([watchOmni, p1Task, p2Task]);
+
+      expect(bothReadyAtNextTick).toBe(true);
+    });
+
   test('sampleSmokePair samples valid pair for custom sim version while skipping illegal files',
     async () => {
       const samplesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sample-ver-'));

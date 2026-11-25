@@ -55,15 +55,19 @@ export type ParentMessage = {
   id: number;
 } & RpcRequest);
 
-export type WorkerMessage = {
-  type: 'battle:chunk';
-  battleId: string;
+export interface BattleChunk {
   channel: 'p1' | 'p2' | 'omniscient';
   chunk: string;
   p1Pokemon?: unknown[];
   p2Pokemon?: unknown[];
   waveId?: number;
   activeSides?: number;
+}
+
+export type WorkerMessage = {
+  type: 'battle:chunks';
+  battleId: string;
+  chunks: BattleChunk[];
 } | {
   type: 'battle:wrote';
   battleId: string;
@@ -137,6 +141,8 @@ interface ActiveBattle {
   ended: boolean;
   waveId: number;
   lastRequests: [unknown, unknown];
+  pendingChunks: BattleChunk[];
+  flushScheduled: boolean;
 }
 
 const battles = new Map<string, ActiveBattle>();
@@ -149,6 +155,19 @@ function post(msg: WorkerMessage) {
   port!.postMessage(msg);
 }
 
+// `@pkmn/sim` `BattleStream._write` synchronously pushes the `update` and `sideupdate`
+// (`|request|`) chunks for a turn, and `getPlayerStreams` + `pump` drain them in one microtask
+// checkpoint. Flushing on `process.nextTick` posts the omniscient update and player requests in
+// one atomic `MessagePort` batch so the parent never observes a turn update before player clocks
+// enter `handleDecision`.
+function flushPendingChunks(battleId: string, active: ActiveBattle) {
+  active.flushScheduled = false;
+  if (active.pendingChunks.length === 0) return;
+  const chunks = active.pendingChunks;
+  active.pendingChunks = [];
+  post({type: 'battle:chunks', battleId, chunks});
+}
+
 function startBattle(battleId: string) {
   const stream = new simMod.BattleStreams.BattleStream();
   const streams = simMod.BattleStreams.getPlayerStreams(stream);
@@ -158,8 +177,19 @@ function startBattle(battleId: string) {
     ended: false,
     waveId: 0,
     lastRequests: [undefined, undefined],
+    pendingChunks: [],
+    flushScheduled: false,
   };
   battles.set(battleId, active);
+
+  const enqueueChunk = (entry: BattleChunk) => {
+    if (active.ended) return;
+    active.pendingChunks.push(entry);
+    if (!active.flushScheduled) {
+      active.flushScheduled = true;
+      process.nextTick(() => flushPendingChunks(battleId, active));
+    }
+  };
 
   const pump = async (
     channel: 'p1' | 'p2' | 'omniscient',
@@ -170,9 +200,7 @@ function startBattle(battleId: string) {
         if (channel === 'omniscient') {
           const p1Pokemon = stream.battle?.sides[0]?.getRequestData().pokemon;
           const p2Pokemon = stream.battle?.sides[1]?.getRequestData().pokemon;
-          post({
-            type: 'battle:chunk',
-            battleId,
+          enqueueChunk({
             channel,
             chunk,
             p1Pokemon,
@@ -193,9 +221,7 @@ function startBattle(battleId: string) {
               s => s.activeRequest && !('wait' in s.activeRequest && s.activeRequest.wait)
             ).length;
           }
-          post({
-            type: 'battle:chunk',
-            battleId,
+          enqueueChunk({
             channel,
             chunk,
             ...(waveId !== undefined ? {waveId, activeSides} : {}),
@@ -203,6 +229,7 @@ function startBattle(battleId: string) {
         }
       }
     } catch (err) {
+      flushPendingChunks(battleId, active);
       const msg = err instanceof Error ? err.message : String(err);
       post({type: 'battle:error', battleId, error: msg});
     }
@@ -214,6 +241,7 @@ function startBattle(battleId: string) {
     pump('omniscient', streams.omniscient),
   ]).then(() => {
     if (!active.ended) {
+      flushPendingChunks(battleId, active);
       active.ended = true;
       post({
         type: 'battle:end',
@@ -237,12 +265,14 @@ function writeBattle(battleId: string, chunk: string, writeId?: number) {
     .then(async () => {
       if (active.ended) return;
       await active.stream.write(chunk);
-      // Yield one macrotask so `pump` posts all resulting `battle:chunk` messages onto the FIFO
+      // Yield one macrotask so `pump` flushes all resulting `battle:chunks` messages onto the FIFO
       // `MessagePort` before `battle:wrote` resolves the parent's `battle.write()` call.
       await new Promise<void>(resolve => setImmediate(resolve));
+      flushPendingChunks(battleId, active);
     })
     .catch(err => {
       if (!active.ended) {
+        flushPendingChunks(battleId, active);
         active.ended = true;
         post({
           type: 'battle:error',
@@ -263,6 +293,7 @@ function destroyBattle(battleId: string) {
   const active = battles.get(battleId);
   if (!active) return;
   active.ended = true;
+  active.pendingChunks = [];
   void Promise.resolve(active.stream.destroy()).catch(() => undefined);
   battles.delete(battleId);
 }

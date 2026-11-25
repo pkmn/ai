@@ -1067,9 +1067,12 @@ export class ConcurrentGame {
       },
       onChunk: async rawChunk => {
         if (!this.ended) {
-          // Drain all microtasks so concurrent player tasks enter `handleDecision`
-          // (`beginTurnClockStep` + `thinking = true`) before snapshotting spectator clocks.
-          await new Promise<void>(resolve => setImmediate(resolve));
+          // `sim-worker` delivers the omniscient update and player `|request|` chunks in one
+          // atomic `battle:chunks` batch. Waiting on `process.nextTick` lets the Promise
+          // microtask checkpoint drain (`driveConcurrentPlayer` enters `handleDecision`,
+          // runs `beginTurnClockStep`, and sets `thinking = true`) without yielding to libuv
+          // I/O poll where a fast agent could already commit before spectator clocks snapshot.
+          await new Promise<void>(resolve => process.nextTick(resolve));
         }
         this.emitSpectatorChunk(rawChunk);
       },
