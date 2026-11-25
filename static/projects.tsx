@@ -71,7 +71,7 @@ const RANKING = [
   'RotomDotExe', // 16th on VGC, 1833 Elo/75.6% GXE/1713 Glicko
   'Springtime Haze', // 27th on VGC Bo3, 1639 Elo/75.9% GXE/1716 Glicko & #5 vgc.bot OTS
   'incinference', // 46th on VGC , 1583 Elo/77% GXE/1730 Glicko
-  'Chimera3', // #6 vgc.bot OTS Random & #10 OTS
+  'Chimera', // #6 vgc.bot OTS Random & #10 OTS
   'hotpot01', // #4 vgc.bot CTS Random & #12 CTS
   'CalmMindAI', // VGC 1627 Elo/70.5% GXE/1664 Glicko & #8 vgc.bot CTS
   'IHTFP Abra', // reached #8 in gen4randombattle, ~1693 Elo
