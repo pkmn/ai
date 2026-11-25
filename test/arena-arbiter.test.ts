@@ -923,6 +923,14 @@ describe('TimeSlicedArenaGame', () => {
       expect(aiLines[0]).toContain('"depth":6,"seldepth":12,"nodes":2000,"nps":10000');
       expect(recorded.p1.info?.depth).toBe(6);
       expect(recorded.p2.info).toBeUndefined();
+      expect(recorded.p1.infoCompliance?.decisions).toBeGreaterThanOrEqual(2);
+      expect(engine.classifyInfoStatus(recorded.p1.infoCompliance!)).toBe('full');
+      expect(engine.classifyInfoStatus(recorded.p2.infoCompliance!)).toBe('none');
+      expect(
+        engine.classifyInfoStatus(
+          engine.mergeInfoCompliance(recorded.p1.infoCompliance, recorded.p2.infoCompliance)
+        )
+      ).toBe('none');
       expect(recorded.winHistory?.length).toBeGreaterThanOrEqual(2);
 
       const stripped = await new arbiter.TimeSlicedArenaGame({
@@ -934,6 +942,46 @@ describe('TimeSlicedArenaGame', () => {
     } finally {
       fs.rmSync(dir, {recursive: true, force: true});
     }
+  });
+
+  test('InfoCoalescer classifies full, partial, and none per-choice compliance', () => {
+    const coalescer = new engine.InfoCoalescer();
+    const p1 = engine.createInfoLineInterceptor('p1', coalescer);
+    const p2 = engine.createInfoLineInterceptor('p2', coalescer);
+
+    // 0 decisions -> none
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p1'))).toBe('none');
+
+    // Intermediate /info without policy followed by final /info with win + policy -> full
+    expect(p1('/info {"win":0.5,"depth":3}')).toBe(true);
+    expect(p1('/info {"win":0.6,"depth":5,"policy":{"move 1":1}}')).toBe(true);
+    coalescer.commitTurn('p1', 1);
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p1'))).toBe('full');
+
+    // Second decision with policy only (no win, no public fields) -> drops to partial
+    expect(p1('/info {"policy":{"move 1":1}}')).toBe(true);
+    coalescer.commitTurn('p1', 2);
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p1'))).toBe('partial');
+
+    // Third decision missing /info -> inconsistent -> drops to none
+    coalescer.commitTurn('p1', 3);
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p1'))).toBe('none');
+
+    // Policy-only before every choice -> partial (at least one valid key before every choice)
+    expect(p2('/info {"policy":{"switch 2":1}}')).toBe(true);
+    coalescer.commitTurn('p2', 1);
+    expect(p2('/info {"depth":4}')).toBe(true);
+    coalescer.commitTurn('p2', 2);
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p2'))).toBe('partial');
+
+    // Timeout auto-choose (clearPending) counts as a choice without /info -> none
+    expect(p2('/info {"win":0.5,"policy":{"move 1":1}}')).toBe(true);
+    coalescer.clearPending('p2');
+    expect(engine.classifyInfoStatus(coalescer.getCompliance('p2'))).toBe('none');
+
+    coalescer.reset();
+    expect(coalescer.getCompliance('p1')).toEqual(engine.emptyInfoCompliance());
+    coalescer.dispose();
   });
 
   test('BoundedStderrBuffer preserves head/tail around truncation marker', () => {

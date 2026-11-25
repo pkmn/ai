@@ -9,11 +9,16 @@
 }
 
 .info-dot {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
   margin-left: 0.45ch;
-  font-size: 0.72em;
-  line-height: 1;
-  vertical-align: 0.08em;
+  vertical-align: 0.05em;
+}
+
+.info-dot svg {
+  display: block;
+  width: 0.44em;
+  height: 0.44em;
 }
 
 .ai-panel {

@@ -443,27 +443,48 @@ export async function parseJsonResponse<T>(res: Response, label: string): Promis
 
 export const TABLE_PAGE_SIZE = 25;
 
-export function renderInfoDot(supportsInfo?: boolean): Child {
-  if (supportsInfo === undefined) return undefined;
-  return supportsInfo
-    ? (
+export type InfoStatus = 'none' | 'partial' | 'full';
+
+export function renderInfoDot(status?: InfoStatus): Child {
+  if (status === undefined) return undefined;
+  if (status === 'full') {
+    return (
       <span
-        className='info-dot yes'
-        title='Emits valid /info search telemetry'
-        aria-label='Supports /info telemetry'
+        className='info-dot full yes'
+        title='Emits /info with win and policy before every choice'
+        aria-label='Full /info telemetry (win and policy before every choice)'
       >
-        {'\u25cf'}
-      </span>
-    )
-    : (
-      <span
-        className='info-dot muted'
-        title='No valid /info search telemetry emitted'
-        aria-label='Does not emit /info telemetry'
-      >
-        {'\u25cb\ufe0e'}
+        <svg viewBox='0 0 12 12' aria-hidden='true'>
+          <circle cx='6' cy='6' r='5' fill='currentColor' />
+        </svg>
       </span>
     );
+  }
+  if (status === 'partial') {
+    return (
+      <span
+        className='info-dot partial yes'
+        title='Emits /info before every choice (add win and policy for full status)'
+        aria-label='Partial /info telemetry (missing win or policy)'
+      >
+        <svg viewBox='0 0 12 12' aria-hidden='true'>
+          <circle cx='6' cy='6' r='4.15' fill='none' stroke='currentColor' strokeWidth='1.7' />
+          <path d='M6 1.85a4.15 4.15 0 0 1 0 8.3Z' fill='currentColor' />
+        </svg>
+      </span>
+    );
+  }
+  return (
+    <span
+      className='info-dot none muted'
+      title='No consistent /info telemetry before every choice'
+      aria-label='No consistent /info telemetry'
+    >
+      <svg viewBox='0 0 12 12' aria-hidden='true'>
+        <circle cx='6' cy='6' r='4.15' fill='none' stroke='currentColor' strokeWidth='1.7' />
+      </svg>
+    </span>
+  );
 }
 
 export interface TablePagerProps {

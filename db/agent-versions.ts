@@ -54,7 +54,7 @@ export interface VersionHistoryView extends AgentVersionRow {
   tournamentNames: string[];
   queueAhead?: number;
   diagnostics?: smokeDiagnostics.Summary[];
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: smokeDiagnostics.InfoStatus;
 }
 
 export interface SubmissionStatus {
@@ -160,7 +160,7 @@ export interface PendingVersionDmRow {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: smokeDiagnostics.InfoStatus;
   ladders: string[];
   tournaments: string[];
   submittedAt: number;
@@ -336,8 +336,8 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
       )
       : undefined;
     const diagnostics = diagnosticsByVersion.get(v.id);
-    const smokeSupportsInfo = diagnostics?.length
-      ? diagnostics.some(d => d.supportsInfo)
+    const smokeInfoStatus = diagnostics?.length
+      ? smokeDiagnostics.combineInfoStatus(diagnostics.map(d => d.infoStatus))
       : undefined;
     return {
       ...mapped,
@@ -345,7 +345,7 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
       tournamentNames,
       ...(queueAhead !== undefined ? {queueAhead} : {}),
       ...(diagnostics?.length ? {diagnostics} : {}),
-      ...(smokeSupportsInfo !== undefined ? {smokeSupportsInfo} : {}),
+      ...(smokeInfoStatus !== undefined ? {smokeInfoStatus} : {}),
     };
   });
 }
@@ -1830,8 +1830,11 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
       av.*,
       a.slug AS agent_slug,
       a.name AS agent_name,
-      (SELECT MAX(sd.supports_info) FROM smoke_diagnostics sd WHERE sd.version_id = av.id)
-        AS max_supports_info
+      (
+        SELECT ${smokeDiagnostics.MIN_INFO_STATUS_SQL}
+        FROM smoke_diagnostics sd
+        WHERE sd.version_id = av.id
+      ) AS min_info_status
     FROM agent_versions av
     JOIN agents a ON a.id = av.agent_id
     WHERE av.smoke_status IN ('staged', 'passed', 'failed', 'quarantined')
@@ -1841,7 +1844,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     RawAgentVersionRow & {
       agent_slug: string;
       agent_name: string;
-      max_supports_info: number | null;
+      min_info_status: smokeDiagnostics.InfoStatus | null;
     }
   >;
 
@@ -1858,7 +1861,7 @@ export function getPendingVersionDms(db: DatabaseSync): PendingVersionDmRow[] {
     smokeTeamPreviewMillis: row.smoke_team_preview_millis ?? undefined,
     smokeTurnMillis: row.smoke_turn_millis ?? undefined,
     smokePeakRam: row.smoke_peak_ram ?? undefined,
-    ...(row.max_supports_info !== null ? {smokeSupportsInfo: row.max_supports_info === 1} : {}),
+    ...(row.min_info_status !== null ? {smokeInfoStatus: row.min_info_status} : {}),
     ladders: JSON.parse(row.ladders_json) as string[],
     tournaments: JSON.parse(row.tournaments_json) as string[],
     submittedAt: row.submitted_at,

@@ -1805,6 +1805,7 @@ describe('account routes', () => {
             endReason: 'win',
             durationMillis: 5200,
             battleLog: '|turn|1\n|ai|p1|{"win":0.62,"depth":8}\n|win|0 ERROR',
+            infoStatus: 'full',
             p1Stderr: 'p1 trace line',
             p2Stderr: 'p2 trace line',
             p1CpuCores: 3.2,
@@ -1844,7 +1845,7 @@ describe('account routes', () => {
         expect(html).toContain(`/api/account/diagnostics/${diagId}/stderr`);
         expect(html).toContain('>STDERR</a>');
         expect(html).toContain('>log</a>');
-        expect(html).toContain('class="info-dot yes"');
+        expect(html).toContain('class="info-dot full yes"');
         expect(html).not.toContain('>/info</span>');
         expect(html).not.toContain('gen1ou (14t');
         expect(html).not.toContain('>Close</button>');
@@ -1854,13 +1855,13 @@ describe('account routes', () => {
         })).json() as {
           versions: Array<{
             id: number;
-            smoke: {supportsInfo?: boolean};
-            diagnostics: Array<{supportsInfo: boolean}>;
+            smoke: {infoStatus?: string};
+            diagnostics: Array<{infoStatus: string}>;
           }>;
         };
         const stagedJson = acctJson.versions.find(v => v.id === v1.id)!;
-        expect(stagedJson.smoke.supportsInfo).toBe(true);
-        expect(stagedJson.diagnostics[0].supportsInfo).toBe(true);
+        expect(stagedJson.smoke.infoStatus).toBe('full');
+        expect(stagedJson.diagnostics[0].infoStatus).toBe('full');
 
         // Uploading while a staged submission awaits review is blocked with 429.
         const dupStaged = await postSubmission('pre', {
@@ -1942,7 +1943,7 @@ describe('account routes', () => {
         const noInfoHtml = await (await realFetch(`${baseUrl}/account`, {
           headers: {Cookie: cookieFor('pre')},
         })).text();
-        expect(noInfoHtml).toContain('class="info-dot muted"');
+        expect(noInfoHtml).toContain('class="info-dot none muted"');
         expect(noInfoHtml).not.toContain('smoke-log');
         expect(noInfoHtml).not.toContain('Sandbox');
 
@@ -1966,6 +1967,7 @@ describe('account routes', () => {
             endReason: 'win',
             durationMillis: 4000,
             battleLog: '|turn|1\n|ai|p1|{"win":0.55}\n|win|0 ERROR',
+            infoStatus: 'partial',
           }],
           now: currentNow + 90,
         });
@@ -1977,7 +1979,7 @@ describe('account routes', () => {
         expect(db.getVersionById(v2Id)?.smokeStatus).toBe('passed');
         const activeAfter = db.getActiveEntriesForAgent(zero.id);
         expect(activeAfter).toHaveLength(1);
-        expect(activeAfter[0].smokeSupportsInfo).toBe(true);
+        expect(activeAfter[0].smokeInfoStatus).toBe('partial');
 
         // Once activated, reusing 2.1.0 is permanently rejected even after eligibility is restored.
         db.db.prepare(
@@ -2137,7 +2139,7 @@ describe('account routes', () => {
           endReason: 'win',
           durationMillis: 1500,
           battleLog: splitLog,
-          supportsInfo: false,
+          infoStatus: 'none',
         }],
         now: currentNow + 1,
       });

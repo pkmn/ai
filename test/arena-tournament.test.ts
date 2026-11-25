@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
+import * as engine from '../arena/engine';
 import * as tournament from '../arena/tournament';
 import * as sim from '../server/sim';
 import {sampleRandomPair} from '../server/teams';
@@ -796,6 +797,8 @@ describe('ConcurrentTournamentGame', () => {
       expect(aiLines.every(l => l.startsWith('|ai|p1|'))).toBe(true);
       expect(aiLines.some(l => l.includes('"depth":3'))).toBe(false);
       expect(aiLines.some(l => l.includes('policy'))).toBe(false);
+      expect(engine.classifyInfoStatus(res.p1.infoCompliance!)).toBe('full');
+      expect(engine.classifyInfoStatus(res.p2.infoCompliance!)).toBe('none');
     } finally {
       fs.rmSync(dir, {recursive: true, force: true});
     }

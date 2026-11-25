@@ -509,7 +509,7 @@ describe('/admin dashboard & API', () => {
           p2CpuCores: 3.1,
           p1PeakRam: 512,
           p2PeakRam: 490,
-          supportsInfo: true,
+          infoStatus: 'full',
         }],
         now: now + 5,
       });
@@ -534,7 +534,7 @@ describe('/admin dashboard & API', () => {
           durationMillis: 8000,
           battleLog: '|turn|1\n|win|Foul Play',
           p1Stderr: 'fp p1 stderr',
-          supportsInfo: false,
+          infoStatus: 'none',
         }],
         now: now + 5,
       });
@@ -614,7 +614,7 @@ describe('/admin dashboard & API', () => {
           p2CpuCores: 2.8,
           p1PeakRam: 420,
           p2PeakRam: 410,
-          supportsInfo: true,
+          infoStatus: 'partial',
         }],
         now: now + 10,
       });
@@ -624,8 +624,9 @@ describe('/admin dashboard & API', () => {
       const html = await (await fetch(`${baseUrl}/admin/`, {
         headers: {Cookie: adminCookie},
       })).text();
-      expect(html).toContain('class="info-dot yes"');
-      expect(html).toContain('class="info-dot muted"');
+      expect(html).toContain('class="info-dot full yes"');
+      expect(html).toContain('class="info-dot partial yes"');
+      expect(html).toContain('class="info-dot none muted"');
       expect(html).toContain('4.8 CPU');
       expect(html).toContain('Invalid choice: 1');
       expect(html).toContain('Can&#39;t move: 2');
@@ -646,10 +647,10 @@ describe('/admin dashboard & API', () => {
       expect(zeroSnap.entries[0].meanCpuCores).toBeCloseTo(4.8, 5);
       expect(zeroSnap.entries[0].invalidChoices).toBe(1);
       expect(zeroSnap.entries[0].invalidCantMove).toBe(2);
-      expect(zeroSnap.entries[0].smokeSupportsInfo).toBe(true);
+      expect(zeroSnap.entries[0].smokeInfoStatus).toBe('full');
       const stagedVer = zeroSnap.versions.find(v => v.id === staged.id)!;
       expect(stagedVer.smokeStatus).toBe('staged');
-      expect(stagedVer.smokeSupportsInfo).toBe(true);
+      expect(stagedVer.smokeInfoStatus).toBe('partial');
       expect(stagedVer.diagnostics).toHaveLength(1);
 
       // 3. Diagnostic log/stderr endpoints enforce admin auth and serve JSON / attachments.

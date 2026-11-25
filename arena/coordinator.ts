@@ -10,10 +10,7 @@ import {
   SMOKE_TEST_CYCLE_INTERVAL,
   SmokeCadence,
 } from '../db/config';
-import {
-  Input as SmokeDiagnosticInput,
-  battleLogHasAiTelemetry,
-} from '../db/smoke-diagnostics';
+import {Input as SmokeDiagnosticInput} from '../db/smoke-diagnostics';
 import * as arena from '../server/arena';
 import * as ratings from '../server/ratings';
 import * as sim from '../server/sim';
@@ -855,10 +852,9 @@ export class Coordinator {
             `${sub.agentName} (P1)`,
             `${sub.agentName} (P2)`
           );
-          const supportsInfo =
-            res.p1.info !== undefined ||
-            res.p2.info !== undefined ||
-            battleLogHasAiTelemetry(diagLog);
+          const infoStatus = engine.classifyInfoStatus(
+            engine.mergeInfoCompliance(res.p1.infoCompliance, res.p2.infoCompliance)
+          );
           diagnostics.push({
             ladderId: item.ladderId,
             format: item.format,
@@ -866,7 +862,7 @@ export class Coordinator {
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
             battleLog: engine.truncateDiagnosticLog(diagLog),
-            supportsInfo,
+            infoStatus,
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
             ...(res.p1.cpuCores !== undefined ? {p1CpuCores: res.p1.cpuCores} : {}),

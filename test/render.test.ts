@@ -908,7 +908,7 @@ describe('project de-registration', () => {
         endReason: 'win',
         durationMillis: 1500,
         battleLog: '|turn|1\n|ai|p1|{"win":0.5}\n|win|Metamon',
-        supportsInfo: true,
+        infoStatus: 'full',
       }],
       now: DAY_1 + 10,
     });
@@ -922,7 +922,7 @@ describe('project de-registration', () => {
         endReason: 'win',
         durationMillis: 1500,
         battleLog: '|turn|1\n|win|Foul Play',
-        supportsInfo: false,
+        infoStatus: 'none',
       }],
       now: DAY_1 + 10,
     });
@@ -986,14 +986,14 @@ describe('project de-registration', () => {
       expect(html).not.toContain('>Invalid-choice forfeits<');
       expect(html).toContain('>Can&#39;t move<');
       expect(html).toContain('>Unavailable choices (info)<');
-      expect(html).toContain('class="info-dot yes"');
-      expect(html).not.toContain('class="info-dot muted"');
+      expect(html).toContain('class="info-dot full yes"');
+      expect(html).not.toContain('class="info-dot none muted"');
       expect(html).toContain('<tt>6.1</tt> CPU');
       expect(html).toContain('<tt>6.7</tt> CPU');
 
       const fpHtml = await h.getText('/projects/foul-play/');
-      expect(fpHtml).toContain('class="info-dot muted"');
-      expect(fpHtml).not.toContain('class="info-dot yes"');
+      expect(fpHtml).toContain('class="info-dot none muted"');
+      expect(fpHtml).not.toContain('class="info-dot full yes"');
 
       const ladderHtml = await h.getText('/arena/ladders/rby/');
       expect(ladderHtml).not.toContain('class="info-dot');
@@ -4145,7 +4145,7 @@ describe('JSON route parity & retired pool archives', () => {
     });
   });
 
-  test('profile JSON exposes supportsInfo on version entries while HTML syncs ?v=', async () => {
+  test('profile JSON exposes infoStatus on version entries while HTML syncs ?v=', async () => {
     const testDb = new Database(':memory:', {now: 1_760_000_000});
     const app = polka();
     const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
@@ -4182,15 +4182,16 @@ describe('JSON route parity & retired pool archives', () => {
           endReason: 'win',
           durationMillis: 500,
           battleLog: '|turn|1\n|ai|p1|{"win":0.55}',
-          supportsInfo: true,
+          infoStatus: 'partial',
         }],
         now: 1_760_000_010,
       });
       const doc = await (await fetch(`${base}/projects/alpha.json`)).json() as {
-        ladders: Array<{versions: Array<{supportsInfo?: boolean}>}>;
+        ladders: Array<{versions: Array<{infoStatus?: string}>}>;
       };
-      expect(doc.ladders[0].versions[0].supportsInfo).toBe(true);
+      expect(doc.ladders[0].versions[0].infoStatus).toBe('partial');
       const html = await (await fetch(`${base}/projects/alpha/`)).text();
+      expect(html).toContain('class="info-dot partial yes"');
       expect(html).toContain("url.searchParams.set('v', curVer)");
       expect(html).toContain('tabindex="0"');
     } finally {

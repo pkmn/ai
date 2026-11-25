@@ -8,7 +8,7 @@ import * as path from 'path';
 import polka from 'polka';
 import * as yaml from 'yaml';
 
-import {Database, parseLaddersYaml} from '../db';
+import {Database, combineInfoStatus, parseLaddersYaml} from '../db';
 import type * as db from '../db';
 import * as util from '../static/util';
 
@@ -596,7 +596,7 @@ function formatSmokeStatsSummary(input: {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: db.InfoStatus;
 }): string | undefined {
   const parts: string[] = [];
   if (input.smokeDurationMillis !== undefined) {
@@ -614,8 +614,14 @@ function formatSmokeStatsSummary(input: {
   if (input.smokePeakRam !== undefined) {
     parts.push(`${input.smokePeakRam.toLocaleString('en-US')} MiB`);
   }
-  if (input.smokeSupportsInfo !== undefined) {
-    parts.push(input.smokeSupportsInfo ? '/info' : 'no /info');
+  if (input.smokeInfoStatus !== undefined) {
+    parts.push(
+      input.smokeInfoStatus === 'full'
+        ? '/info'
+        : input.smokeInfoStatus === 'partial'
+          ? '/info (partial)'
+          : 'no /info'
+    );
   }
   return parts.length ? parts.join(' · ') : undefined;
 }
@@ -631,7 +637,7 @@ export function formatSubmissionDm(input: {
   smokeTeamPreviewMillis?: number;
   smokeTurnMillis?: number;
   smokePeakRam?: number;
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: db.InfoStatus;
 }): string {
   const laddersPart = input.ladderLabels.length
     ? ` on \`${input.ladderLabels.join(', ')}\``
@@ -811,7 +817,7 @@ async function dispatchVersionDm(
         smokeTeamPreviewMillis: item.smokeTeamPreviewMillis,
         smokeTurnMillis: item.smokeTurnMillis,
         smokePeakRam: item.smokePeakRam,
-        smokeSupportsInfo: item.smokeSupportsInfo,
+        smokeInfoStatus: item.smokeInfoStatus,
       });
 
       for (const ownerId of item.ownerDiscordIds) {
@@ -896,7 +902,7 @@ export async function notifySubmissionStatus(
     result.version.developerId
   );
   const diags = db.getSmokeDiagnosticsForVersion(result.version.id);
-  const smokeSupportsInfo = diags.length > 0 ? diags.some(d => d.supportsInfo) : undefined;
+  const smokeInfoStatus = combineInfoStatus(diags.map(d => d.infoStatus));
   return dispatchVersionDm(
     {db, token, config, state},
     {
@@ -912,7 +918,7 @@ export async function notifySubmissionStatus(
       smokeTeamPreviewMillis: result.version.smokeTeamPreviewMillis,
       smokeTurnMillis: result.version.smokeTurnMillis,
       smokePeakRam: result.version.smokePeakRam,
-      ...(smokeSupportsInfo !== undefined ? {smokeSupportsInfo} : {}),
+      ...(smokeInfoStatus !== undefined ? {smokeInfoStatus} : {}),
       ladders: result.version.ladders,
       tournaments: result.version.tournaments,
       submittedAt: result.version.submittedAt,

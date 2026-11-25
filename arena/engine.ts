@@ -5,7 +5,7 @@ import type {PRNGSeed} from '@pkmn/sim';
 import * as arena from '../server/arena';
 import * as protocol from '../server/protocol';
 import * as sim from '../server/sim';
-import {toID} from '../static/util';
+import {InfoStatus, toID} from '../static/util';
 
 export type PlayerSlot = 'p1' | 'p2';
 
@@ -530,6 +530,36 @@ export type WinHistoryPoint = arena.WinHistoryPoint;
 
 export const MAX_INFO_LINES_PER_DECISION = 1024;
 
+export interface InfoCompliance {
+  decisions: number;
+  withInfo: number;
+  withFullInfo: number;
+}
+
+export function emptyInfoCompliance(): InfoCompliance {
+  return {decisions: 0, withInfo: 0, withFullInfo: 0};
+}
+
+export function mergeInfoCompliance(
+  ...items: ReadonlyArray<InfoCompliance | undefined>
+): InfoCompliance {
+  let decisions = 0;
+  let withInfo = 0;
+  let withFullInfo = 0;
+  for (const item of items) {
+    if (!item) continue;
+    decisions += item.decisions;
+    withInfo += item.withInfo;
+    withFullInfo += item.withFullInfo;
+  }
+  return {decisions, withInfo, withFullInfo};
+}
+
+export function classifyInfoStatus(compliance: InfoCompliance): InfoStatus {
+  if (compliance.decisions <= 0 || compliance.withInfo < compliance.decisions) return 'none';
+  return compliance.withFullInfo === compliance.decisions ? 'full' : 'partial';
+}
+
 export interface InfoCoalescerOptions {
   intervalMillis?: number;
   maxIngestsPerTurn?: number;
@@ -544,6 +574,8 @@ export class InfoCoalescer {
   private readonly onBroadcast?: (slot: PlayerSlot, info: protocol.PublicAgentInfo) => void;
   private readonly live: Record<PlayerSlot, protocol.PublicAgentInfo | undefined>;
   private readonly pending: Record<PlayerSlot, protocol.PublicAgentInfo | undefined>;
+  private readonly pendingRaw: Record<PlayerSlot, protocol.AgentInfo | undefined>;
+  private readonly compliance: Record<PlayerSlot, InfoCompliance>;
   private readonly committedByTurn: Map<
     number,
     {p1?: protocol.PublicAgentInfo; p2?: protocol.PublicAgentInfo}
@@ -559,6 +591,8 @@ export class InfoCoalescer {
     this.onBroadcast = options.onBroadcast;
     this.live = {p1: undefined, p2: undefined};
     this.pending = {p1: undefined, p2: undefined};
+    this.pendingRaw = {p1: undefined, p2: undefined};
+    this.compliance = {p1: emptyInfoCompliance(), p2: emptyInfoCompliance()};
     this.committedByTurn = new Map();
     this.lastBroadcastAt = {p1: -Infinity, p2: -Infinity};
     this.ingestsThisTurn = {p1: 0, p2: 0};
@@ -571,6 +605,7 @@ export class InfoCoalescer {
 
   ingest(slot: PlayerSlot, info: protocol.AgentInfo): void {
     this.ingestsThisTurn[slot]++;
+    this.pendingRaw[slot] = info;
     const pub = protocol.toPublicAgentInfo(info);
     if (!pub) return;
     this.live[slot] = pub;
@@ -600,6 +635,16 @@ export class InfoCoalescer {
   commitTurn(slot: PlayerSlot, turn: number): protocol.PublicAgentInfo | undefined {
     this.clearTimer(slot);
     this.ingestsThisTurn[slot] = 0;
+    const rawInfo = this.pendingRaw[slot];
+    this.pendingRaw[slot] = undefined;
+    const slotCompliance = this.compliance[slot];
+    slotCompliance.decisions++;
+    if (rawInfo !== undefined) {
+      slotCompliance.withInfo++;
+      if (rawInfo.win !== undefined && rawInfo.policy !== undefined) {
+        slotCompliance.withFullInfo++;
+      }
+    }
     const finalInfo = this.pending[slot];
     this.pending[slot] = undefined;
     if (!finalInfo) return undefined;
@@ -617,6 +662,12 @@ export class InfoCoalescer {
     this.clearTimer(slot);
     this.ingestsThisTurn[slot] = 0;
     this.pending[slot] = undefined;
+    this.pendingRaw[slot] = undefined;
+    this.compliance[slot].decisions++;
+  }
+
+  getCompliance(slot: PlayerSlot): InfoCompliance {
+    return {...this.compliance[slot]};
   }
 
   getLive(slot: PlayerSlot): protocol.PublicAgentInfo | undefined {
@@ -651,6 +702,10 @@ export class InfoCoalescer {
     this.live.p2 = undefined;
     this.pending.p1 = undefined;
     this.pending.p2 = undefined;
+    this.pendingRaw.p1 = undefined;
+    this.pendingRaw.p2 = undefined;
+    this.compliance.p1 = emptyInfoCompliance();
+    this.compliance.p2 = emptyInfoCompliance();
     this.committedByTurn.clear();
     this.lastBroadcastAt.p1 = -Infinity;
     this.lastBroadcastAt.p2 = -Infinity;

@@ -3178,6 +3178,7 @@ describe('per-ladder qualification & migrations', () => {
         '0006-smoke-diagnostics.sql',
         '0007-staged-smoke-status.sql',
         '0008-discord-watches.sql',
+        '0009-info-status.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -4020,6 +4021,7 @@ describe('per-ladder qualification & migrations', () => {
             endReason: 'win',
             durationMillis: 4200,
             battleLog: '|turn|1\n|ai|p1|{"score":0.5}\n|win|Alpha',
+            infoStatus: 'full',
             p1Stderr: 'p1 debug line',
             p2Stderr: 'p2 debug line',
             p1CpuCores: 2.1,
@@ -4040,14 +4042,14 @@ describe('per-ladder qualification & migrations', () => {
         expect(blockedByStaged.canSubmit).toBe(false);
         expect(blockedByStaged.reason).toContain('activate or discard');
 
-        // Diagnostics persisted & summarized on version history (including /info support)
+        // Diagnostics persisted & summarized on version history (including /info status)
         const diags = db.getSmokeDiagnosticsForVersion(v1.id);
         expect(diags).toHaveLength(1);
         expect(diags[0].p1Stderr).toBe('p1 debug line');
-        expect(diags[0].supportsInfo).toBe(true);
+        expect(diags[0].infoStatus).toBe('full');
         const history = db.getVersionsForAgent(agent.id);
         expect(history[0].diagnostics?.[0].hasStderr).toBe(true);
-        expect(history[0].smokeSupportsInfo).toBe(true);
+        expect(history[0].smokeInfoStatus).toBe('full');
 
         // Discard reverts pending VGC teams back to saved (not deleted) and frees '1.0.0'
         const discarded = db.discardStagedVersion({versionId: v1.id, agentId: agent.id});
@@ -4245,6 +4247,81 @@ describe('discord watches', () => {
       const fresh = new database.Database(':memory:', {now: 2000});
       try {
         expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+      } finally {
+        migrated.close();
+        fresh.close();
+      }
+    } finally {
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('migration 0009-info-status.sql maps legacy supports_info to partial/none', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-info-mig-'));
+    try {
+      const preSchemaDir = path.join(tmpDir, 'pre-schema');
+      const preMigrationDir = path.join(tmpDir, 'pre-migration');
+      fs.mkdirSync(preSchemaDir, {recursive: true});
+      fs.mkdirSync(preMigrationDir, {recursive: true});
+      for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
+        if (file === 'smoke-diagnostics.sql') continue;
+        fs.copyFileSync(path.join(database.SCHEMA_DIR, file), path.join(preSchemaDir, file));
+      }
+      fs.copyFileSync(
+        path.join(database.MIGRATION_DIR, '0006-smoke-diagnostics.sql'),
+        path.join(preSchemaDir, 'smoke-diagnostics.sql')
+      );
+      for (const file of fs.readdirSync(database.MIGRATION_DIR)) {
+        if (file === '0009-info-status.sql') continue;
+        fs.copyFileSync(
+          path.join(database.MIGRATION_DIR, file),
+          path.join(preMigrationDir, file)
+        );
+      }
+
+      const dbFile = path.join(tmpDir, 'arena.sqlite');
+      const preDb = new database.Database(dbFile, {
+        schemaDir: preSchemaDir,
+        migrationDir: preMigrationDir,
+        now: 1000,
+      });
+      preDb.syncLadders(undefined, 1000);
+      preDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+      preDb.syncProjectsFromYaml(
+        '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n',
+        undefined,
+        1000
+      );
+      const alpha = preDb.getAgentBySlug('alpha')!;
+      const v1Id = Number(
+        preDb.db.prepare(
+          `INSERT INTO agent_versions (
+            agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+            smoke_status, submitted_at, notified
+          ) VALUES (?, '1.0.0', 'bundle', 'https://example.com/a.tar.zst', ?, '["gen1ou20261109"]',
+            '[]', 'passed', 1000, 1)`
+        ).run(alpha.id, 'a'.repeat(64)).lastInsertRowid
+      );
+      preDb.db.prepare(
+        `INSERT INTO smoke_diagnostics (
+          version_id, ladder_id, format, turns, end_reason, duration_millis,
+          battle_log, supports_info, created_at
+        ) VALUES
+          (?, 'gen1ou20261109', 'gen1ou', 5, 'win', 1000, '|turn|1', 1, 1001),
+          (?, 'gen9ou20261109', 'gen9ou', 5, 'win', 1000, '|turn|1', 0, 1002)`
+      ).run(v1Id, v1Id);
+      preDb.close();
+
+      const migrated = new database.Database(dbFile, {now: 2000});
+      const fresh = new database.Database(':memory:', {now: 2000});
+      try {
+        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+        const diags = migrated.getSmokeDiagnosticsForVersion(v1Id);
+        expect(diags.map(d => d.infoStatus)).toEqual(['partial', 'none']);
+        expect(database.combineInfoStatus(['full', 'full'])).toBe('full');
+        expect(database.combineInfoStatus(['full', 'partial'])).toBe('partial');
+        expect(database.combineInfoStatus(['full', 'none'])).toBe('none');
+        expect(database.combineInfoStatus([])).toBeUndefined();
       } finally {
         migrated.close();
         fresh.close();

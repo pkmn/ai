@@ -1300,7 +1300,7 @@ describe('Arena Discord notifications', () => {
       ladderLabels: ['RBY'],
       smokeDurationMillis: 12_000,
       smokePeakRam: 312,
-      smokeSupportsInfo: true,
+      smokeInfoStatus: 'full',
     });
     expect(stagedDm).toBe(
       '**Foul Play** (`1.4.0`) passed its diagnostic test on `RBY` ' +
@@ -1308,14 +1308,25 @@ describe('Arena Discord notifications', () => {
       'it at <https://pkmn.ai/account/>.'
     );
 
-    const noInfoDm = discord.formatSubmissionDm({
+    const partialInfoDm = discord.formatSubmissionDm({
       agentName: 'Foul Play',
       version: '1.4.1',
       smokeStatus: 'staged',
       ladderLabels: ['RBY'],
       smokeDurationMillis: 12_000,
       smokePeakRam: 312,
-      smokeSupportsInfo: false,
+      smokeInfoStatus: 'partial',
+    });
+    expect(partialInfoDm).toContain('`12.0s · 312 MiB · /info (partial)`');
+
+    const noInfoDm = discord.formatSubmissionDm({
+      agentName: 'Foul Play',
+      version: '1.4.2',
+      smokeStatus: 'staged',
+      ladderLabels: ['RBY'],
+      smokeDurationMillis: 12_000,
+      smokePeakRam: 312,
+      smokeInfoStatus: 'none',
     });
     expect(noInfoDm).toContain('`12.0s · 312 MiB · no /info`');
   });

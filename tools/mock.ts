@@ -2087,7 +2087,12 @@ export class Runner {
     const agent = this.db.getAgentById(ver.agentId);
     const name = agent?.name ?? `Agent ${ver.agentId}`;
     const slug = agent?.slug ?? '';
-    const supportsInfo = slug !== 'pokerus' && smokeStatus !== 'failed';
+    const infoStatus: db.InfoStatus = slug === 'pokerus' || smokeStatus === 'failed'
+      ? 'none'
+      : slug === '0-error' && ver.version === '1.1.0'
+        ? 'partial'
+        : 'full';
+    const hasAiLog = infoStatus !== 'none';
     const targets: Array<{ladderId?: string; tournamentId?: string; format: string}> = [];
     const seenFormats = new Set<string>();
     for (const lid of ver.ladders) {
@@ -2125,7 +2130,7 @@ export class Runner {
         '|switch|p2a: Chansey|Chansey|703/703',
         '|switch|p2a: Chansey|Chansey|100/100',
         '|turn|1',
-        ...(supportsInfo
+        ...(hasAiLog
           ? [
             '|ai|p1|{"win":0.54,"depth":10,"nodes":18400,"nps":420000}',
             '|ai|p2|{"win":0.47,"depth":9,"nodes":16100,"nps":395000}',
@@ -2138,7 +2143,7 @@ export class Runner {
         '|move|p2a: Chansey|Thunder Wave|p1a: Tauros',
         '|-status|p1a: Tauros|par',
         '|turn|2',
-        ...(supportsInfo
+        ...(hasAiLog
           ? [
             '|ai|p1|{"win":0.61,"depth":11,"nodes":24500,"nps":450000}',
             '|ai|p2|{"win":0.39,"depth":10,"nodes":21200,"nps":410000}',
@@ -2157,7 +2162,7 @@ export class Runner {
         endReason: smokeStatus === 'failed' ? 'crash' : 'win',
         durationMillis: meta.durationMillis ?? telemetry.durationMillis,
         battleLog: lines.join('\n'),
-        supportsInfo,
+        infoStatus,
         p1Stderr: errText ?? `loaded weights\nready (${t.format})`,
         p2Stderr: `loaded weights\nready (${t.format})`,
         p1CpuCores: 3.4,

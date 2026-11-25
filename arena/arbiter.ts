@@ -88,6 +88,7 @@ export interface PlayerGameResult {
   lastTurnMillis: number;
   pokemon?: unknown[];
   info?: PublicAgentInfo;
+  infoCompliance?: engine.InfoCompliance;
   errors?: engine.ProtocolErrorCounts;
   exitCode?: number;
   stderr?: string;
@@ -1060,6 +1061,7 @@ export class TimeSlicedArenaGame {
       lastTurnMillis: Math.round(player.telemetry.lastDecisionMillis),
       ...(pokemon !== undefined ? {pokemon} : {}),
       ...(info !== undefined ? {info} : {}),
+      infoCompliance: this.infoCoalescer.getCompliance(slot),
       errors: {...player.errors},
       ...(player.lifecycle.exitCode !== undefined ? {exitCode: player.lifecycle.exitCode} : {}),
       ...(stderr ? {stderr} : {}),

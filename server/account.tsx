@@ -872,7 +872,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                     <td><tt>{e.ladderName}</tt></td>
                     <td>
                       <code><strong>{e.version}</strong></code>
-                      {util.renderInfoDot(e.smokeSupportsInfo)}
+                      {util.renderInfoDot(e.smokeInfoStatus)}
                     </td>
                     <td className='num'>
                       {e.rankCurrent !== undefined
@@ -897,7 +897,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                   <td><tt>{e.ladderName}</tt></td>
                   <td>
                     <code>{e.version}</code>
-                    {util.renderInfoDot(e.smokeSupportsInfo)}
+                    {util.renderInfoDot(e.smokeInfoStatus)}
                   </td>
                   <td className='num muted'>—</td>
                   <td className='num'>{elo} <span className='muted'>±{ci}</span></td>
@@ -1159,7 +1159,7 @@ function renderStagedSection(opts: {
             <div className='staged-head'>
               <span>
                 <strong><code>{v.version}</code></strong>
-                {util.renderInfoDot(v.smokeSupportsInfo)} passed diagnostic testing on{' '}
+                {util.renderInfoDot(v.smokeInfoStatus)} passed diagnostic testing on{' '}
                 <tt>{targets.join(', ')}</tt>
                 {statsText && <> <span className='muted'>({statsText})</span></>}
               </span>
@@ -1350,7 +1350,7 @@ function renderHistorySection(
                     {isFullyActive
                       ? <code><strong>{v.version}</strong></code>
                       : <code>{v.version}</code>}
-                    {util.renderInfoDot(v.smokeSupportsInfo)}
+                    {util.renderInfoDot(v.smokeInfoStatus)}
                   </td>
                   <td className='wrap'><tt>{laddersContent}</tt></td>
                   <td className='wrap'>
@@ -2143,7 +2143,7 @@ export function register(app: polka.Polka, options: Options) {
           smoke: {
             status: v.smokeStatus,
             ...(v.queueAhead !== undefined ? {queueAhead: v.queueAhead} : {}),
-            ...(v.smokeSupportsInfo !== undefined ? {supportsInfo: v.smokeSupportsInfo} : {}),
+            ...(v.smokeInfoStatus !== undefined ? {infoStatus: v.smokeInfoStatus} : {}),
             durationMillis: v.smokeDurationMillis,
             initMillis: v.smokeInitMillis,
             teamPreviewMillis: v.smokeTeamPreviewMillis,
@@ -2162,7 +2162,7 @@ export function register(app: polka.Polka, options: Options) {
                 endReason: d.endReason,
                 durationMillis: d.durationMillis,
                 hasStderr: d.hasStderr,
-                supportsInfo: d.supportsInfo,
+                infoStatus: d.infoStatus,
                 logHref: `/api/account/diagnostics/${d.id}/log`,
                 downloadLogHref: `/api/account/diagnostics/${d.id}/log?download=1`,
                 stderrHref: `/api/account/diagnostics/${d.id}/stderr`,

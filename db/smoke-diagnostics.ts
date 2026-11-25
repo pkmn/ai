@@ -1,5 +1,20 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {InfoStatus} from '../static/util';
+
+export type {InfoStatus};
+
+export const MIN_INFO_STATUS_SQL =
+  "CASE MIN(CASE sd.info_status WHEN 'full' THEN 2 WHEN 'partial' THEN 1 ELSE 0 END) " +
+  "WHEN 2 THEN 'full' WHEN 1 THEN 'partial' WHEN 0 THEN 'none' END";
+
+export function combineInfoStatus(statuses: readonly InfoStatus[]): InfoStatus | undefined {
+  if (statuses.length === 0) return undefined;
+  if (statuses.some(s => s === 'none')) return 'none';
+  if (statuses.some(s => s === 'partial')) return 'partial';
+  return 'full';
+}
+
 export interface Input {
   ladderId?: string;
   tournamentId?: string;
@@ -14,7 +29,7 @@ export interface Input {
   p2CpuCores?: number;
   p1PeakRam?: number;
   p2PeakRam?: number;
-  supportsInfo?: boolean;
+  infoStatus?: InfoStatus;
 }
 
 export interface Row {
@@ -35,7 +50,7 @@ export interface Row {
   p2CpuCores?: number;
   p1PeakRam?: number;
   p2PeakRam?: number;
-  supportsInfo: boolean;
+  infoStatus: InfoStatus;
   createdAt: number;
 }
 
@@ -52,7 +67,7 @@ export interface Summary {
   hasStderr: boolean;
   hasP1Stderr: boolean;
   hasP2Stderr: boolean;
-  supportsInfo: boolean;
+  infoStatus: InfoStatus;
   p1CpuCores?: number;
   p2CpuCores?: number;
   p1PeakRam?: number;
@@ -78,7 +93,7 @@ interface RawRow {
   p2_cpu_cores: number | null;
   p1_peak_ram: number | null;
   p2_peak_ram: number | null;
-  supports_info: number;
+  info_status: InfoStatus;
   created_at: number;
 }
 
@@ -94,7 +109,7 @@ interface RawSummaryRow {
   has_log: number;
   has_p1_stderr: number;
   has_p2_stderr: number;
-  supports_info: number;
+  info_status: InfoStatus;
   p1_cpu_cores: number | null;
   p2_cpu_cores: number | null;
   p1_peak_ram: number | null;
@@ -121,7 +136,7 @@ function mapRow(raw: RawRow): Row {
     p2CpuCores: raw.p2_cpu_cores ?? undefined,
     p1PeakRam: raw.p1_peak_ram ?? undefined,
     p2PeakRam: raw.p2_peak_ram ?? undefined,
-    supportsInfo: raw.supports_info === 1,
+    infoStatus: raw.info_status,
     createdAt: raw.created_at,
   };
 }
@@ -142,17 +157,13 @@ function mapSummary(raw: RawSummaryRow): Summary {
     hasStderr: hasP1Stderr || hasP2Stderr,
     hasP1Stderr,
     hasP2Stderr,
-    supportsInfo: raw.supports_info === 1,
+    infoStatus: raw.info_status,
     p1CpuCores: raw.p1_cpu_cores ?? undefined,
     p2CpuCores: raw.p2_cpu_cores ?? undefined,
     p1PeakRam: raw.p1_peak_ram ?? undefined,
     p2PeakRam: raw.p2_peak_ram ?? undefined,
     createdAt: raw.created_at,
   };
-}
-
-export function battleLogHasAiTelemetry(battleLog: string): boolean {
-  return battleLog.startsWith('|ai|') || battleLog.includes('\n|ai|');
 }
 
 export function replaceForVersion(
@@ -167,12 +178,11 @@ export function replaceForVersion(
     INSERT INTO smoke_diagnostics (
       version_id, ladder_id, tournament_id, format, turns, end_reason, duration_millis,
       battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
-      p1_peak_ram, p2_peak_ram, supports_info, created_at
+      p1_peak_ram, p2_peak_ram, info_status, created_at
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const d of diagnostics) {
-    const supportsInfo = d.supportsInfo ?? battleLogHasAiTelemetry(d.battleLog);
     insert.run(
       versionId,
       d.ladderId ?? null,
@@ -188,7 +198,7 @@ export function replaceForVersion(
       d.p2CpuCores ?? null,
       d.p1PeakRam ?? null,
       d.p2PeakRam ?? null,
-      supportsInfo ? 1 : 0,
+      d.infoStatus ?? 'none',
       now
     );
   }
@@ -219,7 +229,7 @@ export function getSummariesForAgent(db: DatabaseSync, agentId: number): Map<num
       CASE WHEN length(sd.battle_log) > 0 THEN 1 ELSE 0 END AS has_log,
       CASE WHEN length(COALESCE(sd.p1_stderr, '')) > 0 THEN 1 ELSE 0 END AS has_p1_stderr,
       CASE WHEN length(COALESCE(sd.p2_stderr, '')) > 0 THEN 1 ELSE 0 END AS has_p2_stderr,
-      sd.supports_info,
+      sd.info_status,
       sd.p1_cpu_cores,
       sd.p2_cpu_cores,
       sd.p1_peak_ram,

@@ -89,7 +89,8 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool, `Ineligible`
    (`PENDING` smoke test, `Diagnostic Live` running self-play viewer + `/info`, `Staged Diagnostic`
    awaiting Activate/Discard w/ arrow-expanded replay + `/info` panel + `STDERR`/`log` links, 24h
-   failed/discarded smoke-test limit reusing version labels, 14d cooldown w/ Tournament `#3` open,
+   failed/discarded smoke-test limit reusing version labels, 14d cooldown w/ Tournament `#3` open
+   (and `●`/`◑`/`○` full/partial/none `/info` status dots),
    unsettled provisional w/ `○` non-`/info` dot, `QUARANTINED (DM sent)`, Smogon-banned
    `smogon_standing = 'bad'`), and `/admin/` dashboard (`403` non-admin, overview, expanded project
    detail panel, and staged diagnostic replay + discard view).

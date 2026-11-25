@@ -651,7 +651,7 @@ function renderVersionsPane(opts: {
                     {isPrimary
                       ? <code><strong>{e.version}</strong></code>
                       : <code>{e.version}</code>}
-                    {util.renderInfoDot(e.supportsInfo)}
+                    {util.renderInfoDot(e.infoStatus)}
                     {isRetired && <> <span className='muted'>(retired)</span></>}
                   </td>
                   <td className='num'>
@@ -1954,7 +1954,7 @@ export function buildAgentProfileDocument(opts: {
         meanRam: Math.round(e.meanRam),
         peakRam: Math.round(e.peakRam),
         ...(e.cpuMatches > 0 ? {meanCpuCores: Math.round(e.meanCpuCores * 10) / 10} : {}),
-        ...(e.supportsInfo !== undefined ? {supportsInfo: e.supportsInfo} : {}),
+        ...(e.infoStatus !== undefined ? {infoStatus: e.infoStatus} : {}),
         faults: {
           crashes: e.crashes,
           timeouts: e.timeouts,

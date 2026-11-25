@@ -1661,9 +1661,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           `INSERT INTO smoke_diagnostics (
             version_id, ladder_id, format, turns, end_reason, duration_millis,
             battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
-            p1_peak_ram, p2_peak_ram, supports_info, created_at
+            p1_peak_ram, p2_peak_ram, info_status, created_at
           ) VALUES (?, ?, 'gen1ou', 2, 'win', 18400, ?, 'init ok\nsearch depth=11',
-            'init ok\nsearch depth=10', 4.2, 4.1, 412, 398, 1, ?)`
+            'init ok\nsearch depth=10', 4.2, 4.1, 412, 398, 'full', ?)`
         ).run(versionId, RBY_LADDER_ID, log, NOW_SECONDS - 60);
       }),
     },
@@ -1684,7 +1684,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
         const insertDiag = raw.prepare(
           `INSERT INTO smoke_diagnostics (
             version_id, ladder_id, tournament_id, format, turns, end_reason, duration_millis,
-            battle_log, p1_stderr, p2_stderr, supports_info, created_at
+            battle_log, p1_stderr, p2_stderr, info_status, created_at
           ) VALUES (?, ?, ?, ?, 2, ?, 11200, '|turn|1\n|win|CynthiAI (P1)',
             'diagnostic stderr', 'diagnostic stderr', ?, ?)`
         );
@@ -1718,7 +1718,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             null,
             'gen1ou',
             att.status === 'discarded' ? 'win' : 'crash',
-            att.status === 'discarded' ? 1 : 0,
+            att.status === 'discarded' ? 'partial' : 'none',
             ts + 30
           );
           const r2 = insertVer.run(
@@ -1743,7 +1743,7 @@ export function buildScenarios(wikiSha: string): Scenario[] {
             '3',
             'gen9championsvgc2026regmc',
             'crash',
-            0,
+            'none',
             NOW_SECONDS - (3 - i) * 1800 + 30
           );
         }
@@ -1867,9 +1867,9 @@ export function buildScenarios(wikiSha: string): Scenario[] {
           `INSERT INTO smoke_diagnostics (
             version_id, ladder_id, format, turns, end_reason, duration_millis,
             battle_log, p1_stderr, p2_stderr, p1_cpu_cores, p2_cpu_cores,
-            p1_peak_ram, p2_peak_ram, supports_info, created_at
+            p1_peak_ram, p2_peak_ram, info_status, created_at
           ) VALUES (?, ?, 'gen9ou', 2, 'win', 14200, ?, 'init ok\nsearch depth=11',
-            'init ok\nsearch depth=10', 3.4, 3.3, 612, 598, 1, ?)`
+            'init ok\nsearch depth=10', 3.4, 3.3, 612, 598, 'full', ?)`
         ).run(versionId, SV_LADDER_ID, log, NOW_SECONDS - 90);
       }),
       act: async page => {

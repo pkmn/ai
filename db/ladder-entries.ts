@@ -15,6 +15,7 @@ import {
 } from './ladders';
 import {loadPairAggregates, updatePairAggregateLos} from './pair-aggregates';
 import {upsertDailyRatingSnapshots} from './rating-snapshots';
+import {InfoStatus, MIN_INFO_STATUS_SQL} from './smoke-diagnostics';
 
 import {TransactionRunner} from './index';
 
@@ -39,7 +40,7 @@ export interface ActiveEntryView {
   tl: number;
   ll: number;
   settledAt?: number;
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: InfoStatus;
 }
 
 export interface LeaderboardEntryView {
@@ -94,7 +95,7 @@ export interface AgentLadderProfileEntry {
   ladderId: string;
   versionId: number;
   version: string;
-  supportsInfo?: boolean;
+  infoStatus?: InfoStatus;
   package: 'bundle' | 'oci';
   unpackedBytes?: number;
   submittedAt: number;
@@ -227,11 +228,18 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
       le.tl,
       le.ll,
       le.settled_at,
-      (
-        SELECT MAX(sd.supports_info)
-        FROM smoke_diagnostics sd
-        WHERE sd.version_id = le.version_id
-      ) AS smoke_supports_info
+      COALESCE(
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id AND sd.ladder_id = le.ladder_id
+        ),
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id
+        )
+      ) AS smoke_info_status
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     JOIN ladders l ON l.id = le.ladder_id
@@ -271,9 +279,9 @@ export function getActiveEntriesForAgent(db: DatabaseSync, agentId: number): Act
     tl: r.tl as number,
     ll: r.ll as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
-    ...(r.smoke_supports_info === null || r.smoke_supports_info === undefined
+    ...(r.smoke_info_status === null || r.smoke_info_status === undefined
       ? {}
-      : {smokeSupportsInfo: Number(r.smoke_supports_info) === 1}),
+      : {smokeInfoStatus: r.smoke_info_status as InfoStatus}),
   }));
 }
 
@@ -387,11 +395,18 @@ export function getAgentLadderProfileEntries(
       le.invalid_other,
       le.unavailable_choices,
       le.settled_at,
-      (
-        SELECT MAX(sd.supports_info)
-        FROM smoke_diagnostics sd
-        WHERE sd.version_id = le.version_id
-      ) AS supports_info
+      COALESCE(
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id AND sd.ladder_id = le.ladder_id
+        ),
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id
+        )
+      ) AS info_status
     FROM ladder_entries le
     JOIN agent_versions av ON av.id = le.version_id
     WHERE av.agent_id = ?
@@ -462,9 +477,9 @@ export function getAgentLadderProfileEntries(
     invalidOther: r.invalid_other as number,
     unavailableChoices: r.unavailable_choices as number,
     settledAt: (r.settled_at as number | null) ?? undefined,
-    ...(r.supports_info === null || r.supports_info === undefined
+    ...(r.info_status === null || r.info_status === undefined
       ? {}
-      : {supportsInfo: Number(r.supports_info) === 1}),
+      : {infoStatus: r.info_status as InfoStatus}),
   }));
 }
 
@@ -1551,7 +1566,7 @@ export interface AdminEntryView {
   ladderStatus: LadderStatus;
   versionId: number;
   version: string;
-  smokeSupportsInfo?: boolean;
+  smokeInfoStatus?: InfoStatus;
   role: 'champion' | 'challenger' | 'quarantined';
   isAnchor: boolean;
   elo: number;
@@ -1591,11 +1606,18 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       l.status AS ladder_status,
       le.version_id,
       av.version,
-      (
-        SELECT MAX(sd.supports_info)
-        FROM smoke_diagnostics sd
-        WHERE sd.version_id = le.version_id
-      ) AS smoke_supports_info,
+      COALESCE(
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id AND sd.ladder_id = le.ladder_id
+        ),
+        (
+          SELECT ${MIN_INFO_STATUS_SQL}
+          FROM smoke_diagnostics sd
+          WHERE sd.version_id = le.version_id
+        )
+      ) AS smoke_info_status,
       le.role,
       le.is_anchor,
       le.elo,
@@ -1651,9 +1673,9 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
       ladderStatus: r.ladder_status as LadderStatus,
       versionId: r.version_id as number,
       version: r.version as string,
-      ...(r.smoke_supports_info === null || r.smoke_supports_info === undefined
+      ...(r.smoke_info_status === null || r.smoke_info_status === undefined
         ? {}
-        : {smokeSupportsInfo: Number(r.smoke_supports_info) === 1}),
+        : {smokeInfoStatus: r.smoke_info_status as InfoStatus}),
       role: r.role as 'champion' | 'challenger' | 'quarantined',
       isAnchor: (r.is_anchor as number) === 1,
       elo: r.elo as number,

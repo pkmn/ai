@@ -6,10 +6,7 @@ import * as path from 'path';
 import type {PRNGSeed} from '@pkmn/sim';
 
 import {SIM_VERSION} from '../db/ladders';
-import {
-  Input as SmokeDiagnosticInput,
-  battleLogHasAiTelemetry,
-} from '../db/smoke-diagnostics';
+import {Input as SmokeDiagnosticInput} from '../db/smoke-diagnostics';
 import {getTournamentBestOf} from '../db/tournaments';
 import * as arena from '../server/arena';
 import {
@@ -89,6 +86,7 @@ export interface GamePlayerStats {
   teamPreviewMillis?: number;
   meanTurnMillis: number;
   peakRam: number;
+  infoCompliance?: engine.InfoCompliance;
   errors?: engine.ProtocolErrorCounts;
   stderr?: string;
 }
@@ -1134,6 +1132,7 @@ export class ConcurrentGame {
         )
         : 1,
       peakRam: player.telemetry.peakRam,
+      infoCompliance: this.infoCoalescer.getCompliance(player.slot),
     };
   }
 
@@ -1381,6 +1380,7 @@ export class ConcurrentGame {
               : {}),
             meanTurnMillis: g.p1.meanTurnMillis,
             peakRam: g.p1.peakRam > 1 ? g.p1.peakRam : p1PeakRam,
+            infoCompliance: g.p1.infoCompliance,
           },
           p2: {
             bankSeconds: g.p2.bankSeconds,
@@ -1390,6 +1390,7 @@ export class ConcurrentGame {
               : {}),
             meanTurnMillis: g.p2.meanTurnMillis,
             peakRam: g.p2.peakRam > 1 ? g.p2.peakRam : p2PeakRam,
+            infoCompliance: g.p2.infoCompliance,
           },
         });
         summaries.push({
@@ -1446,6 +1447,7 @@ export class ConcurrentGame {
             : {}),
           meanTurnMillis: p1MeanTurnMillis,
           peakRam: p1PeakRam,
+          infoCompliance: engine.mergeInfoCompliance(...games.map(x => x.p1.infoCompliance)),
           errors: {...this.p1.errors},
           ...(p1Stderr ? {stderr: p1Stderr} : {}),
         },
@@ -1458,6 +1460,7 @@ export class ConcurrentGame {
             : {}),
           meanTurnMillis: p2MeanTurnMillis,
           peakRam: p2PeakRam,
+          infoCompliance: engine.mergeInfoCompliance(...games.map(x => x.p2.infoCompliance)),
           errors: {...this.p2.errors},
           ...(p2Stderr ? {stderr: p2Stderr} : {}),
         },
@@ -2131,7 +2134,9 @@ export class Coordinator {
             endReason: res.endReason,
             durationMillis: gameDurationMillis,
             battleLog: engine.truncateDiagnosticLog(res.omniscientLog),
-            supportsInfo: battleLogHasAiTelemetry(res.omniscientLog),
+            infoStatus: engine.classifyInfoStatus(
+              engine.mergeInfoCompliance(res.p1.infoCompliance, res.p2.infoCompliance)
+            ),
             ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
             ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
             ...(res.p1.peakRam > 0 ? {p1PeakRam: Math.round(res.p1.peakRam)} : {}),

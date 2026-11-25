@@ -1009,6 +1009,8 @@ export * from './ladders';
 export * from './matches';
 export * from './pair-aggregates';
 export * from './rating-snapshots';
+export type InfoStatus = smokeDiagnostics.InfoStatus;
+export const combineInfoStatus = smokeDiagnostics.combineInfoStatus;
 export type SmokeDiagnosticInput = smokeDiagnostics.Input;
 export type SmokeDiagnosticRow = smokeDiagnostics.Row;
 export type SmokeDiagnosticSummary = smokeDiagnostics.Summary;

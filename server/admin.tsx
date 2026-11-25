@@ -1486,7 +1486,7 @@ function renderProjectDetailPanel(
                       <td><strong>{e.ladderName}</strong></td>
                       <td>
                         <code>{e.version}</code>
-                        {util.renderInfoDot(e.smokeSupportsInfo)}
+                        {util.renderInfoDot(e.smokeInfoStatus)}
                         {e.role === 'quarantined' && (
                           <> <span className='no'>(quarantined)</span></>
                         )}
@@ -1774,7 +1774,7 @@ function renderProjectDetailPanel(
                           <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
                         )}
                         <code>{v.version}</code>
-                        {util.renderInfoDot(v.smokeSupportsInfo)}
+                        {util.renderInfoDot(v.smokeInfoStatus)}
                       </td>
                       <td className='wrap'><tt>{targets.join(', ') || '—'}</tt></td>
                       <td className='wrap'>{smokeEl}</td>
@@ -2354,7 +2354,7 @@ export function register(app: polka.Polka, options: Options): Handle {
             smokeTeamPreviewMillis: v.smokeTeamPreviewMillis,
             smokeTurnMillis: v.smokeTurnMillis,
             smokePeakRam: v.smokePeakRam,
-            smokeSupportsInfo: v.smokeSupportsInfo,
+            smokeInfoStatus: v.smokeInfoStatus,
             diagnostics: v.diagnostics,
             submittedAt: v.submittedAt,
             activatedAt: v.activatedAt,
