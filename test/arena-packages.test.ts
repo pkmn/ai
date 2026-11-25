@@ -223,6 +223,47 @@ describe('arena packages & static assets', () => {
       expect(filtered).toEqual(['87719:T', '87720:S', '87803:S']);
     });
 
+    test('converges native pause across :Z zombies without deadlocking', () => {
+      const arenaScript = fs.readFileSync(root('arena', 'bin', 'arena'), 'utf8');
+      const pauseRe = new RegExp(
+        '\\n  pause\\)[\\s\\S]*?\\n    elif \\[\\[ "\\$MODE" == "native" \\]\\]; then' +
+        '([\\s\\S]*?)\\n    fi\\n    ;;'
+      );
+      const pauseMatch = pauseRe.exec(arenaScript);
+      expect(pauseMatch).toBeTruthy();
+      const nativePauseBody = pauseMatch![1];
+
+      const runPauseHarness = (preamble: string) => {
+        const driver = [
+          'set -euo pipefail',
+          'SLOT=p1',
+          'sleep() { :; }',
+          'sudo() { :; }',
+          preamble,
+          nativePauseBody,
+        ].join('\n');
+        return execFileSync('bash', ['-c', driver], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 5_000,
+        });
+      };
+
+      // 1. Stopped parent (:T) with unreaped zombie child (:Z) must converge cleanly.
+      expect(() => runPauseHarness(
+        'native_agent_procs() { printf "1001:T\\n1002:Z\\n"; }'
+      )).not.toThrow();
+
+      // 2. Live runnable (:R) process never freezes -> fails closed.
+      let failedStderr = '';
+      try {
+        runPauseHarness('native_agent_procs() { printf "1001:R\\n"; }');
+      } catch (err) {
+        failedStderr = String((err as {stderr?: Buffer | string}).stderr ?? '');
+      }
+      expect(failedStderr).toContain('Failed to freeze all processes for UID p1');
+    });
+
     test('forfeits slot as crash if pauseSlot fails during pre-battle /ready phase', async () => {
       const game = new arbiter.TimeSlicedArenaGame({
         format: 'gen1ou',

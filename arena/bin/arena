@@ -179,7 +179,9 @@ case "$ACTION" in
       fi
     elif [[ "$MODE" == "native" ]]; then
       # Wait for `limit` to drop its child to UID `$SLOT`, then converge `killall -STOP` across
-      # consecutive process-table snapshots so racing child forks cannot escape `SIGSTOP`.
+      # consecutive process-table snapshots so racing child forks cannot escape `SIGSTOP`. Treat
+      # `:Z` zombies as already stopped: a `:T`-stopped parent cannot reap an already-dead child
+      # until resumed, so waiting for `:Z` to become `:T` deadlocks.
       saw_procs=0
       converged=0
       prev_snap=""
@@ -199,7 +201,7 @@ case "$ACTION" in
           converged=1
           break
         fi
-        if ! printf '%s\n' "$snap" | grep -qv ':T$'; then
+        if ! grep -qEv ':[TZ]$' <<< "$snap"; then
           if [[ "$snap" == "$prev_snap" ]]; then
             converged=1
             break
