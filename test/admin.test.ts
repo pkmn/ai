@@ -1104,6 +1104,264 @@ describe('/admin dashboard & API', () => {
     expect(res.status).toBe(409);
     expect(db.getTeamsForAgentLadder(vgcId, fp.id, 'saved')).toHaveLength(20);
   });
+
+  test('renders aggregate 24h match total in Ladders header', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const fp = db.getAgentBySlug('foul-play')!;
+    const vZero = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
+      now: now - 48 * 3600,
+    });
+    db.applySubmissionStatus({versionId: vZero.id, smokeStatus: 'passed', now: now - 48 * 3600});
+    const vFp = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp-1.0.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
+      now: now - 48 * 3600,
+    });
+    db.applySubmissionStatus({versionId: vFp.id, smokeStatus: 'passed', now: now - 48 * 3600});
+
+    const addMatch = (id: string, ladderId: string, completedAt: number) => {
+      db.recordCompletedMatch({
+        match: {
+          id,
+          ladderId,
+          p1VersionId: vZero.id,
+          p2VersionId: vFp.id,
+          seed: '1,2,3,4',
+          game1Outcome: 'W',
+          game2Outcome: 'W',
+          category: 'WW',
+          game1Turns: 12,
+          game2Turns: 14,
+          game1EndReason: 'win',
+          game2EndReason: 'win',
+          p1Game1PeakRam: 256,
+          p1Game2PeakRam: 256,
+          p2Game1PeakRam: 256,
+          p2Game2PeakRam: 256,
+          p1Game1BankSeconds: 120,
+          p1Game2BankSeconds: 120,
+          p2Game1BankSeconds: 120,
+          p2Game2BankSeconds: 120,
+          p1Game1MeanTurnMillis: 40,
+          p1Game2MeanTurnMillis: 40,
+          p2Game1MeanTurnMillis: 40,
+          p2Game2MeanTurnMillis: 40,
+          completedAt,
+        },
+      });
+    };
+
+    addMatch('rby-old', 'gen1ou20261109', now - 36 * 3600);
+    addMatch('rby-recent', 'gen1ou20261109', now - 3600);
+    addMatch('adv-recent', 'gen3ou20261109', now - 1800);
+
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(html).toContain('>2/3</span>');
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: adminCookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snap.matches24h).toBe(2);
+    expect(snap.totalMatches).toBe(3);
+  });
+
+  test('renders 24h diagnostic run summary in Projects header', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const fp = db.getAgentBySlug('foul-play')!;
+    db.setAgentLadders('newcomer', ['rby'], now - 48 * 3600);
+    const newcomer = db.getAgentBySlug('newcomer')!;
+
+    const vFail = db.createSubmission({
+      agentId: zero.id,
+      version: '0.1.0-bad',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-bad.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now: now - 3 * 3600,
+    });
+    db.applySubmissionStatus({
+      versionId: vFail.id,
+      smokeStatus: 'failed',
+      smokeError: 'Boot error',
+      now: now - 3 * 3600 + 10,
+    });
+
+    const vPass = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109'],
+      now: now - 2 * 3600,
+    });
+    db.applySubmissionStatus({
+      versionId: vPass.id,
+      smokeStatus: 'passed',
+      now: now - 2 * 3600 + 10,
+    });
+
+    const vStaged = db.createSubmission({
+      agentId: fp.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/fp-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now: now - 3600,
+    });
+    db.applySubmissionStatus({
+      versionId: vStaged.id,
+      smokeStatus: 'staged',
+      now: now - 3600 + 10,
+    });
+
+    db.createSubmission({
+      agentId: newcomer.id,
+      version: '0.1.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/newcomer-0.1.0.tar.zst',
+      sha256: SHA_B,
+      ladderIds: ['gen1ou20261109'],
+      now: now - 600,
+    });
+
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(html).toContain('>3 runs (1 fail) · 1 activated</span>');
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: adminCookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snap.submissions).toMatchObject({
+      submitted24h: 4,
+      smokeRuns24h: 3,
+      smokePassed24h: 2,
+      smokeFailed24h: 1,
+      activated24h: 1,
+      pendingCount: 1,
+      stagedCount: 1,
+      totalActivated: 1,
+    });
+  });
+
+  test('omits failure count in Projects header when no diagnostic runs failed', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const vPass = db.createSubmission({
+      agentId: zero.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-1.0.0.tar.zst',
+      sha256: SHA_A,
+      ladderIds: ['gen1ou20261109'],
+      now: now - 3600,
+    });
+    db.applySubmissionStatus({versionId: vPass.id, smokeStatus: 'passed', now: now - 3500});
+
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(html).toContain('>1 run · 1 activated</span>');
+    expect(html).not.toContain('fail)');
+  });
+
+  test('renders configured smoke cadence variants in Arena System card', async () => {
+    const adminCookie = cookieFor('scheibo');
+
+    const defaultHtml = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(defaultHtml).toContain('Smoke 1/match');
+
+    db.setSmokeCadence({maxPerCycle: 1, everyCycles: 5}, now);
+    const throttledHtml = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(throttledHtml).toContain('Smoke 1/5 matches');
+
+    db.setSmokeCadence({maxPerCycle: 3, everyCycles: 1}, now + 1);
+    const burstHtml = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(burstHtml).toContain('Smoke 3/match');
+
+    db.setSmokeCadence({maxPerCycle: 0, everyCycles: 1}, now + 2);
+    const pausedHtml = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(pausedHtml).toContain('class="warn"');
+    expect(pausedHtml).toContain('Smoke paused');
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: adminCookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snap.health.smokeCadence).toEqual({maxPerCycle: 0, everyCycles: 1});
+  });
+
+  test('streams configured smoke cadence over /api/admin/stream', async () => {
+    const adminCookie = cookieFor('scheibo');
+    db.setSmokeCadence({maxPerCycle: 2, everyCycles: 5}, now);
+
+    const ctrl = new AbortController();
+    const streamRes = await fetch(`${baseUrl}/api/admin/stream`, {
+      headers: {Cookie: adminCookie},
+      signal: ctrl.signal,
+    });
+    expect(streamRes.status).toBe(200);
+    const reader = streamRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let eventData: Record<string, unknown> | undefined;
+    while (!eventData) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const idx = buf.indexOf('\n\n');
+      if (idx !== -1) {
+        const dataLine = buf.slice(0, idx).split('\n').find(l => l.startsWith('data: '));
+        if (dataLine) eventData = JSON.parse(dataLine.slice(6)) as Record<string, unknown>;
+      }
+    }
+    ctrl.abort();
+
+    expect(eventData?.smokeCadence).toEqual({maxPerCycle: 2, everyCycles: 5});
+    expect(String(eventData?.cardsHtml)).toContain('Smoke 2/5 matches');
+  });
+
+  test('renders None in System Updates row when no updates are pending', () => {
+    const base = admin.buildAdminSnapshot(db, 'scheibo', arenaHandle, now);
+    const snap: admin.AdminSnapshot = {
+      ...base,
+      system: {
+        ...base.system,
+        vps: {
+          ...base.system.vps,
+          updates: {pending: 0, security: 0, rebootRequired: false, checkedAt: now},
+        },
+      },
+    };
+    const html = admin.renderAdminPage({snapshot: snap, allLadders: db.getLadders()});
+    expect(html).toContain('<dt>Updates</dt><dd><span class="yes"');
+    expect(html).toContain('>None</span>');
+    expect(html).not.toContain('Up to date');
+  });
 });
 
 describe('/admin recent wiki edits', () => {

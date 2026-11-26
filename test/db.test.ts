@@ -6226,3 +6226,266 @@ describe('saved pool team wiping', () => {
     }
   });
 });
+
+describe('getSubmissionAdminSummary', () => {
+  const setupSummaryDb = (baseNow = 1_760_100_000) => {
+    const db = new database.Database(':memory:', {now: baseNow});
+    db.syncLaddersFromYaml(`
+- name: RBY
+  format: gen1ou
+  id: gen1ou20261109
+  team: harvested
+  status: upcoming
+- name: ADV
+  format: gen3ou
+  id: gen3ou20261109
+  team: harvested
+  status: upcoming
+`, baseNow);
+    db.syncProjectsFromYaml(`
+- name: Alpha
+  active: 2026
+  arena:
+    owners:
+      alice: alice.10001
+- name: Beta
+  active: 2026
+  arena:
+    owners:
+      bob: bob.10002
+- name: Gamma
+  active: 2026
+  arena:
+    owners:
+      carol: carol.10003
+`, undefined, baseNow);
+    db.setAgentLadders('alpha', ['rby', 'adv'], baseNow);
+    db.setAgentLadders('beta', ['rby', 'adv'], baseNow);
+    db.setAgentLadders('gamma', ['rby'], baseNow);
+    return {
+      db,
+      now: baseNow,
+      alpha: db.getAgentBySlug('alpha')!,
+      beta: db.getAgentBySlug('beta')!,
+      gamma: db.getAgentBySlug('gamma')!,
+    };
+  };
+
+  const makeDiag = (ladderId: string, format: string): database.SmokeDiagnosticInput => ({
+    ladderId,
+    format,
+    turns: 4,
+    endReason: 'win',
+    durationMillis: 1200,
+    battleLog: '|turn|1\n|win|Agent',
+    infoStatus: 'full',
+  });
+
+  test('returns zero counts on an empty database', () => {
+    const {db, now} = setupSummaryDb();
+    try {
+      expect(db.getSubmissionAdminSummary(now)).toEqual({
+        submitted24h: 0,
+        smokeRuns24h: 0,
+        smokePassed24h: 0,
+        smokeFailed24h: 0,
+        smokeDiscarded24h: 0,
+        activated24h: 0,
+        diagnosticGames24h: 0,
+        pendingCount: 0,
+        stagedCount: 0,
+        totalActivated: 0,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('summarizes rolling 24h submission activity across statuses', () => {
+    const {db, now, alpha, beta, gamma} = setupSummaryDb();
+    try {
+      // Older (>24h) activated submission: counts only toward totalActivated.
+      const oldPassed = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.9.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-0.9.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 48 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: oldPassed.id,
+        smokeStatus: 'passed',
+        diagnostics: [makeDiag('gen1ou20261109', 'gen1ou')],
+        now: now - 48 * 3600 + 30,
+      });
+      db.refundCooldown('alpha', now - 24 * 3600);
+
+      // Queued >24h ago but smoke-tested within 24h (staged): counts in smokeRuns24h + stagedCount.
+      const delayedStaged = db.createSubmission({
+        agentId: beta.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/beta-1.0.0.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 30 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: delayedStaged.id,
+        smokeStatus: 'staged',
+        diagnostics: [makeDiag('gen1ou20261109', 'gen1ou')],
+        now: now - 3600,
+      });
+
+      // Recent unpack failure without diagnostic rows: counts in submitted24h + smokeFailed24h.
+      const unpackFail = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0-rc1',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-1.0.0-rc1.tar.zst',
+        sha256: 'c'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 4 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: unpackFail.id,
+        smokeStatus: 'failed',
+        smokeError: 'Checksum mismatch',
+        now: now - 4 * 3600 + 20,
+      });
+
+      // Recent multi-format run that passed then was discarded by owner.
+      const discarded = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0-rc2',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-1.0.0-rc2.tar.zst',
+        sha256: 'd'.repeat(64),
+        ladderIds: ['gen1ou20261109', 'gen3ou20261109'],
+        now: now - 3 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: discarded.id,
+        smokeStatus: 'staged',
+        diagnostics: [
+          makeDiag('gen1ou20261109', 'gen1ou'),
+          makeDiag('gen3ou20261109', 'gen3ou'),
+        ],
+        now: now - 3 * 3600 + 25,
+      });
+      db.discardStagedVersion({versionId: discarded.id, agentId: alpha.id});
+
+      // Recent submission that passed smoke test then activated.
+      const activated = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-1.0.0.tar.zst',
+        sha256: 'e'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 2 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: activated.id,
+        smokeStatus: 'staged',
+        diagnostics: [makeDiag('gen1ou20261109', 'gen1ou')],
+        now: now - 2 * 3600 + 30,
+      });
+      db.activateStagedVersion({versionId: activated.id, agentId: alpha.id, now: now - 3600});
+
+      // Recent pending submission awaiting smoke testing.
+      db.createSubmission({
+        agentId: gamma.id,
+        version: '0.1.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/gamma-0.1.0.tar.zst',
+        sha256: 'f'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 600,
+      });
+
+      expect(db.getSubmissionAdminSummary(now)).toEqual({
+        submitted24h: 4,
+        smokeRuns24h: 4,
+        smokePassed24h: 3,
+        smokeFailed24h: 1,
+        smokeDiscarded24h: 1,
+        activated24h: 1,
+        diagnosticGames24h: 4,
+        pendingCount: 1,
+        stagedCount: 1,
+        totalActivated: 2,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('counts recent activations separately from older smoke runs', () => {
+    const {db, now, alpha} = setupSummaryDb();
+    try {
+      const stagedOld = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 30 * 3600,
+      });
+      db.applySubmissionStatus({
+        versionId: stagedOld.id,
+        smokeStatus: 'staged',
+        diagnostics: [makeDiag('gen1ou20261109', 'gen1ou')],
+        now: now - 29 * 3600,
+      });
+      db.activateStagedVersion({versionId: stagedOld.id, agentId: alpha.id, now: now - 1800});
+
+      expect(db.getSubmissionAdminSummary(now)).toEqual({
+        submitted24h: 0,
+        smokeRuns24h: 0,
+        smokePassed24h: 0,
+        smokeFailed24h: 0,
+        smokeDiscarded24h: 0,
+        activated24h: 1,
+        diagnosticGames24h: 0,
+        pendingCount: 0,
+        stagedCount: 0,
+        totalActivated: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  test('excludes manually quarantined pending versions from 24h smoke run totals', () => {
+    const {db, now, alpha} = setupSummaryDb();
+    try {
+      const v = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/alpha-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: now - 600,
+      });
+      db.applySubmissionStatus({
+        versionId: v.id,
+        smokeStatus: 'quarantined',
+        smokeError: 'Blocked before smoke test',
+        now: now - 300,
+      });
+
+      const summary = db.getSubmissionAdminSummary(now);
+      expect(summary.submitted24h).toBe(1);
+      expect(summary.smokeRuns24h).toBe(0);
+      expect(summary.smokePassed24h).toBe(0);
+      expect(summary.smokeFailed24h).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});

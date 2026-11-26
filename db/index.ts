@@ -684,6 +684,10 @@ export class Database extends SqliteDatabase {
     return versions.countStagedVersions(this.db);
   }
 
+  getSubmissionAdminSummary(now?: number): versions.SubmissionAdminSummary {
+    return versions.getSubmissionAdminSummary(this.db, now);
+  }
+
   getPendingSubmissions(): versions.PendingSubmissionRow[] {
     return versions.getPendingSubmissions(this.db);
   }

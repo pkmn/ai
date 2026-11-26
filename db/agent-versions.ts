@@ -168,6 +168,19 @@ export interface PendingVersionDmRow {
   ownerDiscordIds: string[];
 }
 
+export interface SubmissionAdminSummary {
+  submitted24h: number;
+  smokeRuns24h: number;
+  smokePassed24h: number;
+  smokeFailed24h: number;
+  smokeDiscarded24h: number;
+  activated24h: number;
+  diagnosticGames24h: number;
+  pendingCount: number;
+  stagedCount: number;
+  totalActivated: number;
+}
+
 interface RawAgentVersionRow {
   id: number;
   agent_id: number;
@@ -888,6 +901,85 @@ export function countStagedVersions(db: DatabaseSync): number {
     "SELECT COUNT(*) AS count FROM agent_versions WHERE smoke_status = 'staged'"
   ).get() as {count: number};
   return row.count;
+}
+
+// Summarizes rolling 24h submission & diagnostic smoke-test activity for `/admin`.
+// Attributes a version's smoke run to the 24h window via `smoke_diagnostics.created_at` when
+// diagnostic games were recorded (catching queued builds submitted >24h ago that ran today),
+// falling back to `submitted_at` for unpack/checksum failures or runs without diagnostic rows.
+export function getSubmissionAdminSummary(
+  db: DatabaseSync,
+  now = Math.floor(Date.now() / 1000)
+): SubmissionAdminSummary {
+  const cutoff = now - 86400;
+  const row = db.prepare(`
+    WITH runs AS (
+      SELECT
+        av.smoke_status,
+        av.submitted_at,
+        av.activated_at,
+        CASE
+          WHEN av.smoke_status != 'pending'
+            AND (
+              av.smoke_status != 'quarantined'
+              OR av.smoke_duration_millis IS NOT NULL
+              OR av.activated_at IS NOT NULL
+              OR EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = av.id)
+            )
+            AND (
+              EXISTS (
+                SELECT 1 FROM smoke_diagnostics sd
+                WHERE sd.version_id = av.id AND sd.created_at >= ?
+              )
+              OR (
+                av.submitted_at >= ?
+                AND NOT EXISTS (SELECT 1 FROM smoke_diagnostics sd WHERE sd.version_id = av.id)
+              )
+            )
+          THEN 1 ELSE 0
+        END AS ran_24h
+      FROM agent_versions av
+    )
+    SELECT
+      COALESCE(SUM(CASE WHEN submitted_at >= ? THEN 1 ELSE 0 END), 0) AS submitted_24h,
+      COALESCE(SUM(ran_24h), 0) AS smoke_runs_24h,
+      COALESCE(SUM(CASE WHEN ran_24h = 1 AND smoke_status != 'failed' THEN 1 ELSE 0 END), 0)
+        AS smoke_passed_24h,
+      COALESCE(SUM(CASE WHEN ran_24h = 1 AND smoke_status = 'failed' THEN 1 ELSE 0 END), 0)
+        AS smoke_failed_24h,
+      COALESCE(SUM(CASE WHEN ran_24h = 1 AND smoke_status = 'discarded' THEN 1 ELSE 0 END), 0)
+        AS smoke_discarded_24h,
+      COALESCE(SUM(CASE WHEN activated_at >= ? THEN 1 ELSE 0 END), 0) AS activated_24h,
+      COALESCE(SUM(CASE WHEN smoke_status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
+      COALESCE(SUM(CASE WHEN smoke_status = 'staged' THEN 1 ELSE 0 END), 0) AS staged_count,
+      COALESCE(SUM(CASE WHEN activated_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS total_activated
+    FROM runs
+  `).get(cutoff, cutoff, cutoff, cutoff) as {
+    submitted_24h: number;
+    smoke_runs_24h: number;
+    smoke_passed_24h: number;
+    smoke_failed_24h: number;
+    smoke_discarded_24h: number;
+    activated_24h: number;
+    pending_count: number;
+    staged_count: number;
+    total_activated: number;
+  };
+  const gamesRow = db.prepare(
+    'SELECT COUNT(*) AS count FROM smoke_diagnostics WHERE created_at >= ?'
+  ).get(cutoff) as {count: number};
+  return {
+    submitted24h: Number(row.submitted_24h),
+    smokeRuns24h: Number(row.smoke_runs_24h),
+    smokePassed24h: Number(row.smoke_passed_24h),
+    smokeFailed24h: Number(row.smoke_failed_24h),
+    smokeDiscarded24h: Number(row.smoke_discarded_24h),
+    activated24h: Number(row.activated_24h),
+    diagnosticGames24h: Number(gamesRow.count),
+    pendingCount: Number(row.pending_count),
+    stagedCount: Number(row.staged_count),
+    totalActivated: Number(row.total_activated),
+  };
 }
 
 export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] {

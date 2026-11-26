@@ -1815,6 +1815,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       githubUser: 'scheibo',
       setup: fixture => withSavepoint(fixture, raw => {
         raw.exec("UPDATE agents SET unlimited_smoke_tests = 1 WHERE slug = 'awrorus'");
+        raw.prepare(
+          `INSERT INTO config (id, smoke_tests_per_cycle, smoke_test_cycle_interval, updated_at)
+           VALUES (1, 1, 5, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             smoke_tests_per_cycle = excluded.smoke_tests_per_cycle,
+             smoke_test_cycle_interval = excluded.smoke_test_cycle_interval,
+             updated_at = excluded.updated_at`
+        ).run(NOW_SECONDS);
       }),
       click: 'tr[data-agent-row="0-error"] .row-toggle',
     },

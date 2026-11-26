@@ -124,8 +124,12 @@ export interface AdminSnapshot {
     stagedCount: number;
     unsentDmCount: number;
     discordMemberCount: number;
+    smokeCadence: db.SmokeCadence;
   };
   ladders: AdminLadderItem[];
+  matches24h: number;
+  totalMatches: number;
+  submissions: db.SubmissionAdminSummary;
   registrations: RegistrationIssuesSnapshot;
   agents: AdminAgentItem[];
   totalAgents: number;
@@ -945,7 +949,7 @@ function renderUpdatesRow(updates: system.UpdateStatus | undefined): util.Child 
     <>
       <span className={countClass} {...titleAttrs}>
         {updates.pending === 0
-          ? 'Up to date'
+          ? 'None'
           : `${updates.pending} pending${hasSec ? ` (${updates.security} security)` : ''}`}
       </span>
       {updates.rebootRequired && (
@@ -1060,6 +1064,78 @@ interface SystemCardExtras {
   pendingQueue: number;
   stagedCount: number;
   unsentDms: number;
+  smokeCadence: db.SmokeCadence;
+}
+
+function formatSmokeCadence(cadence: db.SmokeCadence): {
+  text: string;
+  className: string;
+  title: string;
+} {
+  if (cadence.maxPerCycle <= 0) {
+    return {
+      text: 'Smoke paused',
+      className: 'warn',
+      title:
+        'Smoke-test cadence: paused (0 per match cycle) — configure via pkmn set-smoke-cadence',
+    };
+  }
+  if (cadence.everyCycles <= 1) {
+    return {
+      text: `Smoke ${cadence.maxPerCycle}/match`,
+      className: 'muted',
+      title:
+        `Smoke-test cadence: up to ${cadence.maxPerCycle} per match cycle ` +
+        '— configure via pkmn set-smoke-cadence',
+    };
+  }
+  return {
+    text: `Smoke ${cadence.maxPerCycle}/${cadence.everyCycles} matches`,
+    className: 'muted',
+    title:
+      `Smoke-test cadence: up to ${cadence.maxPerCycle} every ${cadence.everyCycles} ` +
+      'match cycles — configure via pkmn set-smoke-cadence',
+  };
+}
+
+function renderArenaQueueLine(extras: SystemCardExtras, outboxPending?: number): util.Child {
+  const cadence = formatSmokeCadence(extras.smokeCadence);
+  return (
+    <span className='sys-line'>
+      <span
+        className={extras.pendingQueue > 0 ? 'warn' : 'muted'}
+        title='Submitted versions waiting for Arena smoke testing'
+      >
+        Queue {extras.pendingQueue} pending
+      </span>
+      {extras.stagedCount > 0 && (
+        <>
+          {' · '}
+          <span
+            className='warn'
+            title='Diagnostic smoke runs awaiting owner activation or discard'
+          >
+            {extras.stagedCount} staged
+          </span>
+        </>
+      )}
+      {outboxPending !== undefined && (
+        <>
+          {' · '}
+          <span
+            className={outboxPending > 0 ? 'warn' : 'muted'}
+            title='Completed match/smoke payloads buffered on Arena awaiting VPS flush'
+          >
+            Outbox {outboxPending}
+          </span>
+        </>
+      )}
+      {' · '}
+      <span className={cadence.className} title={cadence.title}>
+        {cadence.text}
+      </span>
+    </span>
+  );
 }
 
 function renderSystemCards(
@@ -1254,9 +1330,15 @@ function renderSystemCards(
           )}
         </div>
         {!arenaSys ? (
-          <p className='muted' style={{margin: '0.25rem 0', fontSize: '0.88em'}}>
-            Waiting for Arena host telemetry on the next heartbeat.
-          </p>
+          <>
+            <p className='muted' style={{margin: '0.25rem 0 0.55rem', fontSize: '0.88em'}}>
+              Waiting for Arena host telemetry on the next heartbeat.
+            </p>
+            <dl className='sys-dl'>
+              <dt>Runtime</dt>
+              <dd>{renderArenaQueueLine(extras)}</dd>
+            </dl>
+          </>
         ) : (
           <dl className='sys-dl'>
             <dt>Load</dt>
@@ -1331,32 +1413,7 @@ function renderSystemCards(
                   </>
                 )}
               </span>
-              <span className='sys-line'>
-                <span
-                  className={extras.pendingQueue > 0 ? 'warn' : 'muted'}
-                  title='Submitted versions waiting for Arena smoke testing'
-                >
-                  Queue {extras.pendingQueue} pending
-                </span>
-                {extras.stagedCount > 0 && (
-                  <>
-                    {' · '}
-                    <span
-                      className='warn'
-                      title='Diagnostic smoke runs awaiting owner activation or discard'
-                    >
-                      {extras.stagedCount} staged
-                    </span>
-                  </>
-                )}
-                {' · '}
-                <span
-                  className={arenaSys.outboxPending > 0 ? 'warn' : 'muted'}
-                  title='Completed match/smoke payloads buffered on Arena awaiting VPS flush'
-                >
-                  Outbox {arenaSys.outboxPending}
-                </span>
-              </span>
+              {renderArenaQueueLine(extras, arenaSys.outboxPending)}
             </dd>
 
             <dt>Errors</dt>
@@ -1749,6 +1806,11 @@ export function buildAdminSnapshot(
       : {}),
   };
 
+  const matches24h = ladders.reduce((acc, item) => acc + item.summary.matches24h, 0);
+  const totalMatches = ladders.reduce((acc, item) => acc + item.summary.totalMatches, 0);
+  const submissions = database.getSubmissionAdminSummary(now);
+  const smokeCadence = database.getSmokeCadence();
+
   return {
     generatedAt: now,
     admin: adminLogin,
@@ -1756,11 +1818,15 @@ export function buildAdminSnapshot(
     health: {
       runner: computeRunnerHealth(arenaHandle, now),
       pendingSubmissions,
-      stagedCount: database.countStagedVersions(),
+      stagedCount: submissions.stagedCount,
       unsentDmCount: database.getPendingVersionDms().length,
       discordMemberCount: database.countDiscordMembers(),
+      smokeCadence,
     },
     ladders,
+    matches24h,
+    totalMatches,
+    submissions,
     registrations,
     agents,
     totalAgents,
@@ -1770,10 +1836,22 @@ export function buildAdminSnapshot(
   };
 }
 
-function renderLaddersSection(ladders: AdminLadderItem[]): util.Child {
+function renderLaddersSection(
+  ladders: AdminLadderItem[],
+  matches24h: number,
+  totalMatches: number
+): util.Child {
   return (
     <section id='ladders'>
-      <h3><a href='#ladders' className='subtle'>Ladders</a></h3>
+      <div className='section-head'>
+        <h3><a href='#ladders' className='subtle'>Ladders</a></h3>
+        <span
+          className='section-meta muted'
+          title='Total matches completed across current ladders in the last 24h / all-time'
+        >
+          {matches24h.toLocaleString('en-US')}/{totalMatches.toLocaleString('en-US')}
+        </span>
+      </div>
       <div className='table-wrap'>
         <table>
           <thead>
@@ -2764,6 +2842,29 @@ function renderRegistrationsSection(
   );
 }
 
+function renderProjectsMeta(sub: db.SubmissionAdminSummary): util.Child {
+  const tipParts: string[] = [
+    `Last 24h: ${sub.submitted24h} ${sub.submitted24h === 1 ? 'submission' : 'submissions'}`,
+    `${sub.smokeRuns24h} diagnostic ${sub.smokeRuns24h === 1 ? 'run' : 'runs'} ` +
+      `(${sub.smokePassed24h} passed, ${sub.smokeFailed24h} failed` +
+      `${sub.smokeDiscarded24h > 0 ? `, ${sub.smokeDiscarded24h} discarded` : ''}; ` +
+      `${sub.diagnosticGames24h} ${sub.diagnosticGames24h === 1 ? 'game' : 'games'})`,
+    `${sub.activated24h} activated`,
+  ];
+  if (sub.pendingCount > 0) tipParts.push(`${sub.pendingCount} pending`);
+  if (sub.stagedCount > 0) tipParts.push(`${sub.stagedCount} staged`);
+  tipParts.push(`${sub.totalActivated.toLocaleString('en-US')} activated all-time`);
+
+  return (
+    <span className='section-meta muted' title={tipParts.join(' · ')}>
+      {sub.smokeRuns24h.toLocaleString('en-US')} {sub.smokeRuns24h === 1 ? 'run' : 'runs'}
+      {sub.smokeFailed24h > 0 && ` (${sub.smokeFailed24h.toLocaleString('en-US')} fail)`}
+      {' · '}
+      {sub.activated24h.toLocaleString('en-US')} activated
+    </span>
+  );
+}
+
 export function renderAdminPage(opts: {
   snapshot: AdminSnapshot;
   allLadders: db.LadderRow[];
@@ -2773,7 +2874,7 @@ export function renderAdminPage(opts: {
   const {snapshot, allLadders, liveTournament} = opts;
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
   const wipeableVersionIds = new Set(snapshot.wipeableVersionIds);
-  const {pendingSubmissions, stagedCount, unsentDmCount} = snapshot.health;
+  const {pendingSubmissions, stagedCount, unsentDmCount, smokeCadence} = snapshot.health;
   const authorProjects = opts.authorProjects ?? buildAuthorProjectsFromAgents(snapshot.agents);
 
   const content = (
@@ -2784,16 +2885,20 @@ export function renderAdminPage(opts: {
         pendingQueue: pendingSubmissions.length,
         stagedCount,
         unsentDms: unsentDmCount,
+        smokeCadence,
       })}
-      {renderLaddersSection(snapshot.ladders)}
+      {renderLaddersSection(snapshot.ladders, snapshot.matches24h, snapshot.totalMatches)}
       {renderRegistrationsSection(snapshot.registrations, snapshot.generatedAt, authorProjects)}
 
       <section id='projects'>
-        <h3>
-          <a href='#projects' className='subtle'>
-            Projects (<span id='projects-total'>{snapshot.totalAgents}</span>)
-          </a>
-        </h3>
+        <div className='section-head'>
+          <h3>
+            <a href='#projects' className='subtle'>
+              Projects (<span id='projects-total'>{snapshot.totalAgents}</span>)
+            </a>
+          </h3>
+          {renderProjectsMeta(snapshot.submissions)}
+        </div>
         {snapshot.totalAgents === 0 ? (
           <p className='muted'>No Arena projects registered yet.</p>
         ) : (
@@ -2902,13 +3007,20 @@ export function register(app: polka.Polka, options: Options): Handle {
     const pendingQueue = db.getPendingSubmissions().length;
     const stagedCount = db.countStagedVersions();
     const unsentDms = db.getPendingVersionDms().length;
+    const smokeCadence = db.getSmokeCadence();
     return {
       generatedAt: now,
       ...(sys.lastHeartbeatAt !== undefined ? {lastHeartbeatAt: sys.lastHeartbeatAt} : {}),
       runner,
+      smokeCadence,
       vps: sys.vps,
       ...(sys.arena ? {arena: sys.arena} : {}),
-      cardsHtml: renderSystemCards(sys, now, {pendingQueue, stagedCount, unsentDms}).toString(),
+      cardsHtml: renderSystemCards(sys, now, {
+        pendingQueue,
+        stagedCount,
+        unsentDms,
+        smokeCadence,
+      }).toString(),
     };
   };
 
