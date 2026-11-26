@@ -317,8 +317,8 @@ describe('/admin dashboard & API', () => {
       headers: {Cookie: cookieFor('scheibo')},
     })).text();
     expect(html).toContain('data-action="smoke-limit"');
-    expect(html).toContain('Disable 3/24h');
-    expect(html).toContain('Enable 3/24h');
+    expect(html).toContain('>Limited</button>');
+    expect(html).toContain('>Unlimited</button>');
     expect(html).toContain('3/24h limit disabled.');
 
     const snap = await (await fetch(`${baseUrl}/admin.json`, {
@@ -730,7 +730,10 @@ describe('/admin dashboard & API', () => {
       expect(html).toContain('Can&#39;t move: 2');
       expect(html).toContain('Can&#39;t switch: 1');
       expect(html).toContain('<span class="no">1</span>');
-      expect(html).toContain('1.1.0 [staged]');
+      const stagedChip =
+        '<span class="chip chip-warn" ' +
+        'title="Staged version 1.1.0 awaiting owner activation or discard">1.1.0</span>';
+      expect(html).toContain(stagedChip);
       expect(html).toContain('PASS</span> <span class="warn">(staged)</span>');
       expect(html).toContain('data-action="discard"');
       expect(html).toContain(`/api/admin/diagnostics/${stagedDiag.id}/stderr`);
@@ -827,7 +830,7 @@ describe('/admin dashboard & API', () => {
         headers: {Cookie: adminCookie},
       })).text();
       expect(afterHtml).toContain('Discarded');
-      expect(afterHtml).not.toContain('1.1.0 [staged]');
+      expect(afterHtml).not.toContain(stagedChip);
     }
   );
 

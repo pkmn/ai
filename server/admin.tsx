@@ -319,7 +319,7 @@ const ADMIN_SCRIPT = `
               const unlimited = Boolean(data.agent && data.agent.unlimitedSmokeTests);
               actionBtn.dataset.unlimited = unlimited ? 'true' : 'false';
               actionBtn.className = unlimited ? 'btn-sm btn-warn' : 'btn-sm';
-              actionBtn.textContent = unlimited ? 'Enable 3/24h' : 'Disable 3/24h';
+              actionBtn.textContent = unlimited ? 'Unlimited' : 'Limited';
               actionBtn.title = unlimited
                 ? 'Re-enable the 3-per-24h failed/discarded diagnostic rate limit'
                 : 'Disable the 3-per-24h failed/discarded diagnostic rate limit';
@@ -2463,7 +2463,7 @@ function renderProjectRows(
                             : 'Disable the 3-per-24h failed/discarded diagnostic rate limit'
                         }
                       >
-                        {agent.unlimitedSmokeTests ? 'Enable 3/24h' : 'Disable 3/24h'}
+                        {agent.unlimitedSmokeTests ? 'Unlimited' : 'Limited'}
                       </button>
                     )}
                   </div>
@@ -2541,7 +2541,7 @@ function renderProjectRows(
                             'or discard'
                           }
                         >
-                          {v.version} [staged]
+                          {v.version}
                         </span>
                       ))}
                       {item.tournaments.map(t => {
