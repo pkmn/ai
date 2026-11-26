@@ -255,18 +255,22 @@ export function loadGlossary(): Record<string, string> {
 
 const AGENT_ROLE_PREFIX = '🤖';
 
+function normalizeAgentRoleId(name: string): string {
+  return util.toID(util.slugify(name));
+}
+
 function agentRole(
   agent: NonNullable<Leader['agent']>,
   roles?: GuildRole[]
 ): string | undefined {
   if (!roles) return undefined;
-  const id = util.toID(agent.name);
+  const id = normalizeAgentRoleId(agent.name);
   if (!id) return undefined;
-  const strippedId = util.toID(agent.name.replace(/[\s_-]+v?\d[\w.-]*$/i, ''));
+  const strippedId = normalizeAgentRoleId(agent.name.replace(/[\s_-]+v?\d[\w.-]*$/i, ''));
   let match: {id: string; len: number} | undefined;
   for (const role of roles) {
-    if (!role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
-    const roleAgentId = util.toID(role.name.slice(AGENT_ROLE_PREFIX.length));
+    if (role.tags?.bot_id || !role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
+    const roleAgentId = normalizeAgentRoleId(role.name.slice(AGENT_ROLE_PREFIX.length));
     if (!roleAgentId) continue;
     const isMatch = roleAgentId === id || (Boolean(strippedId) && roleAgentId === strippedId);
     if (isMatch && (!match || roleAgentId.length > match.len)) {
@@ -481,16 +485,94 @@ export async function syncRoles(
   }
 }
 
-// Syncs pkmn.ai Arena Competitor and #1 ladder leader roles directly from SQLite. Unlike external
-// partner ladders, Arena projects can have multiple co-owners in `developers`, so every verified
-// owner of a qualified project or #1 settled Champion receives the corresponding Discord role.
+export interface AgentDiscordMember {
+  discordId: string;
+  discordUsername: string;
+}
+
+// Matches active registered Arena projects against `🤖 <Project>` Discord guild roles in memory.
+// Used for `/admin` display and Arena Discord role sync (Competitor + #1 ladder crowns) without
+// persisting role guesses into SQLite or opting anyone into system DMs.
+export function matchAgentDiscordMembers(
+  db: db.Database,
+  members: GuildMember[],
+  roles: GuildRole[]
+): Map<number, AgentDiscordMember[]> {
+  const roleIdsByAgentKey = new Map<string, string[]>();
+  for (const role of roles) {
+    if (role.tags?.bot_id || !role.name.startsWith(AGENT_ROLE_PREFIX)) continue;
+    const key = normalizeAgentRoleId(role.name.slice(AGENT_ROLE_PREFIX.length));
+    if (!key) continue;
+    let list = roleIdsByAgentKey.get(key);
+    if (!list) {
+      list = [];
+      roleIdsByAgentKey.set(key, list);
+    }
+    list.push(role.id);
+  }
+
+  const membersByRoleId = new Map<string, GuildMember[]>();
+  for (const member of members) {
+    if (member.user.bot) continue;
+    for (const roleId of member.roles) {
+      let list = membersByRoleId.get(roleId);
+      if (!list) {
+        list = [];
+        membersByRoleId.set(roleId, list);
+      }
+      list.push(member);
+    }
+  }
+
+  const out = new Map<number, AgentDiscordMember[]>();
+  for (const agent of db.getAllActiveAgents()) {
+    const matchingRoleIds = roleIdsByAgentKey.get(normalizeAgentRoleId(agent.name));
+    if (!matchingRoleIds) continue;
+    const byId = new Map<string, AgentDiscordMember>();
+    for (const roleId of matchingRoleIds) {
+      for (const member of membersByRoleId.get(roleId) ?? []) {
+        byId.set(member.user.id, {
+          discordId: member.user.id,
+          discordUsername: member.user.username,
+        });
+      }
+    }
+    if (byId.size > 0) {
+      out.set(
+        agent.id,
+        [...byId.values()].sort(
+          (a, b) =>
+            a.discordUsername.toLowerCase().localeCompare(b.discordUsername.toLowerCase()) ||
+            a.discordId.localeCompare(b.discordId)
+        )
+      );
+    }
+  }
+  return out;
+}
+
+// Syncs pkmn.ai Arena Competitor and #1 ladder leader roles directly from SQLite and (when guild
+// roles are supplied) live `🤖 <Project>` role holders. Unlike external partner ladders, Arena
+// projects can have multiple co-owners, so every manually linked owner in `developers` and every
+// guild member inferred via a matching `🤖 <Project>` role receives the corresponding Discord role
+// (while system DMs remain strictly opt-in via `developers.discord_id`).
 export async function syncArenaRoles(
   db: db.Database,
   token: string,
   config: Config,
   state: Map<string, string | undefined>,
-  members?: GuildMember[]
+  members?: GuildMember[],
+  roles?: GuildRole[]
 ): Promise<GuildMember[] | undefined> {
+  const roleMembersByAgent = members && roles
+    ? matchAgentDiscordMembers(db, members, roles)
+    : undefined;
+  const devsByAgent = roleMembersByAgent ? db.getDevelopersByAgent() : undefined;
+  const hasEligibleOwners = (agentId: number): boolean => {
+    const devs = devsByAgent?.get(agentId);
+    return Boolean(devs && devs.length > 0 && devs.every(d => d.smogonStanding !== 'bad'));
+  };
+
   const assignments: Array<{
     stateKey: string;
     label: string;
@@ -500,20 +582,39 @@ export async function syncArenaRoles(
   }> = [];
 
   if (config.competitor) {
+    const targetIds = [...db.getCompetitorDiscordIds()];
+    if (roleMembersByAgent) {
+      for (const agent of db.getAllActiveAgents()) {
+        if (agent.status !== 'qualified' || !hasEligibleOwners(agent.id)) continue;
+        for (const m of roleMembersByAgent.get(agent.id) ?? []) {
+          targetIds.push(m.discordId);
+        }
+      }
+    }
     assignments.push({
       stateKey: 'arena:competitor',
       label: 'arena:competitor',
       roleId: config.competitor,
-      targetIds: db.getCompetitorDiscordIds(),
+      targetIds,
     });
   }
 
   for (const target of db.getArenaLadderRoleTargets()) {
+    const targetIds = [...target.discordIds];
+    if (
+      roleMembersByAgent &&
+      target.agentId !== undefined &&
+      hasEligibleOwners(target.agentId)
+    ) {
+      for (const m of roleMembersByAgent.get(target.agentId) ?? []) {
+        targetIds.push(m.discordId);
+      }
+    }
     assignments.push({
       stateKey: `arena:ladder:${target.discordRole}`,
       label: `arena:${target.slot}`,
       roleId: target.discordRole,
-      targetIds: target.discordIds,
+      targetIds,
       agentName: target.agentName,
     });
   }
@@ -3128,6 +3229,7 @@ export interface Options {
 
 export interface Handle {
   stop: () => void;
+  getAgentDiscordMembers: () => ReadonlyMap<number, AgentDiscordMember[]>;
   notifySubmissionStatus: (result: db.ApplySubmissionStatusResult) => Promise<boolean>;
   notifyWatchdogTimeout: (alert: WatchdogAlert) => Promise<number>;
   notifyStaffAlert: (alert: StaffAlert) => Promise<number>;
@@ -3140,6 +3242,7 @@ export interface SyncOnceOptions {
   state?: Map<string, string | undefined>;
   onVerifyKey?: (key: string) => void;
   onCommandsSynced?: () => void;
+  onAgentDiscordMembers?: (membersByAgent: Map<number, AgentDiscordMember[]>) => void;
   config?: Config;
 }
 
@@ -3149,7 +3252,12 @@ export async function syncOnce(
   vgcToken = '',
   opts: SyncOnceOptions = {}
 ) {
-  const {state = new Map<string, string | undefined>(), onVerifyKey, onCommandsSynced} = opts;
+  const {
+    state = new Map<string, string | undefined>(),
+    onVerifyKey,
+    onCommandsSynced,
+    onAgentDiscordMembers,
+  } = opts;
   const config = opts.config ?? loadConfig();
 
   try {
@@ -3180,15 +3288,25 @@ export async function syncOnce(
   }
 
   let roles: GuildRole[] | undefined;
-  if (vgcToken || config.channel) {
+  let rolesFetchFailed = false;
+  if (!membersFetchFailed || vgcToken || config.channel) {
     try {
       roles = await fetchGuildRoles(token, config.guild);
     } catch (err) {
+      rolesFetchFailed = true;
       if (util.isConnectivityError(err)) {
         console.warn('Discord API unreachable; skipping remainder of sync cycle.');
         return;
       }
       console.error('Error fetching guild roles:', err);
+    }
+  }
+
+  if (members && roles) {
+    try {
+      onAgentDiscordMembers?.(matchAgentDiscordMembers(db, members, roles));
+    } catch (err) {
+      console.error('Error matching agent Discord role members:', err);
     }
   }
 
@@ -3202,9 +3320,9 @@ export async function syncOnce(
     }
   }
 
-  if (!membersFetchFailed) {
+  if (!membersFetchFailed && !rolesFetchFailed) {
     try {
-      members = await syncArenaRoles(db, token, config, state, members);
+      members = await syncArenaRoles(db, token, config, state, members, roles);
       clearSyncTaskFailure(state, 'Arena role sync');
     } catch (err) {
       console.error('Error syncing Arena roles:', err);
@@ -3267,6 +3385,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     console.error('Error loading glossary:', err);
   }
   const startedAtSeconds = Math.floor(Date.now() / 1000);
+  let agentDiscordMembers: ReadonlyMap<number, AgentDiscordMember[]> = new Map();
   let stopped = false;
   let timer: NodeJS.Timeout | undefined;
   let verifyKeyReady = Promise.resolve();
@@ -3284,6 +3403,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         state,
         onVerifyKey: k => {
           verifyKey = k;
+        },
+        onAgentDiscordMembers: matched => {
+          agentDiscordMembers = matched;
         },
       })
         .catch(err => {
@@ -3319,6 +3441,9 @@ export function register(app: polka.Polka, options: Options): Handle {
       },
       onCommandsSynced: () => {
         resolveVerifyKey();
+      },
+      onAgentDiscordMembers: matched => {
+        agentDiscordMembers = matched;
       },
     })
       .catch(err => {
@@ -3370,6 +3495,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       stopped = true;
       if (timer) clearTimeout(timer);
     },
+    getAgentDiscordMembers: () => agentDiscordMembers,
     notifySubmissionStatus: async result => {
       if (stopped || !token) return false;
       return notifySubmissionStatus(options.db, token, loadConfig(), result, state);

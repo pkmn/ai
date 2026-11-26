@@ -407,6 +407,9 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     publicDir,
     vpsMonitor,
     registrationMonitor,
+    getDiscordRoleMembers: discordHandle
+      ? () => discordHandle.getAgentDiscordMembers()
+      : undefined,
   });
   notifyAdminHeartbeat = () => adminHandle.notifyHeartbeat();
 

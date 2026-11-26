@@ -10,6 +10,7 @@ import {ALL_SLOTS, Database} from '../db';
 import * as admin from '../server/admin';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import type * as discord from '../server/discord';
 import * as system from '../server/system';
 import * as wiki from '../server/wiki';
 import {runPkmnCli} from '../tools/pkmn';
@@ -51,6 +52,7 @@ describe('/admin dashboard & API', () => {
   let arenaHandle: arena.Handle;
   let adminHandle: admin.Handle;
   let traffic: system.TrafficTracker;
+  let discordRoleMembers: Map<number, discord.AgentDiscordMember[]>;
   const ARENA_SECRET = 'test-admin-arena-secret';
 
   const cookieFor = (login: string, id = 1001) => {
@@ -90,11 +92,13 @@ describe('/admin dashboard & API', () => {
       traffic,
       now: () => now,
     });
+    discordRoleMembers = new Map();
     adminHandle = admin.register(app, {
       db,
       auth: authHandler,
       arena: arenaHandle,
       vpsMonitor,
+      getDiscordRoleMembers: () => discordRoleMembers,
       now: () => now,
     });
     notifyHb = () => adminHandle.notifyHeartbeat();
@@ -177,6 +181,65 @@ describe('/admin dashboard & API', () => {
     expect(html).not.toContain('Champion');
     expect(html).not.toContain('Challenger');
     expect(html).not.toContain('Needs Attention');
+  });
+
+  test('renders role-inferred Discord links distinctly and deduplicates linked ones', async () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    const foulPlay = db.getAgentBySlug('foul-play')!;
+    discordRoleMembers = new Map([
+      [
+        zero.id,
+        [
+          // Already manually linked on 0 ERROR — must not be duplicated as subtle/inferred.
+          {discordId: '513513270670262284', discordUsername: 'scheibo'},
+          // Unlinked co-owner holding 🤖 0 ERROR role — rendered alongside linked blue account.
+          {discordId: '999000111222333444', discordUsername: 'coauthor_role'},
+        ],
+      ],
+      [
+        foulPlay.id,
+        [
+          // Foul Play has no manually linked developer — rendered only as subtle inferred link.
+          {discordId: '283674461268344832', discordUsername: 'pmariglia'},
+        ],
+      ],
+    ]);
+
+    const htmlRes = await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    });
+    expect(htmlRes.status).toBe(200);
+    const html = await htmlRes.text();
+
+    // Manually linked @scheibo appears once as a standard link (never duplicated as inferred).
+    const scheiboMatches = html.match(/https:\/\/discord\.com\/users\/513513270670262284/g) ?? [];
+    expect(scheiboMatches).toHaveLength(1);
+    expect(html).not.toMatch(
+      /href="https:\/\/discord\.com\/users\/513513270670262284"[^>]*discord-inferred/
+    );
+
+    // Role-inferred @coauthor_role and @pmariglia render as subtle discord-inferred links.
+    expect(html).toMatch(
+      /href="https:\/\/discord\.com\/users\/999000111222333444"[^>]*class="subtle discord-inferred"/
+    );
+    expect(html).toContain('@coauthor_role');
+    expect(html).toMatch(
+      /href="https:\/\/discord\.com\/users\/283674461268344832"[^>]*class="subtle discord-inferred"/
+    );
+    expect(html).toContain('@pmariglia');
+    expect(html).toContain('Matched via 🤖 project role (not manually linked; no system DMs)');
+
+    // Newcomer still has neither linked nor role-inferred Discord.
+    expect(html).toContain('No Discord linked (rookie)');
+
+    // /admin.json exposes discordRoleMembers per project.
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).json() as admin.AdminSnapshot;
+    const fpSnap = snap.agents.find(a => a.agent.slug === 'foul-play')!;
+    expect(fpSnap.discordRoleMembers).toEqual([
+      {discordId: '283674461268344832', discordUsername: 'pmariglia'},
+    ]);
   });
 
   test('serves matching /admin.json alongside /admin/index.json snapshots', async () => {

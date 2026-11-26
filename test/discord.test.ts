@@ -1212,6 +1212,167 @@ describe('Arena Discord roles', () => {
       db.close();
     }
   });
+
+  test('matchAgentDiscordMembers & syncArenaRoles use 🤖 roles without DMs', async () => {
+    const db = new Database(':memory:');
+    try {
+      db.syncLaddersFromYaml(LADDERS_YAML, 1_760_000_000);
+      db.syncProjectsFromYaml(`
+- name: Pokérus
+  active: 2026
+  arena:
+    owners:
+      pokerusdev: pokerusdev.10001
+- name: Metamon
+  active: 2026
+  arena:
+    owners:
+      jakegrigsby: jakegrigsby.10002
+- name: RetiredBot
+  active: 2026
+  arena:
+    owners: {}
+- name: Newcomer
+  active: 2026
+  arena:
+    owners:
+      newcomer: newcomer.10003
+`, undefined, 1_760_000_000);
+      db.setAgentLadders('pokerus', ['rby'], 1_760_000_000);
+      db.setAgentLadders('metamon', ['rby'], 1_760_000_000);
+      db.setAgentLadders('retiredbot', ['rby'], 1_760_000_000);
+
+      // Neither owner has manually linked Discord via OAuth.
+      const roles: discord.GuildRole[] = [
+        {id: 'r-pokerus', name: '🤖 Pokerus'},
+        {id: 'r-metamon', name: '🤖 Metamon'},
+        {id: 'r-retired', name: '🤖 RetiredBot'},
+        {id: 'r-newcomer', name: '🤖 Newcomer'},
+        {id: 'r-plain', name: 'Pokérus'},
+        {id: 'r-managed', name: '🤖 Pokérus', managed: true, tags: {bot_id: 'bot-1'}},
+      ];
+      const members: discord.GuildMember[] = [
+        {user: {id: '2001', username: 'pokerus_owner'}, roles: ['r-pokerus']},
+        {user: {id: '2002', username: 'pokerus_co'}, roles: ['r-pokerus']},
+        {user: {id: '2003', username: 'bot_account', bot: true}, roles: ['r-pokerus']},
+        {user: {id: '2004', username: 'jake_discord'}, roles: ['r-metamon']},
+        {user: {id: '2005', username: 'newcomer_discord'}, roles: ['r-newcomer']},
+        {user: {id: '2006', username: 'plain_role_only'}, roles: ['r-plain']},
+        {user: {id: '2007', username: 'managed_role'}, roles: ['r-managed']},
+        {user: {id: '2008', username: 'retired_owner'}, roles: ['r-retired']},
+      ];
+
+      const pokerus = db.getAgentBySlug('pokerus')!;
+      const metamon = db.getAgentBySlug('metamon')!;
+      const matched = discord.matchAgentDiscordMembers(db, members, roles);
+      expect(matched.get(pokerus.id)).toEqual([
+        {discordId: '2002', discordUsername: 'pokerus_co'},
+        {discordId: '2001', discordUsername: 'pokerus_owner'},
+      ]);
+
+      // Seed settled #1 rank for Pokérus on RBY.
+      const v1 = db.createSubmission({
+        agentId: pokerus.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/pokerus.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_100,
+      });
+      db.applySubmissionStatus({versionId: v1.id, smokeStatus: 'passed', now: 1_760_000_110});
+      const v2 = db.createSubmission({
+        agentId: metamon.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/mm.tar.zst',
+        sha256: SHA,
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_120,
+      });
+      db.applySubmissionStatus({versionId: v2.id, smokeStatus: 'passed', now: 1_760_000_130});
+      db.setLadderAnchor('gen1ou20261109', 'metamon', '1.0.0', 1_760_000_140);
+      for (let idx = 1; idx <= 50; idx++) {
+        const g = idx % 3 === 0 ? 'L' : 'W';
+        db.recordCompletedMatch({
+          match: {
+            id: `gen1ou-role-${String(idx).padStart(6, '0')}`,
+            ladderId: 'gen1ou20261109',
+            p1VersionId: v1.id,
+            p2VersionId: v2.id,
+            seed: `2,3,4,${idx}`,
+            game1Outcome: g,
+            game2Outcome: g,
+            category: `${g}${g}`,
+            game1Turns: 25,
+            game2Turns: 25,
+            game1EndReason: 'win',
+            game2EndReason: 'win',
+            p1Game1PeakRam: 256,
+            p1Game2PeakRam: 256,
+            p2Game1PeakRam: 256,
+            p2Game2PeakRam: 256,
+            p1Game1BankSeconds: 140,
+            p1Game2BankSeconds: 140,
+            p2Game1BankSeconds: 130,
+            p2Game2BankSeconds: 130,
+            p1Game1MeanTurnMillis: 100,
+            p1Game2MeanTurnMillis: 100,
+            p2Game1MeanTurnMillis: 100,
+            p2Game2MeanTurnMillis: 100,
+            completedAt: 1_760_001_000 + idx * 60,
+          },
+        });
+      }
+
+      const actions: Array<{method: string; url: string}> = [];
+      globalThis.fetch = ((url: string, init?: RequestInit) => {
+        actions.push({method: init?.method ?? 'GET', url: String(url)});
+        return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+      }) as unknown as typeof fetch;
+
+      await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, new Map(), members, roles);
+      expect(actions).toEqual([
+        // Competitor role for qualified owned Pokérus + Metamon (NOT pending or retired unowned).
+        {method: 'PUT', url: expect.stringContaining('/members/2001/roles/1568629775122309210')},
+        {method: 'PUT', url: expect.stringContaining('/members/2002/roles/1568629775122309210')},
+        {method: 'PUT', url: expect.stringContaining('/members/2004/roles/1568629775122309210')},
+        // #1 RBY crown role for settled #1 Pokérus owners via 🤖 Pokerus role.
+        {method: 'PUT', url: expect.stringContaining('/members/2001/roles/1563716887131459685')},
+        {method: 'PUT', url: expect.stringContaining('/members/2002/roles/1563716887131459685')},
+      ]);
+
+      // Banned Smogon standing revokes role-inferred Competitor & #1 crown roles.
+      db.db.prepare(
+        "UPDATE developers SET smogon_standing = 'bad' WHERE github_login = 'pokerusdev'"
+      ).run();
+      actions.length = 0;
+      await discord.syncArenaRoles(db, 'discord-token', ARENA_CONFIG, new Map(), members, roles);
+      expect(actions).toEqual([
+        {method: 'DELETE', url: expect.stringContaining('/members/2001/roles/1568629775122309210')},
+        {method: 'DELETE', url: expect.stringContaining('/members/2002/roles/1568629775122309210')},
+        {method: 'DELETE', url: expect.stringContaining('/members/2001/roles/1563716887131459685')},
+        {method: 'DELETE', url: expect.stringContaining('/members/2002/roles/1563716887131459685')},
+      ]);
+
+      // System DMs (smoke test passed/failed/quarantined) must NOT be sent to role-inferred users.
+      const dmCalls: string[] = [];
+      globalThis.fetch = ((url: string) => {
+        dmCalls.push(String(url));
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'dm-ch'}),
+        });
+      }) as unknown as typeof fetch;
+
+      const delivered = await discord.syncSubmissionDms(db, 'discord-token', ARENA_CONFIG);
+      expect(delivered).toBe(0);
+      expect(dmCalls).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('Arena Discord notifications', () => {
@@ -1951,6 +2112,76 @@ describe('Arena Discord notifications', () => {
       );
     } finally {
       console.error = errSpy;
+      db.close();
+    }
+  });
+
+  test('syncOnce matches 🤖 project roles in memory and assigns Competitor', async () => {
+    const db = createSeededArenaDb();
+    const assignedRoles: Array<{method: string; url: string}> = [];
+    let matchedByAgent: Map<number, discord.AgentDiscordMember[]> | undefined;
+    globalThis.fetch = ((url: string, init?: RequestInit) => {
+      const target = String(url);
+      const method = init?.method ?? 'GET';
+      if (target.includes('/applications/@me')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({id: 'app-1', verify_key: '00'.repeat(32)}),
+        });
+      }
+      if (target.includes('/commands')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve(discord.COMMANDS),
+        });
+      }
+      if (target.includes('/members?')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve([
+            {user: {id: '1001', username: 'pmariglia'}, roles: ['1568629775122309210']},
+            {user: {id: '1002', username: 'coauthor'}, roles: ['1568629775122309210']},
+            // Metamon owner has NOT linked Discord via OAuth, only holds 🤖 Metamon role.
+            {user: {id: '1003', username: 'jake_discord'}, roles: ['r-metamon']},
+          ]),
+        });
+      }
+      if (target.endsWith('/roles')) {
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve([{id: 'r-metamon', name: '🤖 Metamon'}]),
+        });
+      }
+      if (target.includes('/roles/')) {
+        assignedRoles.push({method, url: target});
+        return Promise.resolve({status: 204, ok: true, text: () => Promise.resolve('')});
+      }
+      return Promise.resolve({status: 200, ok: true, json: () => Promise.resolve([])});
+    }) as unknown as typeof fetch;
+
+    try {
+      await discord.syncOnce(db, 'discord-token', '', {
+        config: ARENA_CONFIG,
+        state: new Map(),
+        onAgentDiscordMembers: matched => {
+          matchedByAgent = matched;
+        },
+      });
+      const metamon = db.getAgentBySlug('metamon')!;
+      expect(matchedByAgent?.get(metamon.id)).toEqual([
+        {discordId: '1003', discordUsername: 'jake_discord'},
+      ]);
+      expect(assignedRoles).toEqual([
+        {
+          method: 'PUT',
+          url: expect.stringContaining('/members/1003/roles/1568629775122309210'),
+        },
+      ]);
+    } finally {
       db.close();
     }
   });

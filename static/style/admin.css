@@ -245,6 +245,17 @@ tr.project-row.expanded .row-toggle {
   font-family: var(--monospace);
 }
 
+.discord-list a.discord-inferred,
+.discord-list a.discord-inferred:visited {
+  color: rgb(var(--fg-base) / 50%);
+}
+
+.discord-list a.discord-inferred:hover,
+.discord-list a.discord-inferred:focus-visible {
+  color: rgb(var(--fg-base) / 75%);
+  text-decoration: underline;
+}
+
 .ladder-checks {
   display: inline-flex;
   flex-wrap: nowrap;

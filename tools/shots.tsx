@@ -25,6 +25,7 @@ import * as account from '../server/account';
 import * as admin from '../server/admin';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
+import type * as discord from '../server/discord';
 import * as render from '../server/render';
 import type * as system from '../server/system';
 import * as teams from '../server/teams';
@@ -127,6 +128,7 @@ export interface Fixture {
   rawVgcTeams: string[];
   canonicalVgcTeams: string[];
   setShowLiveBanner: (show: boolean) => void;
+  setDiscordRoleMembers: (members: ReadonlyMap<number, discord.AgentDiscordMember[]>) => void;
   close: () => Promise<void>;
 }
 
@@ -1806,6 +1808,33 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Admin',
       path: '/admin/',
       githubUser: 'scheibo',
+      setup: fixture => {
+        const zeroError = fixture.db.getAgentBySlug('0-error');
+        const wind = fixture.db.getAgentBySlug('mysteriouswind');
+        const roleMembers = new Map<number, discord.AgentDiscordMember[]>();
+        if (zeroError) {
+          roleMembers.set(zeroError.id, [
+            {discordId: '300000000000000098', discordUsername: 'coauthor'},
+          ]);
+        }
+        if (wind) {
+          roleMembers.set(wind.id, [
+            {discordId: '300000000000000099', discordUsername: 'winddev'},
+          ]);
+        }
+        fixture.setDiscordRoleMembers(roleMembers);
+        const undoDb = withSavepoint(fixture, raw => {
+          if (wind) {
+            raw.prepare(
+              'UPDATE developers SET discord_id = NULL, discord_username = NULL WHERE agent_id = ?'
+            ).run(wind.id);
+          }
+        });
+        return () => {
+          undoDb();
+          fixture.setDiscordRoleMembers(new Map());
+        };
+      },
     },
     {
       name: 'admin-expanded',
@@ -2417,6 +2446,7 @@ async function startFixture(): Promise<Fixture> {
       },
     ],
   };
+  let discordRoleMembers: ReadonlyMap<number, discord.AgentDiscordMember[]> = new Map();
   const adminHandle = admin.register(app, {
     db,
     auth: wikiInstance.auth,
@@ -2424,6 +2454,7 @@ async function startFixture(): Promise<Fixture> {
     wiki: wikiInstance,
     getVpsSystem: () => mockVpsSystem,
     getRegistrationIssues: () => mockRegistrations,
+    getDiscordRoleMembers: () => discordRoleMembers,
     now: () => NOW_SECONDS,
   });
   account.register(app, {
@@ -2522,6 +2553,9 @@ async function startFixture(): Promise<Fixture> {
     setShowLiveBanner: (show: boolean) => {
       showLiveBanner = show;
       syncStaticLiveBanner(publicDir, show ? origGetRunningTournament() : undefined);
+    },
+    setDiscordRoleMembers: members => {
+      discordRoleMembers = members;
     },
     close: async () => {
       adminHandle.close();

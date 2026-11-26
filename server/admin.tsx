@@ -11,6 +11,7 @@ import * as util from '../static/util';
 import * as account from './account';
 import * as arena from './arena';
 import {Auth, isAdmin, isCrossSiteRequest} from './auth';
+import type {AgentDiscordMember} from './discord';
 import {AI_PANEL_STYLE} from './render';
 import * as system from './system';
 import {formatTournamentName} from './tournaments';
@@ -53,6 +54,7 @@ export interface Options {
   getVpsSystem?: (now: number) => system.VpsSystemInfo;
   registrationMonitor?: RegistrationIssueMonitor;
   getRegistrationIssues?: () => RegistrationIssuesSnapshot;
+  getDiscordRoleMembers?: () => ReadonlyMap<number, AgentDiscordMember[]>;
   now?: () => number;
 }
 
@@ -96,6 +98,7 @@ export interface AdminPoolProgress {
 export interface AdminAgentItem {
   agent: db.AgentRow;
   developers: db.DeveloperRow[];
+  discordRoleMembers: AgentDiscordMember[];
   qualifiedLadders: db.LadderSlot[];
   submissionStatus: db.SubmissionStatus;
   pools: AdminPoolProgress[];
@@ -1694,7 +1697,8 @@ export function buildAdminAgentsPage(
   now = Math.floor(Date.now() / 1000),
   limit = util.TABLE_PAGE_SIZE,
   offset = 0,
-  currentLadders = database.getCurrentLadders()
+  currentLadders = database.getCurrentLadders(),
+  discordRoleMembersByAgent?: ReadonlyMap<number, AgentDiscordMember[]>
 ): {agents: AdminAgentItem[]; total: number} {
   const {agents: pageAgents, total} = database.getAgentsPage(limit, offset);
   const devsByAgent = database.getDevelopersByAgent();
@@ -1726,6 +1730,7 @@ export function buildAdminAgentsPage(
     return {
       agent,
       developers: devsByAgent.get(agent.id) ?? [],
+      discordRoleMembers: discordRoleMembersByAgent?.get(agent.id) ?? [],
       qualifiedLadders: laddersByAgent.get(agent.id) ?? [],
       submissionStatus: database.computeAgentSubmissionStatus(agent.id, now),
       pools,
@@ -1745,7 +1750,8 @@ export function buildAdminSnapshot(
   now = Math.floor(Date.now() / 1000),
   systemSnapshot?: AdminSystemSnapshot,
   wikiEditsPage: {edits: wiki.RecentEdit[]; total: number} = {edits: [], total: 0},
-  registrations: RegistrationIssuesSnapshot = {issues: []}
+  registrations: RegistrationIssuesSnapshot = {issues: []},
+  discordRoleMembersByAgent?: ReadonlyMap<number, AgentDiscordMember[]>
 ): AdminSnapshot {
   const currentLadders = database.getCurrentLadders();
   const ladderSummaries = database.getLadderAdminSummaries(now);
@@ -1770,7 +1776,8 @@ export function buildAdminSnapshot(
     now,
     util.TABLE_PAGE_SIZE,
     0,
-    currentLadders
+    currentLadders,
+    discordRoleMembersByAgent
   );
 
   const pendingSubmissions: AdminPendingItem[] = database.getPendingSubmissions().map(p => {
@@ -2458,6 +2465,10 @@ function renderProjectRows(
         const linkedDiscord = developers.filter(
           d => Boolean(d.discordId && d.discordUsername)
         );
+        const linkedDiscordIds = new Set(linkedDiscord.map(d => d.discordId!));
+        const inferredDiscord = item.discordRoleMembers.filter(
+          m => !linkedDiscordIds.has(m.discordId)
+        );
         const badSmogon = developers.find(
           d => d.smogonStanding === 'bad' || d.smogonStanding === 'missing'
         );
@@ -2496,7 +2507,7 @@ function renderProjectRows(
                 )}
               </td>
               <td className='wrap'>
-                {linkedDiscord.length === 0 ? (
+                {linkedDiscord.length === 0 && inferredDiscord.length === 0 ? (
                   <span
                     className='muted'
                     title={
@@ -2522,6 +2533,20 @@ function renderProjectRows(
                         }
                       >
                         @{dev.discordUsername}
+                      </a>
+                    ))}
+                    {inferredDiscord.map(member => (
+                      <a
+                        href={`https://discord.com/users/${encodeURIComponent(member.discordId)}`}
+                        target='_blank'
+                        rel='noopener noreferrer'
+                        className='subtle discord-inferred'
+                        title={
+                          `DM @${member.discordUsername} on Discord · ` +
+                          'Matched via 🤖 project role (not manually linked; no system DMs)'
+                        }
+                      >
+                        @{member.discordUsername}
                       </a>
                     ))}
                   </div>
@@ -3203,7 +3228,8 @@ export function register(app: polka.Polka, options: Options): Handle {
       now,
       sys,
       wikiEditsPage,
-      registrations
+      registrations,
+      options.getDiscordRoleMembers?.()
     );
     if (wantsJson) {
       sendJson(res, 200, {
@@ -3231,7 +3257,14 @@ export function register(app: polka.Polka, options: Options): Handle {
     const paging = parseAdminPagination(req, res);
     if (!paging) return;
     const {page, limit, offset} = paging;
-    const {agents, total} = buildAdminAgentsPage(db, getNow(), limit, offset);
+    const {agents, total} = buildAdminAgentsPage(
+      db,
+      getNow(),
+      limit,
+      offset,
+      undefined,
+      options.getDiscordRoleMembers?.()
+    );
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
     const wipeableVersionIds = new Set(db.getWipeableVersionIds());
