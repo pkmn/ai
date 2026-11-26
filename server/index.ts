@@ -1,5 +1,6 @@
 require('source-map-support').install();
 
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -9,8 +10,8 @@ import serveStatic from 'serve-static';
 import {serve} from 'site';
 
 import {Database} from '../db';
-import {renderErrorPage, syncStaticLiveBanner} from '../static/build';
-import {ROOT, installHeadSupport, isConnectivityError, root} from '../static/util';
+import * as build from '../static/build';
+import * as util from '../static/util';
 
 import * as account from './account';
 import * as admin from './admin';
@@ -97,7 +98,7 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
     res.statusCode = status;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
-    res.end(renderErrorPage(status, db?.getRunningTournament()));
+    res.end(build.renderErrorPage(status, db?.getRunningTournament()));
   };
 
   router.onNoMatch = (req, res) => {
@@ -112,7 +113,8 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
-    res.end(renderErrorPage(404, db?.getRunningTournament()));
+    res.setHeader('Vary', 'Cookie');
+    res.end(build.renderErrorPage(404, db?.getRunningTournament()));
   };
 
   const wrapFn = (fn: RouteFn): RouteFn => (req, res, next) => {
@@ -158,9 +160,87 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
   };
 }
 
+const STATIC_HTML_SKIP_RE =
+  /^\/(?:account|admin|wiki|projects|arena|api|auth|chat|private)(?:\.json|\/|$)/;
+const STATIC_ERROR_HTML_RE = /^\/(?:400|401|403|404|500|502|503|504)\.html$/i;
+
+// Serves pre-built `public/**/*.html` essays inside `accountContext` so `#account-link` renders
+// server-side with `Vary: Cookie` and `ETag` (`304`) across every page on the site.
+export function createStaticHtmlMiddleware(publicDir: string) {
+  const publicRoot = path.resolve(publicDir);
+  return (req: http.IncomingMessage, res: http.ServerResponse, next: () => void) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      next();
+      return;
+    }
+    const [rawPath, query] = (req.url ?? '/').split('?', 2);
+    if (STATIC_HTML_SKIP_RE.test(rawPath)) {
+      next();
+      return;
+    }
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawPath);
+    } catch {
+      next();
+      return;
+    }
+    if (decoded.includes('\0') || STATIC_ERROR_HTML_RE.test(decoded)) {
+      next();
+      return;
+    }
+    const resolved = path.resolve(publicRoot, `.${decoded}`);
+    if (resolved !== publicRoot && !resolved.startsWith(`${publicRoot}${path.sep}`)) {
+      next();
+      return;
+    }
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(resolved);
+    } catch {
+      next();
+      return;
+    }
+    let file = resolved;
+    if (st.isDirectory()) {
+      const indexFile = path.join(resolved, 'index.html');
+      if (!fs.existsSync(indexFile) || fs.statSync(indexFile).size === 0) {
+        next();
+        return;
+      }
+      if (!rawPath.endsWith('/')) {
+        res.writeHead(301, {Location: `${rawPath}/${query ? `?${query}` : ''}`});
+        res.end();
+        return;
+      }
+      file = indexFile;
+    } else if (!st.isFile() || !resolved.endsWith('.html') || st.size === 0) {
+      next();
+      return;
+    }
+    const rawHtml = fs.readFileSync(file, 'utf8');
+    const body = Buffer.from(
+      build.applyAccountProfile(rawHtml, build.accountContext.getStore()),
+      'utf8'
+    );
+    const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Vary', 'Cookie');
+    res.setHeader('ETag', etag);
+    if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {
+      res.statusCode = 304;
+      res.end();
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.end(body);
+  };
+}
+
 function syncBannerFor(db: Database, publicDir: string) {
   try {
-    syncStaticLiveBanner(publicDir, db.getRunningTournament());
+    build.syncStaticLiveBanner(publicDir, db.getRunningTournament());
   } catch (err) {
     console.error('Failed syncing static live tournament banner:', err);
   }
@@ -225,10 +305,8 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       pathname.startsWith('/arena/viewer/') ||
       (/^\/arena\/tournaments\/[^/]+\/[^/]+\.(?:7z|tar)$/i.test(pathname)) ||
       (/^\/arena\/tournaments\/[^/]+\/[^/]+\.log$/i.test(pathname) && !query);
-    if (
-      !isStaticArenaAsset &&
-      /^(?:\/(?:account|admin|wiki|projects|arena)(?:\.json|\/|$)|\/api(?:\/|$))/.test(pathname)
-    ) {
+    const isNonHtmlAsset = /\.[a-z0-9]{1,8}$/i.test(pathname) && !/\.html?$/i.test(pathname);
+    if (!isStaticArenaAsset && (!isNonHtmlAsset || STATIC_HTML_SKIP_RE.test(pathname))) {
       next();
       return;
     }
@@ -241,7 +319,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     app.use(gatedStaticWare);
   }
 
-  installHeadSupport(app);
+  util.installHeadSupport(app);
   const wikiInstance = new wiki.Wiki({
     db,
     auth: new Auth({
@@ -250,6 +328,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     }),
   });
   wikiInstance.auth.register(app);
+  app.use(createStaticHtmlMiddleware(publicDir));
   let getArenaLastContactAt = (): number | undefined => undefined;
   let getLiveMatch = (): arena.LiveMatch | undefined => undefined;
   let getLiveTournamentGames = (): arena.LiveTournamentGame[] => [];
@@ -322,7 +401,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   notifyAdminHeartbeat = () => adminHandle.notifyHeartbeat();
 
   if (isMock) {
-    const mockStateFile = root('.mock', 'state.json');
+    const mockStateFile = util.root('.mock', 'state.json');
     if (fs.existsSync(mockStateFile)) {
       try {
         const raw = JSON.parse(fs.readFileSync(mockStateFile, 'utf8')) as {
@@ -368,7 +447,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
 
 if (require.main === module) {
   const isMock = process.env.MOCK === '1';
-  if (isMock && !fs.existsSync(root('.mock', 'ladders.yml'))) {
+  if (isMock && !fs.existsSync(util.root('.mock', 'ladders.yml'))) {
     console.error('Missing .mock/ directory — run "npm run mock -- seed" before MOCK=1.');
     process.exit(1);
   }
@@ -392,7 +471,7 @@ if (require.main === module) {
         syncBannerFor(db, render.PUBLIC_DIR);
       })
       .catch(err => {
-        if (isConnectivityError(err)) {
+        if (util.isConnectivityError(err)) {
           console.warn('Smogon unreachable; using offline projects.yml sync.');
         } else {
           console.error('Error syncing projects with Smogon:', err);
@@ -403,10 +482,10 @@ if (require.main === module) {
   const hasPriorMatches = !isMock && db.getRecentMatches(1).length > 0;
   if (process.env.NODE_ENV !== 'production') {
     const dirs = {
-      root: ROOT,
-      out: root('build', 'static'),
-      static: root('static'),
-      extra: root('private'),
+      root: util.ROOT,
+      out: util.root('build', 'static'),
+      static: util.root('static'),
+      extra: util.root('private'),
     };
     serve(PORT, dirs, app => {
       syncBannerFor(db, render.PUBLIC_DIR);

@@ -4,7 +4,7 @@ import * as http from 'http';
 import polka from 'polka';
 
 import * as db from '../db';
-import {header, renderErrorPage, renderer} from '../static/build';
+import {accountContext, header, renderErrorPage, renderer} from '../static/build';
 import {escapeHtml} from '../static/util';
 
 export const SESSION_COOKIE = 'pkmn_session';
@@ -379,9 +379,14 @@ export class Auth {
     }
     const gh = this.resolveGitHubSession(session);
     if (gh) {
-      const avatarUrl = isAdmin(gh.login)
-        ? `https://github.com/${encodeURIComponent(gh.login.toLowerCase())}.png?size=64`
-        : gh.githubId > 0 ? githubAvatarUrl(gh.githubId) : undefined;
+      // Prefer the direct Fastly CDN URL whenever a numeric GitHub ID is known so browsers avoid
+      // the uncacheable `github.com/<login>.png` 302 redirect; fall back to the username URL for
+      // local `/auth/dev` admin sessions that have `githubId === 0`.
+      const avatarUrl = gh.githubId > 0
+        ? githubAvatarUrl(gh.githubId)
+        : isAdmin(gh.login)
+          ? `https://github.com/${encodeURIComponent(gh.login.toLowerCase())}.png?size=64`
+          : undefined;
       return {
         authenticated: true,
         username: gh.login,
@@ -409,6 +414,12 @@ export class Auth {
   register(app: polka.Polka): this {
     const sendError = (res: http.ServerResponse, status: number, cookies?: string[]) =>
       sendHtml(res, status, renderErrorPage(status, this.db?.getRunningTournament()), cookies);
+
+    // Expose the signed-in profile to every downstream HTML render and error handler via
+    // `accountContext` so `#account-link` renders server-side with a single `HttpOnly` cookie.
+    app.use((req, _res, next) => {
+      accountContext.run(this.getProfile(req), () => next());
+    });
 
     // Local-only persona switcher enabled strictly when `DEV_AUTH=1` (and never in production or
     // from non-loopback sockets, nor proxied by Nginx). Mints real HMAC-signed `pkmn_session`
@@ -781,14 +792,6 @@ export class Auth {
         return;
       }
       redirect(res, '/account/', 303);
-    });
-
-    app.get('/api/me', (req, res) => {
-      res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'private, no-store',
-      });
-      res.end(JSON.stringify(this.getProfile(req)));
     });
 
     app.post('/auth/logout', (req, res) => {

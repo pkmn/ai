@@ -30,7 +30,7 @@ import type * as system from '../server/system';
 import * as teams from '../server/teams';
 import * as tournaments from '../server/tournaments';
 import * as wiki from '../server/wiki';
-import {syncStaticLiveBanner} from '../static/build';
+import {accountContext, applyAccountProfile, syncStaticLiveBanner} from '../static/build';
 import {ROOT, isConnectivityError, raw as rawHtml, root, writeFileAtomic} from '../static/util';
 
 import * as mock from './mock';
@@ -2156,14 +2156,24 @@ async function startFixture(): Promise<Fixture> {
       resolveFileInDir(PUBLIC, pathname)
     );
     if (file) {
+      if (file.endsWith('.html')) {
+        const html = applyAccountProfile(fs.readFileSync(file, 'utf8'), accountContext.getStore());
+        res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+        res.end(html);
+        return;
+      }
       res.writeHead(200, {'Content-Type': contentTypeForPath(file)});
       res.end(fs.readFileSync(file));
       return;
     }
     const notFound = path.join(PUBLIC, '404.html');
     if (fs.existsSync(notFound)) {
+      const html = applyAccountProfile(
+        fs.readFileSync(notFound, 'utf8'),
+        accountContext.getStore()
+      );
       res.writeHead(404, {'Content-Type': 'text/html; charset=utf-8'});
-      res.end(fs.readFileSync(notFound));
+      res.end(html);
       return;
     }
     res.writeHead(404, {'Content-Type': 'text/plain; charset=utf-8'});

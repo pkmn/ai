@@ -119,6 +119,7 @@ describe('auth config helpers', () => {
 
 describe('server/auth.ts routes', () => {
   let db: db.Database;
+  let authHandler: auth.Auth;
   let currentApp: polka.Polka;
   let server: http.Server;
   let baseUrl: string;
@@ -145,7 +146,7 @@ describe('server/auth.ts routes', () => {
     ]);
 
     currentApp = polka();
-    new auth.Auth({config: AUTH_CFG, db, devAuth: true}).register(currentApp);
+    authHandler = new auth.Auth({config: AUTH_CFG, db, devAuth: true}).register(currentApp);
   });
 
   afterEach(() => {
@@ -681,93 +682,81 @@ describe('server/auth.ts routes', () => {
     expect((await res.text()).trim()).toBe(newer);
   });
 
-  test('resolves /api/me preferring GitHub avatar over Discord avatar',
-    async () => {
-      expect(auth.githubAvatarUrl(117249)).toBe(
-        'https://avatars.githubusercontent.com/u/117249?s=64'
-      );
-      expect(auth.sanitizeDiscordAvatarHash('a_0123abcd')).toBe('a_0123abcd');
-      expect(auth.sanitizeDiscordAvatarHash('../evil')).toBeUndefined();
-      expect(auth.discordAvatarUrl('513513270670262284', 'a_0123abcd')).toBe(
-        'https://cdn.discordapp.com/avatars/513513270670262284/a_0123abcd.png?size=64'
-      );
-      const defaultIdx = Number((BigInt('513513270670262284') >> 22n) % 6n);
-      expect(auth.discordAvatarUrl('513513270670262284')).toBe(
-        `https://cdn.discordapp.com/embed/avatars/${defaultIdx}.png`
-      );
+  test('resolves getProfile preferring GitHub avatar over Discord avatar', async () => {
+    expect(auth.githubAvatarUrl(117249)).toBe(
+      'https://avatars.githubusercontent.com/u/117249?s=64'
+    );
+    expect(auth.sanitizeDiscordAvatarHash('a_0123abcd')).toBe('a_0123abcd');
+    expect(auth.sanitizeDiscordAvatarHash('../evil')).toBeUndefined();
+    expect(auth.discordAvatarUrl('513513270670262284', 'a_0123abcd')).toBe(
+      'https://cdn.discordapp.com/avatars/513513270670262284/a_0123abcd.png?size=64'
+    );
+    const defaultIdx = Number((BigInt('513513270670262284') >> 22n) % 6n);
+    expect(auth.discordAvatarUrl('513513270670262284')).toBe(
+      `https://cdn.discordapp.com/embed/avatars/${defaultIdx}.png`
+    );
 
-      const anonRes = await realFetch(`${baseUrl}/api/me`);
-      expect(anonRes.status).toBe(200);
-      expect(anonRes.headers.get('cache-control')).toBe('private, no-store');
-      expect(await anonRes.json()).toEqual({authenticated: false});
+    const profileFor = (token?: string) => authHandler.getProfile({
+      headers: token ? {cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`} : {},
+    } as http.IncomingMessage);
 
-      // GitHub-only session uses GitHub avatar even without linked Discord
-      const preGhToken = signSession({github: {id: 10, login: 'pre'}});
-      const ghOnlyRes = await realFetch(`${baseUrl}/api/me`, {
-        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`},
-      });
-      expect(await ghOnlyRes.json()).toEqual({
-        authenticated: true,
-        username: 'pre',
-        avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
-      });
+    expect(profileFor()).toEqual({authenticated: false});
 
-      // Linking Discord still prefers GitHub avatar when signed into both GitHub and Discord,
-      // while capturing the Discord avatar hash in the session cookie
-      const {state, stateCookie} = await beginDiscordLink(preGhToken);
-      mockDiscordUser({id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'});
-      const linkCb = await realFetch(
-        `${baseUrl}/auth/discord/callback?code=dc-av&state=${encodeURIComponent(state)}`,
-        {
-          headers: {
-            Cookie: [
-              `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`,
-              `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
-            ].join('; '),
-          },
-          redirect: 'manual',
-        }
-      );
-      expect(linkCb.status).toBe(302);
-      const mergedCookie = extractCookieMap(linkCb)[auth.SESSION_COOKIE];
-      const mergedSession = auth.verifyToken<auth.Session>(mergedCookie, AUTH_CFG.sessionSecret)!;
-      expect(mergedSession.discord?.avatar).toBe('deadbeef01');
-
-      const bothRes = await realFetch(`${baseUrl}/api/me`, {
-        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(mergedCookie)}`},
-      });
-      expect(await bothRes.json()).toEqual({
-        authenticated: true,
-        username: 'pre',
-        avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
-      });
-
-      // Discord-only session (no GitHub) uses session Discord avatar hash or default embed avatar
-      const discordCustomToken = signSession({
-        discord: {id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'},
-      });
-      const discordCustomRes = await realFetch(`${baseUrl}/api/me`, {
-        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(discordCustomToken)}`},
-      });
-      expect(await discordCustomRes.json()).toEqual({
-        authenticated: true,
-        username: 'scheibo',
-        avatarUrl: 'https://cdn.discordapp.com/avatars/513513270670262284/deadbeef01.png?size=64',
-      });
-
-      const discordDefaultToken = signSession({
-        discord: {id: '999999999999999999', username: 'outsider'},
-      });
-      const discordDefaultRes = await realFetch(`${baseUrl}/api/me`, {
-        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(discordDefaultToken)}`},
-      });
-      const outsiderIdx = Number((BigInt('999999999999999999') >> 22n) % 6n);
-      expect(await discordDefaultRes.json()).toEqual({
-        authenticated: true,
-        username: 'outsider',
-        avatarUrl: `https://cdn.discordapp.com/embed/avatars/${outsiderIdx}.png`,
-      });
+    // GitHub-only session uses GitHub avatar even without linked Discord
+    const preGhToken = signSession({github: {id: 10, login: 'pre'}});
+    expect(profileFor(preGhToken)).toEqual({
+      authenticated: true,
+      username: 'pre',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
     });
+
+    // Linking Discord still prefers GitHub avatar when signed into both GitHub and Discord,
+    // while capturing the Discord avatar hash in the session cookie
+    const {state, stateCookie} = await beginDiscordLink(preGhToken);
+    mockDiscordUser({id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'});
+    const linkCb = await realFetch(
+      `${baseUrl}/auth/discord/callback?code=dc-av&state=${encodeURIComponent(state)}`,
+      {
+        headers: {
+          Cookie: [
+            `pkmn_oauth_state=${encodeURIComponent(stateCookie)}`,
+            `${auth.SESSION_COOKIE}=${encodeURIComponent(preGhToken)}`,
+          ].join('; '),
+        },
+        redirect: 'manual',
+      }
+    );
+    expect(linkCb.status).toBe(302);
+    const mergedCookie = extractCookieMap(linkCb)[auth.SESSION_COOKIE];
+    const mergedSession = auth.verifyToken<auth.Session>(mergedCookie, AUTH_CFG.sessionSecret)!;
+    expect(mergedSession.discord?.avatar).toBe('deadbeef01');
+
+    expect(profileFor(mergedCookie)).toEqual({
+      authenticated: true,
+      username: 'pre',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/10?s=64',
+    });
+
+    // Discord-only session (no GitHub) uses session Discord avatar hash or default embed avatar
+    const discordCustomToken = signSession({
+      discord: {id: '513513270670262284', username: 'scheibo', avatar: 'deadbeef01'},
+    });
+    expect(profileFor(discordCustomToken)).toEqual({
+      authenticated: true,
+      username: 'scheibo',
+      avatarUrl: 'https://cdn.discordapp.com/avatars/513513270670262284/deadbeef01.png?size=64',
+    });
+
+    const discordDefaultToken = signSession({
+      discord: {id: '999999999999999999', username: 'outsider'},
+    });
+    const outsiderIdx = Number((BigInt('999999999999999999') >> 22n) % 6n);
+    expect(profileFor(discordDefaultToken)).toEqual({
+      authenticated: true,
+      username: 'outsider',
+      avatarUrl: `https://cdn.discordapp.com/embed/avatars/${outsiderIdx}.png`,
+    });
+  });
 
   test('redirects unregistered admin GitHub OAuth /account callback to /admin/', async () => {
     const {state, stateCookie} = await beginGitHubOAuth();
@@ -789,20 +778,50 @@ describe('server/auth.ts routes', () => {
     expect(session?.github).toEqual({id: 117249, login: 'scheibo'});
   });
 
-  test('returns GitHub username avatar URL for admin sessions in /api/me', async () => {
-    const loginRes = await realFetch(`${baseUrl}/auth/dev?github=scheibo&return_to=%2Faccount%2F`, {
-      redirect: 'manual',
+  test('falls back to GitHub username avatar URL for dev admin sessions without githubId',
+    async () => {
+      const loginRes = await realFetch(`${baseUrl}/auth/dev?github=scheibo&return_to=%2Faccount%2F`,
+        {redirect: 'manual'});
+      expect(loginRes.status).toBe(302);
+      expect(loginRes.headers.get('location')).toBe('/admin/');
+      const cookie = extractCookieMap(loginRes)[auth.SESSION_COOKIE];
+      expect(authHandler.getProfile({
+        headers: {cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(cookie)}`},
+      } as http.IncomingMessage)).toEqual({
+        authenticated: true,
+        username: 'scheibo',
+        avatarUrl: 'https://github.com/scheibo.png?size=64',
+      });
     });
-    expect(loginRes.status).toBe(302);
-    expect(loginRes.headers.get('location')).toBe('/admin/');
-    const cookie = extractCookieMap(loginRes)[auth.SESSION_COOKIE];
-    const meRes = await realFetch(`${baseUrl}/api/me`, {
-      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(cookie)}`},
-    });
-    expect(await meRes.json()).toEqual({
+
+  test('uses direct avatars.githubusercontent.com URL for OAuth admin sessions', () => {
+    const adminToken = signSession({github: {id: 117249, login: 'scheibo'}});
+    expect(authHandler.getProfile({
+      headers: {cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(adminToken)}`},
+    } as http.IncomingMessage)).toEqual({
       authenticated: true,
       username: 'scheibo',
-      avatarUrl: 'https://github.com/scheibo.png?size=64',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/117249?s=64',
     });
+  });
+
+  test('server-renders signed-in avatar via accountContext on HTML responses', async () => {
+    const adminToken = signSession({github: {id: 117249, login: 'scheibo'}});
+    const res = await realFetch(`${baseUrl}/auth/dev`, {
+      headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(adminToken)}`},
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('class="subtle has-avatar"');
+    expect(html).toContain('title="Account (@scheibo)"');
+    expect(html).toContain('https://avatars.githubusercontent.com/u/117249?s=64');
+  });
+
+  test('server-renders signed-out profile icon on HTML responses', async () => {
+    const res = await realFetch(`${baseUrl}/auth/dev`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('id="account-link"');
+    expect(html).not.toContain('class="subtle has-avatar"');
   });
 });

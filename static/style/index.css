@@ -82,6 +82,10 @@
   overflow: hidden;
 }
 
+#account-link.has-avatar .account-icon {
+  display: none;
+}
+
 #theme-toggle svg,
 #account-link svg,
 #account-link img {

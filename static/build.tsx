@@ -3,6 +3,7 @@
 
 require('source-map-support').install();
 
+import {AsyncLocalStorage} from 'async_hooks';
 import * as nodeFs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -58,8 +59,8 @@ export const EARLY_THEME_SCRIPT =
 // payload to supply it. Injecting `SET_THEME` inside `Renderer.render` wires up manual
 // switching (persisted in `localStorage`, starting opposite the current OS theme so the first
 // click always produces a visible change), live OS updates when in `system` mode, cross-tab sync,
-// battle viewer iframe theme updates, and the top-right account avatar via `/api/me` across every
-// static and dynamic page in one place.
+// battle viewer iframe theme updates, and SSR account avatar error fallback across every page in
+// one place.
 export const SET_THEME = [
   "var THEME_KEY='theme';",
   "var THEME_LABELS={system:'Theme: System',light:'Theme: Light',dark:'Theme: Dark'};",
@@ -93,27 +94,15 @@ export const SET_THEME = [
   "window.addEventListener('storage',function(ev){",
   'if(ev.key===THEME_KEY||ev.key===null)applyThemeMode(readThemeMode());',
   '});',
-  "var acc=document.getElementById('account-link');",
-  'if(acc&&window.fetch){',
-  "fetch('/api/me',{credentials:'same-origin'})",
-  '.then(function(r){return r.ok?r.json():null;})',
-  '.then(function(data){',
-  'if(!data||!data.authenticated)return;',
-  "if(data.username){var lbl='Account (@'+data.username+')';",
-  "acc.setAttribute('title',lbl);acc.setAttribute('aria-label',lbl);}",
-  'if(!data.avatarUrl)return;',
-  "var img=document.createElement('img');",
-  "img.alt='';",
-  "img.referrerPolicy='no-referrer';",
-  "img.decoding='async';",
-  'img.onload=function(){',
-  "acc.textContent='';",
-  'acc.appendChild(img);',
-  "acc.classList.add('has-avatar');",
+  "var img=document.querySelector('#account-link img');",
+  'if(img){',
+  'var onErr=function(){',
+  'if(img.parentNode)img.parentNode.removeChild(img);',
+  "var a=document.getElementById('account-link');",
+  "if(a)a.classList.remove('has-avatar');",
   '};',
-  'img.src=data.avatarUrl;',
-  '})',
-  '.catch(function(){});',
+  "img.addEventListener('error',onErr);",
+  'if(img.complete&&img.naturalWidth===0)onErr();',
   '}',
   '})();',
 ].join('');
@@ -169,6 +158,42 @@ export const LOCALIZE_TIME = [
   'window.pkmnTime=pkmnTime;',
   'pkmnTime.localize(document);',
 ].join('');
+
+export interface AccountProfile {
+  authenticated: boolean;
+  username?: string;
+  avatarUrl?: string;
+}
+
+export const accountContext = new AsyncLocalStorage<AccountProfile>();
+
+const ACCOUNT_LINK_RE = /<a\b[^>]*\bid="account-link"[^>]*>([\s\S]*?<\/svg>)<\/a>/;
+
+// Injects the authenticated user's avatar and tooltip directly into SSR HTML (both dynamic
+// `Renderer.render` output and pre-built `public/**/*.html` pages served by Node), leaving
+// signed-out pages untouched.
+export function applyAccountProfile(html: string, account?: AccountProfile): string {
+  if (!account?.authenticated) return html;
+  const label = account.username ? `Account (@${account.username})` : 'Account';
+  const avatarUrl = account.avatarUrl;
+  let out = html;
+  if (avatarUrl) {
+    const preload =
+      `<link rel="preload" as="image" href="${escapeHtml(avatarUrl)}"` +
+      ' referrerpolicy="no-referrer">';
+    out = out.replace('</head>', `${preload}</head>`);
+  }
+  return out.replace(ACCOUNT_LINK_RE, (_, svg: string) => {
+    const cls = avatarUrl ? 'subtle has-avatar' : 'subtle';
+    const img = avatarUrl
+      ? `<img src="${escapeHtml(avatarUrl)}" alt="" referrerpolicy="no-referrer">`
+      : '';
+    return (
+      `<a id="account-link" href="/account/" class="${cls}"` +
+      ` aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${svg}${img}</a>`
+    );
+  });
+}
 
 export const TOP_CONTROLS = String(
   <div id='top-controls'>
@@ -429,7 +454,8 @@ export class Renderer extends site.page.Renderer {
       "pref.addEventListener('change',e=>setTheme(e.matches?'dark':'light'));",
       `\n${script}\n</script></html>`,
     ].join('');
-    return replace ? replace(rendered) : rendered;
+    const withAccount = applyAccountProfile(rendered, accountContext.getStore());
+    return replace ? replace(withAccount) : withAccount;
   }
 }
 

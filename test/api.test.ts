@@ -2628,6 +2628,75 @@ describe('createServerApp production HTTP hardening', () => {
     }
   });
 
+  test('redirects static HTML directories without trailing slash', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'rules'), {recursive: true});
+    fs.writeFileSync(path.join(tmpDir, 'rules', 'index.html'), '<html></html>', 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/rules?v=1`, {redirect: 'manual'});
+      expect(res.status).toBe(301);
+      expect(res.headers.get('location')).toBe('/rules/?v=1');
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('serves pre-built HTML with SSR account avatar and ETag 304', async () => {
+    const prevSecret = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = 'test-static-html-session-secret';
+    const sampleHtml =
+      '<!doctype html><html><head></head><body>' +
+      '<a href="/account/" class="subtle" aria-label="Account" id="account-link" title="Account">' +
+      '<svg class="account-icon"></svg></a></body></html>';
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), sampleHtml, 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const token = auth.signToken(
+        {github: {id: 117249, login: 'scheibo'}, exp: Math.floor(Date.now() / 1000) + 3600},
+        process.env.SESSION_SECRET
+      );
+      const res = await fetch(`${srv.baseUrl}/`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`},
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('vary')).toBe('Cookie');
+      const etag = res.headers.get('etag');
+      expect(etag).toBeTruthy();
+      const body = await res.text();
+      expect(body).toContain('class="subtle has-avatar"');
+      expect(body).toContain('https://avatars.githubusercontent.com/u/117249?s=64');
+
+      const cached = await fetch(`${srv.baseUrl}/`, {
+        headers: {
+          Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`,
+          'If-None-Match': etag!,
+        },
+      });
+      expect(cached.status).toBe(304);
+    } finally {
+      handle.close();
+      await srv.close();
+      if (prevSecret === undefined) delete process.env.SESSION_SECRET;
+      else process.env.SESSION_SECRET = prevSecret;
+    }
+  });
+
+  test('does not serve internal error HTML files directly from publicDir', async () => {
+    fs.writeFileSync(path.join(tmpDir, '404.html'), '<html>static 404</html>', 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const res = await fetch(`${srv.baseUrl}/404.html`);
+      expect(res.status).toBe(404);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
   test('rejects astronomical page query parameters on /api/battles.json', async () => {
     const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
     const srv = await startTestServer(handle.app);

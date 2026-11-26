@@ -7,6 +7,7 @@ import {chromium} from 'playwright-core';
 import polka from 'polka';
 
 import {Database} from '../db';
+import {createStaticHtmlMiddleware} from '../server';
 import * as account from '../server/account';
 import * as arena from '../server/arena';
 import * as auth from '../server/auth';
@@ -888,6 +889,7 @@ describe('mock scenarios & E2E lifecycle', () => {
       tournaments.renderBattleViewerPage(viewPublicDir);
       const viewApp = polka();
       new auth.Auth({db: sseDb, config: E2E_AUTH}).register(viewApp);
+      viewApp.use(createStaticHtmlMiddleware(render.PUBLIC_DIR));
       const viewArena = arena.register(viewApp, {
         db: sseDb,
         arenaSecret: E2E_ARENA_SECRET,
@@ -914,13 +916,12 @@ describe('mock scenarios & E2E lifecycle', () => {
       const viewServer = http.createServer((req, res) => {
         const parsedUrl = new URL(req.url ?? '/', 'http://localhost');
         const pathname = decodeURIComponent(parsedUrl.pathname);
-        const isStaticArenaFile = pathname.startsWith('/arena/viewer/') ||
-          (pathname.endsWith('.log') && !parsedUrl.search);
-        const isSsrOrApi = pathname.startsWith('/api/') ||
-          pathname === '/projects' ||
-          pathname.startsWith('/projects/') ||
-          ((pathname === '/arena' || pathname.startsWith('/arena/')) && !isStaticArenaFile);
-        if (!isSsrOrApi) {
+        const isStaticAsset = pathname.startsWith('/arena/viewer/') ||
+          (pathname.endsWith('.log') && !parsedUrl.search) ||
+          (/\.[a-z0-9]{1,8}$/i.test(pathname) && !/\.html?$/i.test(pathname) &&
+            !pathname.startsWith('/api/') && !pathname.startsWith('/projects/') &&
+            !pathname.startsWith('/arena/'));
+        if (isStaticAsset) {
           for (const rootDir of [viewPublicDir, render.PUBLIC_DIR]) {
             const candidate = path.resolve(rootDir, `.${pathname}`);
             if (candidate.startsWith(rootDir) && fs.existsSync(candidate)) {
@@ -1635,6 +1636,124 @@ describe('mock scenarios & E2E lifecycle', () => {
           expect(p2Text).not.toContain('353/353');
         } finally {
           await viewerPage.close();
+        }
+
+        // Part D: Single `HttpOnly` `pkmn_session` cookie SSRs `#account-link` at 0 ms on both
+        // pre-built essays (`/`) and dynamic pages (`/arena/`), with `Vary: Cookie`, image-error
+        // fallback to `.account-icon`, and immediate signed-out render after logout
+        const avatarCtx = await browser.newContext({
+          viewport: {width: 1280, height: 800},
+          colorScheme: 'light',
+        });
+        try {
+          const tinyPng = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAAB' +
+            'JRU5ErkJggg==',
+            'base64'
+          );
+          let failAvatar = false;
+          await avatarCtx.route('**/*', async route => {
+            const u = new URL(route.request().url());
+            if (u.origin !== viewBaseUrl) {
+              if (!failAvatar && u.hostname === 'avatars.githubusercontent.com') {
+                await route.fulfill({status: 200, contentType: 'image/png', body: tinyPng});
+                return;
+              }
+              await route.fulfill({status: 204, body: ''});
+              return;
+            }
+            await route.continue();
+          });
+
+          const avatarUrl = 'https://avatars.githubusercontent.com/u/117249?s=64';
+          const sessionToken = auth.signToken(
+            {github: {id: 117249, login: 'scheibo'}, exp: Math.floor(Date.now() / 1000) + 3600},
+            E2E_AUTH.sessionSecret
+          );
+          await avatarCtx.addCookies([{
+            name: auth.SESSION_COOKIE,
+            value: encodeURIComponent(sessionToken),
+            url: viewBaseUrl,
+            httpOnly: true,
+          }]);
+
+          const avatarPage = await avatarCtx.newPage();
+          const avatarErrors: string[] = [];
+          avatarPage.on('pageerror', err => avatarErrors.push(err.message));
+          avatarPage.on('console', msg => {
+            if (msg.type() === 'error') avatarErrors.push(msg.text());
+          });
+
+          for (const targetPath of ['/', '/arena/']) {
+            const res = await avatarPage.goto(
+              `${viewBaseUrl}${targetPath}`,
+              {waitUntil: 'domcontentloaded'}
+            );
+            expect(res?.headers().vary).toBe('Cookie');
+            const ssrState = await avatarPage.evaluate(() => {
+              const acc = document.getElementById('account-link')!;
+              const svg = acc.querySelector('.account-icon')!;
+              const img = acc.querySelector('img');
+              const preload = document.querySelector('link[rel="preload"][as="image"]');
+              return {
+                preloadHref: preload?.getAttribute('href'),
+                hasAvatar: acc.classList.contains('has-avatar'),
+                title: acc.getAttribute('title'),
+                imgSrc: img?.getAttribute('src'),
+                svgDisplay: getComputedStyle(svg).display,
+              };
+            });
+            expect(ssrState).toEqual({
+              preloadHref: avatarUrl,
+              hasAvatar: true,
+              title: 'Account (@scheibo)',
+              imgSrc: avatarUrl,
+              svgDisplay: 'none',
+            });
+          }
+
+          // Image error falls back to `.account-icon` cleanly
+          failAvatar = true;
+          await avatarPage.goto(`${viewBaseUrl}/`, {waitUntil: 'load'});
+          await avatarPage.waitForFunction(
+            () => !document.getElementById('account-link')?.classList.contains('has-avatar')
+          );
+          const fallbackState = await avatarPage.evaluate(() => {
+            const acc = document.getElementById('account-link')!;
+            const svg = acc.querySelector('.account-icon')!;
+            return {
+              hasImg: Boolean(acc.querySelector('img')),
+              svgDisplay: getComputedStyle(svg).display,
+            };
+          });
+          expect(fallbackState).toEqual({hasImg: false, svgDisplay: 'block'});
+
+          // Logout clears `pkmn_session` so `/` and `/arena/` immediately render `.account-icon`
+          failAvatar = false;
+          const logoutRes = await avatarPage.evaluate(async () => {
+            const r = await fetch('/auth/logout?return_to=%2F', {method: 'POST'});
+            return r.status;
+          });
+          expect(logoutRes).toBe(200);
+          for (const targetPath of ['/', '/arena/']) {
+            await avatarPage.goto(
+              `${viewBaseUrl}${targetPath}`,
+              {waitUntil: 'domcontentloaded'}
+            );
+            const loggedOut = await avatarPage.evaluate(() => {
+              const acc = document.getElementById('account-link')!;
+              const svg = acc.querySelector('.account-icon')!;
+              return {
+                hasAvatar: acc.classList.contains('has-avatar'),
+                hasImg: Boolean(acc.querySelector('img')),
+                svgDisplay: getComputedStyle(svg).display,
+              };
+            });
+            expect(loggedOut).toEqual({hasAvatar: false, hasImg: false, svgDisplay: 'block'});
+          }
+          expect(avatarErrors).toEqual([]);
+        } finally {
+          await avatarCtx.close();
         }
 
         await liveCtx.close();

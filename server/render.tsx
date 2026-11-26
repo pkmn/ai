@@ -4324,6 +4324,7 @@ export function register(app: polka.Polka, options: Options) {
     const body = Buffer.isBuffer(opts.body) ? opts.body : Buffer.from(opts.body, 'utf8');
     const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
     res.setHeader('Cache-Control', opts.cacheControl ?? 'no-cache');
+    if (opts.contentType.startsWith('text/html')) res.setHeader('Vary', 'Cookie');
     res.setHeader('ETag', etag);
     if (opts.contentType === 'image/svg+xml') {
       res.setHeader(
