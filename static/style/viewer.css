@@ -112,6 +112,13 @@ body {
   cursor: pointer;
 }
 
+.arena-start svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  fill: currentcolor;
+}
+
 .arena-controls {
   display: flex;
   flex: none;
@@ -163,6 +170,15 @@ body {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+#toggle .icon-pause,
+#toggle[data-playing="true"] .icon-play {
+  display: none;
+}
+
+#toggle[data-playing="true"] .icon-pause {
+  display: block;
 }
 
 #sound .icon-sound,

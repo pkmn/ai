@@ -337,8 +337,9 @@ const VIEWER_SCRIPT = `
       }
       if (!battle) return;
       const playing = isPlaying();
-      el.toggle.innerHTML = playing ? '&#9208;' : '&#9654;';
+      el.toggle.dataset.playing = String(playing);
       el.toggle.title = playing ? 'Pause' : 'Play';
+      el.toggle.setAttribute('aria-label', playing ? 'Pause' : 'Play');
       el.turn.textContent = describeTurn();
       el.live.hidden = !live;
       el.live.dataset.following = String(!battle.paused && battle.seeking === null);
@@ -1522,7 +1523,10 @@ export function renderBattleViewerPage(publicDir: string) {
         <div className='arena-stage' id='stage'>
           <div className='battle' id='battle' />
           <button className='arena-start' id='start' type='button' hidden={true}>
-            {'\u25b6'} Play replay
+            <svg viewBox='0 0 24 24' aria-hidden='true'>
+              <path d='M7 5l12 7-12 7z' />
+            </svg>
+            Play replay
           </button>
           <p className='arena-status' id='status' role='status'>Loading battle viewer…</p>
         </div>
@@ -1533,47 +1537,66 @@ export function renderBattleViewerPage(publicDir: string) {
               type='button'
               className='arena-btn'
               data-action='start'
+              aria-label='First turn'
               title='First turn'
               disabled={true}
             >
-              |{'\u25c0'}
+              <svg viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M5.5 6H8v12H5.5zM18.5 6L9 12l9.5 6z' />
+              </svg>
             </button>
             <button
               type='button'
               className='arena-btn'
               data-action='previous'
+              aria-label='Previous turn'
               title='Previous turn'
               disabled={true}
             >
-              {'\u25c0'}
+              <svg viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M16 6L6.5 12l9.5 6z' />
+              </svg>
             </button>
             <button
               type='button'
               className='arena-btn'
               data-action='toggle'
               id='toggle'
+              aria-label='Play'
               title='Play'
+              data-playing='false'
               disabled={true}
             >
-              {'\u25b6'}
+              <svg className='icon-play' viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M7 5l12 7-12 7z' />
+              </svg>
+              <svg className='icon-pause' viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M6.5 5H10v14H6.5zm7.5 0h3.5v14H14z' />
+              </svg>
             </button>
             <button
               type='button'
               className='arena-btn'
               data-action='next'
+              aria-label='Next turn'
               title='Next turn'
               disabled={true}
             >
-              {'\u25b6'}
+              <svg viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M8 6l9.5 6L8 18z' />
+              </svg>
             </button>
             <button
               type='button'
               className='arena-btn'
               data-action='end'
+              aria-label='Jump to end'
               title='Jump to end'
               disabled={true}
             >
-              {'\u25b6'}|
+              <svg viewBox='0 0 24 24' aria-hidden='true'>
+                <path d='M5.5 6L15 12l-9.5 6zM16 6h2.5v12H16z' />
+              </svg>
             </button>
           </div>
 

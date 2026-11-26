@@ -712,9 +712,12 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         return `${String(
           <ul className='task-list'>
             {util.raw(`\n${node.children.map(li => {
-              const box = li.checkbox === 'checked' ? '\u2611 ' : '\u2610 ';
+              const checked = li.checkbox === 'checked';
               return `${String(
-                <li>{box}{util.raw(renderListItemBlocks(li.children, node.tight, nextDepth))}</li>
+                <li>
+                  <input type='checkbox' disabled={true} checked={checked} />{' '}
+                  {util.raw(renderListItemBlocks(li.children, node.tight, nextDepth))}
+                </li>
               )}\n`;
             }).join('')}`)}
           </ul>
@@ -759,7 +762,13 @@ export function renderDjot(rawText: string, save?: {title?: string; summary?: st
         `${String(
           <li id={`fn-${num}`}>
             {util.raw(`\n${renderBlocks(fn.children)}`)}
-            <p><a href={`#fnref-${num}`}>{'\u21a9'}</a></p>
+            <p>
+              <a href={`#fnref-${num}`} className='fn-back' aria-label='Back to reference'>
+                <svg viewBox='0 0 24 24' aria-hidden='true'>
+                  <path d='M9 8L4 13l5 5M4 13h11a5 5 0 0 0 0-10h-2' />
+                </svg>
+              </a>
+            </p>
           </li>
         )}\n`
       );

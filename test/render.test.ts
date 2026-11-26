@@ -1374,9 +1374,13 @@ describe('tournament SSR views', () => {
     expect(viewerHtml).toContain('list.map(ownPokemon)');
     expect(viewerHtml).toContain('battle.setViewpoint(currentSide)');
     expect(viewerHtml).toContain('state: playbackState()');
+    expect(viewerHtml).toContain('class="icon-play"');
+    expect(viewerHtml).toContain('class="icon-pause"');
+    expect(viewerHtml).toContain('id="toggle" aria-label="Play" title="Play" data-playing="false"');
     expect(viewerHtml).toContain('class="icon-muted"');
     expect(viewerHtml).toContain('class="icon-sound"');
     expect(viewerHtml).toContain('id="sound" aria-label="Sound" aria-pressed="false"');
+    expect(viewerHtml).not.toMatch(/&#9208;|&#9654;|[\u23f8\u25b6\u25c0]/);
 
     const metaMatch =
       /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(viewerHtml);

@@ -995,7 +995,9 @@ export function buildBattleDetailClientJs(): string {
             pills.push(
               '<a href="' + esc(u) + '" data-replay-log="' + esc(u) +
               '" data-replay-match="' + esc(matchId) +
-              '" data-replay-game="' + gIdx + '">&#9654; Game ' + gIdx + '</a>'
+              '" data-replay-game="' + gIdx + '">' +
+              '<svg class="inline-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+              '<path d="M7 5l12 7-12 7z"/></svg>Game ' + gIdx + '</a>'
             );
           }
         }

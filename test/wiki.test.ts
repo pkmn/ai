@@ -246,6 +246,22 @@ describe('wiki helpers', () => {
     expect(html).toContain('<math');
   });
 
+  test('renderDjot renders task lists and footnote backlinks without emoji glyphs', () => {
+    const html = wiki.renderDjot([
+      '- [x] Checked item',
+      '- [ ] Unchecked item',
+      '',
+      'See note.[^1]',
+      '',
+      '[^1]: Footnote body.',
+    ].join('\n'));
+    expect(html).toContain('<input type="checkbox" disabled checked>');
+    expect(html).toContain('<input type="checkbox" disabled>');
+    expect(html).toContain('class="fn-back" aria-label="Back to reference"');
+    expect(html).toContain('<svg viewBox="0 0 24 24" aria-hidden="true">');
+    expect(html).not.toMatch(/[\u2610\u2611\u21a9]/);
+  });
+
   test('renderDjot renders GFM-style tables with inline formatting', () => {
     const raw = [
       '| Move | Accuracy |',

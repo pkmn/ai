@@ -113,4 +113,24 @@ main img {
   overflow-x: auto;
 }
 
+.task-list {
+  padding-left: 1.5ch;
+  list-style: none;
+}
+
+.fn-back {
+  display: inline-flex;
+  align-items: center;
+}
+
+.fn-back svg {
+  width: 0.95em;
+  height: 0.95em;
+  fill: none;
+  stroke: currentcolor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 [id] { scroll-margin-top: 2rem; }
