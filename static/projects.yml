@@ -890,6 +890,17 @@
   arena:
     owners:
       ScottehMax: Scotteh.65398
+- name: xTimeCrystal
+  site: https://www.smogon.com/forums/threads/3791538/
+  active: 2026 # October 27
+  engine: Custom
+  language: [Rust, Python]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      xTimeCrystal: xTimeCrystal.644859
 - name: MissingNo.Zero
   paper: Greenquist:2026
   site: https://www.smogon.com/forums/threads/3790707/
