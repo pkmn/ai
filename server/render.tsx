@@ -4323,8 +4323,12 @@ export function register(app: polka.Polka, options: Options) {
   ) => {
     const body = Buffer.isBuffer(opts.body) ? opts.body : Buffer.from(opts.body, 'utf8');
     const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
-    res.setHeader('Cache-Control', opts.cacheControl ?? 'no-cache');
-    if (opts.contentType.startsWith('text/html')) res.setHeader('Vary', 'Cookie');
+    const isHtml = opts.contentType.startsWith('text/html');
+    const defaultCacheControl = isHtml && build.accountContext.getStore()?.authenticated
+      ? 'private, no-cache'
+      : 'no-cache';
+    res.setHeader('Cache-Control', opts.cacheControl ?? defaultCacheControl);
+    if (isHtml) res.setHeader('Vary', 'Cookie');
     res.setHeader('ETag', etag);
     if (opts.contentType === 'image/svg+xml') {
       res.setHeader(
@@ -4353,7 +4357,7 @@ export function register(app: polka.Polka, options: Options) {
   const sendHtmlNotFound = (res: http.ServerResponse) => {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'private, no-store');
     res.end(build.renderErrorPage(404, db.getRunningTournament()));
   };
 

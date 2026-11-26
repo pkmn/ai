@@ -173,7 +173,7 @@ const ACCOUNT_LINK_RE = /<a\b[^>]*\bid="account-link"[^>]*>([\s\S]*?<\/svg>)<\/a
 // `Renderer.render` output and pre-built `public/**/*.html` pages served by Node), leaving
 // signed-out pages untouched.
 export function applyAccountProfile(html: string, account?: AccountProfile): string {
-  if (!account?.authenticated) return html;
+  if (!account?.authenticated || !ACCOUNT_LINK_RE.test(html)) return html;
   const label = account.username ? `Account (@${account.username})` : 'Account';
   const avatarUrl = account.avatarUrl;
   let out = html;
@@ -327,6 +327,7 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   header?: Html | string;
   content: Html | string;
   preconnect?: readonly string[];
+  topControls?: boolean;
 }
 
 const BUILT_STYLESHEET_RE = /^index\.[0-9a-f]{8}\.css$/;
@@ -393,7 +394,7 @@ export class Renderer extends site.page.Renderer {
     const withBanner = banner && !rawHeader?.includes('id="topbar"')
       ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
       : rawHeader;
-    const headerHtml = withBanner?.includes('id="top-controls"')
+    const headerHtml = page.topControls === false || withBanner?.includes('id="top-controls"')
       ? withBanner
       : (withBanner ? `${withBanner}\n  ${TOP_CONTROLS}` : TOP_CONTROLS);
 
@@ -428,7 +429,7 @@ export class Renderer extends site.page.Renderer {
       : '';
     const styleTag = page.style ? `<style>${page.style}</style>` : '';
     const bodyTag = page.id ? `<body id="${escapeHtml(page.id)}">` : '<body>';
-    const headerTag = `<header>${headerHtml}</header>`;
+    const headerTag = headerHtml ? `<header>${headerHtml}</header>` : '';
     const rendered = [
       '<!doctype html><html lang="en"><head>',
       '<meta charset="utf-8">',

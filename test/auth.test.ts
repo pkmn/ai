@@ -5,6 +5,7 @@ import polka from 'polka';
 import {Database} from '../db';
 import type * as db from '../db';
 import * as auth from '../server/auth';
+import * as build from '../static/build';
 
 const AUTH_CFG: auth.Config = {
   sessionSecret: 'test-unified-session-secret',
@@ -823,5 +824,28 @@ describe('server/auth.ts routes', () => {
     const html = await res.text();
     expect(html).toContain('id="account-link"');
     expect(html).not.toContain('class="subtle has-avatar"');
+  });
+
+  test('skips avatar preload injection when HTML has no account link', () => {
+    const html = '<!doctype html><html><head></head><body><main>viewer</main></body></html>';
+    const out = build.applyAccountProfile(html, {
+      authenticated: true,
+      username: 'scheibo',
+      avatarUrl: 'https://avatars.githubusercontent.com/u/117249?s=64',
+    });
+    expect(out).toBe(html);
+  });
+
+  test('omits top controls when Renderer.render disables topControls', () => {
+    const html = build.renderer.render({
+      title: 'Private | pkmn.ai',
+      path: '/private/',
+      header: build.header('Responsible Release'),
+      topControls: false,
+      content: '<p>secret</p>',
+    });
+    expect(html).not.toContain('id="top-controls"');
+    expect(html).not.toContain('id="theme-toggle"');
+    expect(html).not.toContain('id="account-link"');
   });
 });

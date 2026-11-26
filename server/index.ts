@@ -112,7 +112,10 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
     }
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader(
+      'Cache-Control',
+      build.accountContext.getStore()?.authenticated ? 'private, no-cache' : 'no-cache'
+    );
     res.setHeader('Vary', 'Cookie');
     res.end(build.renderErrorPage(404, db?.getRunningTournament()));
   };
@@ -161,7 +164,7 @@ export function installSafeErrorHandlers(app: polka.Polka, db?: Database): void 
 }
 
 const STATIC_HTML_SKIP_RE =
-  /^\/(?:account|admin|wiki|projects|arena|api|auth|chat|private)(?:\.json|\/|$)/;
+  /^\/(?:account|admin|wiki|projects|arena|api|auth|chat|private)(?:\.json|\/|$)/i;
 const STATIC_ERROR_HTML_RE = /^\/(?:400|401|403|404|500|502|503|504)\.html$/i;
 
 // Serves pre-built `public/**/*.html` essays inside `accountContext` so `#account-link` renders
@@ -174,7 +177,7 @@ export function createStaticHtmlMiddleware(publicDir: string) {
       return;
     }
     const [rawPath, query] = (req.url ?? '/').split('?', 2);
-    if (STATIC_HTML_SKIP_RE.test(rawPath)) {
+    if (!rawPath.startsWith('/')) {
       next();
       return;
     }
@@ -185,12 +188,18 @@ export function createStaticHtmlMiddleware(publicDir: string) {
       next();
       return;
     }
-    if (decoded.includes('\0') || STATIC_ERROR_HTML_RE.test(decoded)) {
+    if (decoded.includes('\0')) {
       next();
       return;
     }
     const resolved = path.resolve(publicRoot, `.${decoded}`);
     if (resolved !== publicRoot && !resolved.startsWith(`${publicRoot}${path.sep}`)) {
+      next();
+      return;
+    }
+    const rel = path.relative(publicRoot, resolved);
+    const canonicalPath = rel ? `/${rel.split(path.sep).join('/')}` : '/';
+    if (STATIC_HTML_SKIP_RE.test(canonicalPath) || STATIC_ERROR_HTML_RE.test(canonicalPath)) {
       next();
       return;
     }
@@ -208,8 +217,11 @@ export function createStaticHtmlMiddleware(publicDir: string) {
         next();
         return;
       }
-      if (!rawPath.endsWith('/')) {
-        res.writeHead(301, {Location: `${rawPath}/${query ? `?${query}` : ''}`});
+      const canonicalDir = rel
+        ? `/${rel.split(path.sep).map(encodeURIComponent).join('/')}/`
+        : '/';
+      if (rawPath !== canonicalDir) {
+        res.writeHead(301, {Location: `${canonicalDir}${query ? `?${query}` : ''}`});
         res.end();
         return;
       }
@@ -219,12 +231,10 @@ export function createStaticHtmlMiddleware(publicDir: string) {
       return;
     }
     const rawHtml = fs.readFileSync(file, 'utf8');
-    const body = Buffer.from(
-      build.applyAccountProfile(rawHtml, build.accountContext.getStore()),
-      'utf8'
-    );
+    const profile = build.accountContext.getStore();
+    const body = Buffer.from(build.applyAccountProfile(rawHtml, profile), 'utf8');
     const etag = `"${crypto.createHash('sha1').update(body).digest('hex')}"`;
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', profile?.authenticated ? 'private, no-cache' : 'no-cache');
     res.setHeader('Vary', 'Cookie');
     res.setHeader('ETag', etag);
     if (util.matchesIfNoneMatch(req.headers['if-none-match'], etag)) {

@@ -2662,6 +2662,7 @@ describe('createServerApp production HTTP hardening', () => {
         headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`},
       });
       expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('private, no-cache');
       expect(res.headers.get('vary')).toBe('Cookie');
       const etag = res.headers.get('etag');
       expect(etag).toBeTruthy();
@@ -2676,6 +2677,114 @@ describe('createServerApp production HTTP hardening', () => {
         },
       });
       expect(cached.status).toBe(304);
+    } finally {
+      handle.close();
+      await srv.close();
+      if (prevSecret === undefined) delete process.env.SESSION_SECRET;
+      else process.env.SESSION_SECRET = prevSecret;
+    }
+  });
+
+  test('canonicalizes protocol-relative directory redirects in static HTML', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'index.html'), '<html>home</html>', 'utf8');
+    fs.mkdirSync(path.join(tmpDir, 'rules'), {recursive: true});
+    fs.writeFileSync(path.join(tmpDir, 'rules', 'index.html'), '<html>rules</html>', 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    const port = Number(new URL(srv.baseUrl).port);
+    const rawGet = (reqPath: string) => new Promise<{status?: number; location?: string}>(
+      (resolve, reject) => {
+        const req = http.request({host: '127.0.0.1', port, path: reqPath, method: 'GET'}, res => {
+          res.resume();
+          res.on('end', () => resolve({status: res.statusCode, location: res.headers.location}));
+        });
+        req.on('error', reject);
+        req.end();
+      }
+    );
+    try {
+      expect(await rawGet('//evil.com/..')).toEqual({status: 301, location: '/'});
+      expect(await rawGet('//evil.com/../rules?v=1')).toEqual({
+        status: 301,
+        location: '/rules/?v=1',
+      });
+      expect(await rawGet('//rules')).toEqual({status: 301, location: '/rules/'});
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('blocks percent-encoded skip prefixes in static HTML middleware', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'private'), {recursive: true});
+    fs.writeFileSync(path.join(tmpDir, 'private', 'index.html'), '<html>secret</html>', 'utf8');
+    fs.mkdirSync(path.join(tmpDir, 'rules'), {recursive: true});
+    fs.writeFileSync(path.join(tmpDir, 'rules', 'index.html'), '<html>rules</html>', 'utf8');
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    const port = Number(new URL(srv.baseUrl).port);
+    const rawStatus = (reqPath: string) => new Promise<number>((resolve, reject) => {
+      const req = http.request({host: '127.0.0.1', port, path: reqPath, method: 'GET'}, res => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode ?? 0));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    try {
+      expect(await rawStatus('/%70rivate/')).toBe(404);
+      expect(await rawStatus('/rules/../private/')).toBe(404);
+      expect(await rawStatus('/PRIVATE/')).toBe(404);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('blocks dot-segment internal error HTML files in static HTML middleware', async () => {
+    fs.writeFileSync(path.join(tmpDir, '404.html'), '<html>static 404</html>', 'utf8');
+    fs.mkdirSync(path.join(tmpDir, 'rules'), {recursive: true});
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    const port = Number(new URL(srv.baseUrl).port);
+    const rawStatus = (reqPath: string) => new Promise<number>((resolve, reject) => {
+      const req = http.request({host: '127.0.0.1', port, path: reqPath, method: 'GET'}, res => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode ?? 0));
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    try {
+      expect(await rawStatus('/./404.html')).toBe(404);
+      expect(await rawStatus('/rules/../404.html')).toBe(404);
+    } finally {
+      handle.close();
+      await srv.close();
+    }
+  });
+
+  test('sets private no-cache on authenticated dynamic HTML responses', async () => {
+    const prevSecret = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = 'test-dynamic-html-session-secret';
+    const handle = createServerApp({db, publicDir: tmpDir, enableDiscord: false});
+    const srv = await startTestServer(handle.app);
+    try {
+      const token = auth.signToken(
+        {github: {id: 117249, login: 'scheibo'}, exp: Math.floor(Date.now() / 1000) + 3600},
+        process.env.SESSION_SECRET
+      );
+      const signedIn = await fetch(`${srv.baseUrl}/arena/`, {
+        headers: {Cookie: `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`},
+      });
+      expect(signedIn.status).toBe(200);
+      expect(signedIn.headers.get('cache-control')).toBe('private, no-cache');
+      expect(signedIn.headers.get('vary')).toBe('Cookie');
+
+      const signedOut = await fetch(`${srv.baseUrl}/arena/`);
+      expect(signedOut.status).toBe(200);
+      expect(signedOut.headers.get('cache-control')).toBe('no-cache');
+      expect(signedOut.headers.get('vary')).toBe('Cookie');
     } finally {
       handle.close();
       await srv.close();
