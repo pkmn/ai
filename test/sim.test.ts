@@ -284,7 +284,7 @@ describe('multi-version @pkmn/sim support', () => {
     expect(first.newlySavedCount).toBe(1);
     expect(first.allSaved).toHaveLength(1);
     // Canonicalized order puts Alomomola first (sorted alphabetically for Gen 5+)
-    expect(first.allSaved[0].startsWith('alomomola|')).toBe(true);
+    expect(first.allSaved[0].startsWith('Alomomola|')).toBe(true);
 
     // Re-pasting the same uncanonicalized export matches the saved canonical packed team
     const second = await teams.validateCompetitorTeamsIncrementalForVersion(
@@ -325,7 +325,7 @@ describe('multi-version @pkmn/sim support', () => {
       });
       const stored = db.getLadderTeams('gen9harvestfuture20261109');
       expect(stored).toHaveLength(2);
-      expect(stored[0].startsWith('alomomola|')).toBe(true);
+      expect(stored[0].startsWith('Alomomola|')).toBe(true);
     } finally {
       db.close();
     }
@@ -504,9 +504,25 @@ describe('multi-version @pkmn/sim support', () => {
         samplesRoot
       );
       expect(pair.t1Packed).not.toBe(pair.t2Packed);
-      expect(pair.t1Packed.startsWith('alomomola|') || pair.t2Packed.startsWith('alomomola|'))
+      expect(pair.t1Packed.startsWith('Alomomola|') || pair.t2Packed.startsWith('Alomomola|'))
         .toBe(true);
     });
+
+  test('validateHarvestedTeams round-trips >18-char species cleanly under @pkmn/sets@8', () => {
+    const teamWithSinistcha = SAMPLE_TEAM_B.replace(
+      'Slowking-Galar @ Heavy-Duty Boots\nAbility: Regenerator\nEVs: 252 HP / 4 Def / 252 SpD\n' +
+      'Sassy Nature\n- Future Sight\n- Sludge Bomb\n- Chilly Reception\n- Flamethrower',
+      'Teacup (Sinistcha-Masterpiece) @ Leftovers\nAbility: Hospitality\n' +
+      'EVs: 252 HP / 252 Def / 4 SpD\nBold Nature\n- Matcha Gotcha\n- Strength Sap\n' +
+      '- Calm Mind\n- Shadow Ball'
+    );
+    const packed = teams.validateHarvestedTeams([SAMPLE_TEAM_A, teamWithSinistcha], 'gen9ou');
+    expect(packed).toHaveLength(2);
+    expect(packed[1]).toContain('Sinistcha-Masterpiece||');
+    // Re-validating the already-canonicalized packed output must pass with zero nickname errors
+    const roundTripped = teams.validateHarvestedTeams(packed, 'gen9ou');
+    expect(roundTripped).toEqual(packed);
+  });
 
   test('sampleSmokePair rejects when fewer than two legal sample teams exist', async () => {
     const samplesRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-sample-empty-'));
