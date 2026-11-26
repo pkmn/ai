@@ -386,7 +386,16 @@ tr.project-row.expanded .row-toggle {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem 1.25ch;
+  align-items: center;
   font-size: 0.88em;
+}
+
+.pool-meta,
+.pool-item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6ch;
+  align-items: center;
 }
 
 .sub-table {

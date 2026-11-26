@@ -108,7 +108,8 @@ aggregates, inline expandable diagnostic smoke-run replays with `STDERR`/`log` d
 `pkmn/wiki` git edits (linking to page, revision, and diff for moderation), plus direct actions
 (refund cooldown, disable/re-enable the 3/24h failed/discarded diagnostic rate limit per project,
 discard a staged version, wipe an unplayed version from the DB and runner
-archives, retire an active version on a ladder, quarantine/unquarantine a version).
+archives, wipe saved competitor pool teams on an upcoming ladder, retire an active version on a
+ladder, quarantine/unquarantine a version).
 
 ```sh
 npm run pkmn -- quarantine foul-play 1.2.0 --reason "Repeated protocol framing timeouts on SV"

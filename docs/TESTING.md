@@ -94,7 +94,8 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    unsettled provisional w/ `○` non-`/info` dot, `QUARANTINED (DM sent)`, Smogon-banned
    `smogon_standing = 'bad'`), and `/admin/` dashboard (`403` non-admin, overview w/ open
    `registration` issues, expanded project detail panel w/ 3/24h smoke-limit toggle state,
-   staged diagnostic replay + discard view, and paginated Projects/Wiki page 2).
+   upcoming saved-pool wipe button, staged diagnostic replay + discard view, and paginated
+   Projects/Wiki page 2).
 7. **`wiki`:** Index, `/wiki/pages`, `/wiki/projects`, `developers`/`discord` project pages, public & project editors
    (visibility bar, live Djot preview), revision history/snapshot/diff, owner redirect & non-owner
    `404` on uncreated page, `403`s (unregistered, non-owner edit, non-guild Discord), `/auth/dev`.

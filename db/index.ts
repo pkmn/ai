@@ -634,6 +634,14 @@ export class Database extends SqliteDatabase {
     return teams.getTeamPoolCountsByAgent(this.db);
   }
 
+  getWipeableSavedPools(): Map<number, Set<string>> {
+    return teams.getWipeableSavedPools(this.db);
+  }
+
+  wipeSavedTeams(agentSlug: string, ladderId: string): teams.WipeSavedTeamsResult {
+    return teams.wipeSavedTeams(this.db, this.txRunner, agentSlug, ladderId);
+  }
+
   getVersionById(versionId: number): versions.AgentVersionRow | undefined {
     return versions.getVersionById(this.db, versionId);
   }

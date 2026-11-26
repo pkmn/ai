@@ -6009,3 +6009,220 @@ describe('diagnostic version pruning', () => {
     }
   });
 });
+
+describe('saved pool team wiping', () => {
+  const VGC_ID = 'gen9championsvgc2026regmc';
+  const sampleProjects = `
+- name: Alpha
+  arena:
+    owners:
+      dev1: '1001'
+- name: Beta
+  arena:
+    owners:
+      dev2: '1002'
+`;
+
+  function setupPoolDb(now = 1_760_000_000) {
+    const db = new database.Database(':memory:', {now});
+    db.syncLadders(undefined, now);
+    db.syncProjectsFromYaml(sampleProjects, undefined, now);
+    db.setAgentLadders('alpha', ['vgc'], now);
+    db.setAgentLadders('beta', ['vgc'], now);
+    const alpha = db.getAgentBySlug('alpha')!;
+    const beta = db.getAgentBySlug('beta')!;
+    return {db, alpha, beta, now};
+  }
+
+  function sampleTeams(prefix: string, count = 20): string[] {
+    return Array.from({length: count}, (_, i) => `${prefix}Team${i + 1}|`);
+  }
+
+  test('wipes saved teams on an upcoming pools ladder without touching other projects', () => {
+    const {db, alpha, beta, now} = setupPoolDb();
+    try {
+      db.replaceSavedTeams(VGC_ID, alpha.id, sampleTeams('A', 20), now);
+      db.replaceSavedTeams(VGC_ID, beta.id, sampleTeams('B', 20), now);
+      expect(db.getWipeableSavedPools().get(alpha.id)?.has(VGC_ID)).toBe(true);
+
+      const res = db.wipeSavedTeams('alpha', VGC_ID);
+      expect(res).toEqual({
+        agentId: alpha.id,
+        agentSlug: 'alpha',
+        ladderId: VGC_ID,
+        ladderName: 'VGC',
+        wipedCount: 20,
+      });
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id, 'saved')).toEqual([]);
+      expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+      expect(db.getTeamsForAgentLadder(VGC_ID, beta.id, 'saved')).toHaveLength(20);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('allows wiping saved teams after discarding a staged version on an upcoming ladder', () => {
+    const {db, alpha, now} = setupPoolDb();
+    try {
+      const v = db.createSubmission({
+        agentId: alpha.id,
+        version: '0.1.0',
+        package: 'bundle',
+        url: 'https://example.com/a-0.1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [VGC_ID],
+        teamsByLadder: {[VGC_ID]: sampleTeams('A', 20)},
+        now,
+      });
+      db.applySubmissionStatus({versionId: v.id, smokeStatus: 'staged', now: now + 10});
+      expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+
+      db.discardStagedVersion({versionId: v.id, agentId: alpha.id});
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id, 'saved')).toHaveLength(20);
+      expect(db.getWipeableSavedPools().get(alpha.id)?.has(VGC_ID)).toBe(true);
+
+      const res = db.wipeSavedTeams('alpha', VGC_ID);
+      expect(res.wipedCount).toBe(20);
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('rejects wiping saved teams on non-upcoming pools ladders', () => {
+    for (const status of ['active', 'settling', 'archived'] as const) {
+      const {db, alpha, now} = setupPoolDb();
+      try {
+        db.replaceSavedTeams(VGC_ID, alpha.id, sampleTeams('A', 5), now);
+        db.db.prepare('UPDATE ladders SET status = ? WHERE id = ?').run(status, VGC_ID);
+        expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+
+        let caught: {status?: number} | undefined;
+        try {
+          db.wipeSavedTeams('alpha', VGC_ID);
+        } catch (err) {
+          caught = err as {status?: number};
+        }
+        expect(caught?.status).toBe(409);
+        expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id, 'saved')).toHaveLength(5);
+      } finally {
+        db.close();
+      }
+    }
+  });
+
+  test('rejects wiping saved teams while a pending submission targets the ladder', () => {
+    const {db, alpha, now} = setupPoolDb();
+    try {
+      db.createSubmission({
+        agentId: alpha.id,
+        version: '0.1.0',
+        package: 'bundle',
+        url: 'https://example.com/a-0.1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [VGC_ID],
+        teamsByLadder: {[VGC_ID]: sampleTeams('A', 20)},
+        now,
+      });
+      expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+
+      let caught: {status?: number} | undefined;
+      try {
+        db.wipeSavedTeams('alpha', VGC_ID);
+      } catch (err) {
+        caught = err as {status?: number};
+      }
+      expect(caught?.status).toBe(409);
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id, 'pending')).toHaveLength(20);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('rejects wiping active pool teams until the unplayed version is wiped first', () => {
+    const {db, alpha, now} = setupPoolDb();
+    try {
+      const v = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/a-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [VGC_ID],
+        teamsByLadder: {[VGC_ID]: sampleTeams('A', 20)},
+        now,
+      });
+      db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: now + 10});
+      expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+
+      let caught: {status?: number} | undefined;
+      try {
+        db.wipeSavedTeams('alpha', VGC_ID);
+      } catch (err) {
+        caught = err as {status?: number};
+      }
+      expect(caught?.status).toBe(409);
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id, 'active')).toHaveLength(20);
+
+      db.wipeVersion(v.id, now + 20);
+      expect(db.getWipeableSavedPools().get(alpha.id)?.has(VGC_ID)).toBe(true);
+      expect(db.wipeSavedTeams('alpha', VGC_ID).wipedCount).toBe(20);
+      expect(db.getTeamsForAgentLadder(VGC_ID, alpha.id)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('rejects wiping saved teams when an unplayed version is enrolled on the ladder', () => {
+    const {db, alpha, now} = setupPoolDb();
+    try {
+      const v = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/a-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [VGC_ID],
+        teamsByLadder: {[VGC_ID]: sampleTeams('A', 20)},
+        now,
+      });
+      db.applySubmissionStatus({versionId: v.id, smokeStatus: 'passed', now: now + 10});
+      db.db.prepare(
+        "UPDATE agent_ladder_teams SET status = 'saved' WHERE agent_id = ? AND ladder_id = ?"
+      ).run(alpha.id, VGC_ID);
+      expect(db.getWipeableSavedPools().get(alpha.id)).toBeUndefined();
+
+      let caught: {status?: number} | undefined;
+      try {
+        db.wipeSavedTeams('alpha', VGC_ID);
+      } catch (err) {
+        caught = err as {status?: number};
+      }
+      expect(caught?.status).toBe(409);
+    } finally {
+      db.close();
+    }
+  });
+
+  test('rejects wiping saved teams for unknown targets, non-pools ladders, or empty pools', () => {
+    const {db} = setupPoolDb();
+    try {
+      const expectStatus = (fn: () => void, expected: number) => {
+        let caught: {status?: number} | undefined;
+        try {
+          fn();
+        } catch (err) {
+          caught = err as {status?: number};
+        }
+        expect(caught?.status).toBe(expected);
+      };
+
+      expectStatus(() => db.wipeSavedTeams('missing', VGC_ID), 404);
+      expectStatus(() => db.wipeSavedTeams('alpha', 'missing-ladder'), 404);
+      expectStatus(() => db.wipeSavedTeams('alpha', 'gen1ou20261109'), 400);
+      expectStatus(() => db.wipeSavedTeams('alpha', VGC_ID), 404);
+    } finally {
+      db.close();
+    }
+  });
+});

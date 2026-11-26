@@ -1,11 +1,24 @@
 import {DatabaseSync} from 'node:sqlite';
 
+import {getAgentBySlug} from './agents';
+import {getLadder} from './ladders';
+
+import {TransactionRunner} from './index';
+
 export type TeamPoolStatus = 'saved' | 'pending' | 'active';
 
 export interface TeamPoolCounts {
   saved: number;
   pending: number;
   active: number;
+}
+
+export interface WipeSavedTeamsResult {
+  agentId: number;
+  agentSlug: string;
+  ladderId: string;
+  ladderName: string;
+  wipedCount: number;
 }
 
 export interface LadderRosterEntry {
@@ -298,4 +311,184 @@ export function demoteActiveTeamsToPending(
     SET status = 'pending'
     WHERE ladder_id = ? AND agent_id = ? AND status = 'active'
   `).run(ladderId, agentId);
+}
+
+// Returns `(agentId -> Set<ladderId>)` for saved `pools` rosters that are safe to wipe:
+// strictly on an `'upcoming'` ladder with zero played matches, no `'active'` or `'pending'`
+// teams, no enrolled `ladder_entries`, and no in-flight `'pending'`/`'staged'` versions
+// targeting that ladder.
+export function getWipeableSavedPools(db: DatabaseSync): Map<number, Set<string>> {
+  const rows = db.prepare(`
+    SELECT DISTINCT alt.agent_id, alt.ladder_id
+    FROM agent_ladder_teams alt
+    JOIN ladders l ON l.id = alt.ladder_id
+    WHERE alt.status = 'saved'
+      AND l.team = 'pools'
+      AND l.status = 'upcoming'
+      AND NOT EXISTS (
+        SELECT 1 FROM matches m WHERE m.ladder_id = l.id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM agent_ladder_teams other
+        WHERE other.agent_id = alt.agent_id
+          AND other.ladder_id = alt.ladder_id
+          AND other.status IN ('pending', 'active')
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM ladder_entries le
+        JOIN agent_versions av ON av.id = le.version_id
+        WHERE le.ladder_id = alt.ladder_id
+          AND av.agent_id = alt.agent_id
+      )
+  `).all() as Array<{agent_id: number; ladder_id: string}>;
+
+  const inFlightByAgent = new Map<number, Set<string>>();
+  const inFlightRows = db.prepare(`
+    SELECT agent_id, ladders_json
+    FROM agent_versions
+    WHERE smoke_status IN ('pending', 'staged')
+      AND ladders_json != '[]'
+  `).all() as Array<{agent_id: number; ladders_json: string}>;
+  for (const r of inFlightRows) {
+    let set = inFlightByAgent.get(r.agent_id);
+    if (!set) {
+      set = new Set();
+      inFlightByAgent.set(r.agent_id, set);
+    }
+    for (const lid of JSON.parse(r.ladders_json) as string[]) {
+      set.add(lid);
+    }
+  }
+
+  const out = new Map<number, Set<string>>();
+  for (const r of rows) {
+    if (inFlightByAgent.get(r.agent_id)?.has(r.ladder_id)) continue;
+    let set = out.get(r.agent_id);
+    if (!set) {
+      set = new Set();
+      out.set(r.agent_id, set);
+    }
+    set.add(r.ladder_id);
+  }
+  return out;
+}
+
+// Permanently deletes an agent's `'saved'` team pool on an `'upcoming'` `pools` ladder when
+// doing so cannot affect any other competitor, active/in-flight submission, or played match.
+export function wipeSavedTeams(
+  db: DatabaseSync,
+  inTransaction: TransactionRunner,
+  agentSlug: string,
+  ladderId: string
+): WipeSavedTeamsResult {
+  return inTransaction(() => {
+    const agent = getAgentBySlug(db, agentSlug);
+    if (!agent) {
+      throw Object.assign(new Error(`Agent "${agentSlug}" not found.`), {status: 404});
+    }
+    const ladder = getLadder(db, ladderId);
+    if (!ladder) {
+      throw Object.assign(new Error(`Unknown ladder "${ladderId}".`), {status: 404});
+    }
+    if (ladder.team !== 'pools') {
+      throw Object.assign(
+        new Error(`Ladder "${ladder.name}" does not use competitor team pools.`),
+        {status: 400}
+      );
+    }
+    if (ladder.status !== 'upcoming') {
+      throw Object.assign(
+        new Error(
+          `Ladder "${ladder.name}" is ${ladder.status}; ` +
+          'saved teams can only be wiped on an upcoming ladder.'
+        ),
+        {status: 409}
+      );
+    }
+    const hasMatch = db.prepare(
+      'SELECT 1 FROM matches WHERE ladder_id = ? LIMIT 1'
+    ).get(ladder.id);
+    if (hasMatch) {
+      throw Object.assign(
+        new Error(`Ladder "${ladder.name}" has played matches and teams cannot be wiped.`),
+        {status: 409}
+      );
+    }
+
+    const countRows = db.prepare(`
+      SELECT status, COUNT(*) AS count
+      FROM agent_ladder_teams
+      WHERE agent_id = ? AND ladder_id = ?
+      GROUP BY status
+    `).all(agent.id, ladder.id) as Array<{status: TeamPoolStatus; count: number}>;
+    const counts: TeamPoolCounts = {saved: 0, pending: 0, active: 0};
+    for (const r of countRows) counts[r.status] = r.count;
+
+    if (counts.active > 0) {
+      throw Object.assign(
+        new Error(
+          `${agent.name} has an active team pool on ${ladder.name}; ` +
+          'wipe its unplayed version first.'
+        ),
+        {status: 409}
+      );
+    }
+    if (counts.pending > 0) {
+      throw Object.assign(
+        new Error(
+          `${agent.name} has a pending team pool on ${ladder.name}; ` +
+          'discard or wipe the in-flight version first.'
+        ),
+        {status: 409}
+      );
+    }
+    const hasEntry = db.prepare(`
+      SELECT 1 FROM ladder_entries le
+      JOIN agent_versions av ON av.id = le.version_id
+      WHERE le.ladder_id = ? AND av.agent_id = ?
+      LIMIT 1
+    `).get(ladder.id, agent.id);
+    if (hasEntry) {
+      throw Object.assign(
+        new Error(
+          `${agent.name} is enrolled on ${ladder.name}; wipe its unplayed version first.`
+        ),
+        {status: 409}
+      );
+    }
+    const inFlightRows = db.prepare(`
+      SELECT ladders_json FROM agent_versions
+      WHERE agent_id = ? AND smoke_status IN ('pending', 'staged') AND ladders_json != '[]'
+    `).all(agent.id) as Array<{ladders_json: string}>;
+    for (const r of inFlightRows) {
+      if ((JSON.parse(r.ladders_json) as string[]).includes(ladder.id)) {
+        throw Object.assign(
+          new Error(
+            `${agent.name} has a pending or staged submission for ${ladder.name}; ` +
+            'discard or wipe it first.'
+          ),
+          {status: 409}
+        );
+      }
+    }
+    if (counts.saved === 0) {
+      throw Object.assign(
+        new Error(`No saved teams for "${agent.slug}" on ${ladder.name}.`),
+        {status: 404}
+      );
+    }
+
+    db.prepare(`
+      DELETE FROM agent_ladder_teams
+      WHERE ladder_id = ? AND agent_id = ? AND status = 'saved'
+    `).run(ladder.id, agent.id);
+
+    return {
+      agentId: agent.id,
+      agentSlug: agent.slug,
+      ladderId: ladder.id,
+      ladderName: ladder.name,
+      wipedCount: counts.saved,
+    };
+  });
 }

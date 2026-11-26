@@ -1819,6 +1819,30 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       click: 'tr[data-agent-row="0-error"] .row-toggle',
     },
     {
+      name: 'admin-pool-wipe',
+      section: 'account',
+      title: 'Admin (Saved Pool Wipe)',
+      path: '/admin/',
+      githubUser: 'scheibo',
+      setup: fixture => withSavepoint(fixture, raw => {
+        raw.prepare('DELETE FROM matches WHERE ladder_id = ?').run(VGC_LADDER_ID);
+        raw.prepare('DELETE FROM pair_aggregates WHERE ladder_id = ?').run(VGC_LADDER_ID);
+        raw.prepare('DELETE FROM rating_snapshots WHERE ladder_id = ?').run(VGC_LADDER_ID);
+        raw.prepare('DELETE FROM ladder_entries WHERE ladder_id = ?').run(VGC_LADDER_ID);
+        raw.prepare('DELETE FROM agent_ladder_teams WHERE ladder_id = ?').run(VGC_LADDER_ID);
+        raw.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run(VGC_LADDER_ID);
+        const insertTeam = raw.prepare(
+          `INSERT INTO agent_ladder_teams (
+            agent_id, ladder_id, team_index, packed_team, status, submitted_at
+          ) VALUES (?, ?, ?, ?, 'saved', ?)`
+        );
+        for (let i = 1; i <= 20; i++) {
+          insertTeam.run(fixture.cynthiaiId, VGC_LADDER_ID, i, `Team${i}|`, NOW_SECONDS - 600);
+        }
+      }),
+      click: 'tr[data-agent-row="cynthiai"] .row-toggle',
+    },
+    {
       name: 'admin-diagnostic',
       section: 'account',
       title: 'Admin (Diagnostic)',

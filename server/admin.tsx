@@ -90,6 +90,7 @@ export interface AdminPoolProgress {
   saved: number;
   pending: number;
   active: number;
+  wipeable: boolean;
 }
 
 export interface AdminAgentItem {
@@ -444,7 +445,7 @@ const ADMIN_SCRIPT = `
             group.appendChild(cancelBtn);
             return;
           }
-          if (action === 'wipe') {
+          if (action === 'wipe' || action === 'wipe-pool') {
             const group = actionBtn.closest('.action-group');
             if (!group || group.querySelector('.confirm-wipe')) return;
             const siblings = Array.from(group.querySelectorAll('button'));
@@ -470,16 +471,20 @@ const ADMIN_SCRIPT = `
             confirmBtn.addEventListener('click', async () => {
               confirmBtn.disabled = true;
               cancelBtn.disabled = true;
+              const url = action === 'wipe-pool'
+                ? '/api/admin/agents/' + encodeURIComponent(actionBtn.dataset.agent) +
+                    '/pools/' + encodeURIComponent(actionBtn.dataset.ladder) + '/wipe'
+                : '/api/admin/versions/' + encodeURIComponent(actionBtn.dataset.versionId) +
+                    '/wipe';
+              const errMsg = action === 'wipe-pool'
+                ? 'Failed wiping saved teams.'
+                : 'Failed wiping version.';
               try {
-                await postJson(
-                  '/api/admin/versions/' + encodeURIComponent(actionBtn.dataset.versionId) +
-                    '/wipe',
-                  {}
-                );
+                await postJson(url, {});
                 window.location.reload();
               } catch (err) {
                 cleanup();
-                showFeedback(err.message || 'Failed wiping version.', true);
+                showFeedback(err.message || errMsg, true);
               }
             });
 
@@ -1639,11 +1644,13 @@ export function buildAdminAgentsPage(
   const laddersByAgent = database.getAgentLaddersByAgent();
   const entriesByAgent = database.getAdminEntriesByAgent();
   const poolsByAgent = database.getTeamPoolCountsByAgent();
+  const wipeablePoolsByAgent = database.getWipeableSavedPools();
   const tourneysByAgent = database.getTournamentEntrantsByAgent();
   const poolLadders = currentLadders.filter(l => l.team === 'pools' && l.teams);
 
   const agents: AdminAgentItem[] = pageAgents.map(agent => {
     const agentPools = poolsByAgent.get(agent.id);
+    const wipeablePools = wipeablePoolsByAgent.get(agent.id);
     const pools: AdminPoolProgress[] = [];
     for (const pl of poolLadders) {
       const counts = agentPools?.get(pl.id);
@@ -1655,6 +1662,7 @@ export function buildAdminAgentsPage(
           saved: counts.saved,
           pending: counts.pending,
           active: counts.active,
+          wipeable: wipeablePools?.has(pl.id) ?? false,
         });
       }
     }
@@ -1851,7 +1859,31 @@ function renderProjectDetailPanel(
   const activeMeta: util.Child[] = [];
   if (pools.length > 0) {
     activeMeta.push(
-      <span><span className='muted'>Pools:</span> {pools.map(formatPoolProgress).join(', ')}</span>
+      <span className='pool-meta'>
+        <span className='muted'>Pools:</span>
+        {pools.map((p, idx) => (
+          <>
+            {idx > 0 && <span className='muted'>{'\u00b7'}</span>}
+            <span className='pool-item'>
+              <span>{formatPoolProgress(p)}</span>
+              {p.wipeable && (
+                <span className='action-group'>
+                  <button
+                    type='button'
+                    className='btn-sm btn-danger'
+                    data-action='wipe-pool'
+                    data-agent={agent.slug}
+                    data-ladder={p.ladderId}
+                    title={`Wipe saved ${p.ladderName} teams for ${agent.name}`}
+                  >
+                    Wipe
+                  </button>
+                </span>
+              )}
+            </span>
+          </>
+        ))}
+      </span>
     );
   }
 
@@ -3296,6 +3328,19 @@ export function register(app: polka.Polka, options: Options): Handle {
     } catch (err: any) {
       const status = typeof err?.status === 'number' ? err.status : 400;
       sendJson(res, status, {error: err?.message || 'Failed discarding staged version.'});
+    }
+  });
+
+  app.post('/api/admin/agents/:slug/pools/:ladderId/wipe', (req, res) => {
+    if (!requireAdminMutation(req, res)) return;
+    const slug = decodeParam(req.params.slug);
+    const ladderId = decodeParam(req.params.ladderId);
+    try {
+      const result = db.wipeSavedTeams(slug, ladderId);
+      sendJson(res, 200, {ok: true, ...result});
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 400;
+      sendJson(res, status, {error: err?.message || 'Failed wiping saved teams.'});
     }
   });
 

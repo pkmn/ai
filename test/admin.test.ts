@@ -924,6 +924,10 @@ describe('/admin dashboard & API', () => {
         {path: '/api/admin/agents/newcomer/ladders', body: {slot: 'rby', qualified: true}},
         {path: '/api/admin/agents/newcomer/refund-cooldown', body: {}},
         {path: '/api/admin/agents/newcomer/smoke-limit', body: {unlimited: true}},
+        {
+          path: '/api/admin/agents/foul-play/pools/gen9championsvgc2026regmc/wipe',
+          body: {},
+        },
         {path: '/api/admin/versions/1/discard', body: {}},
         {path: '/api/admin/versions/1/wipe', body: {}},
         {path: '/api/admin/versions/0-error/1.0/quarantine', body: {reason: 'test'}},
@@ -1041,6 +1045,65 @@ describe('/admin dashboard & API', () => {
       expect(okStaged.status).toBe(200);
       expect(db.getVersionById(vStaged.id)).toBeUndefined();
     });
+
+  test('renders saved-pool Wipe button only when pools ladder is upcoming without active teams',
+    async () => {
+      const adminCookie = cookieFor('scheibo');
+      const vgcId = 'gen9championsvgc2026regmc';
+      const fp = db.getAgentBySlug('foul-play')!;
+      const teams = Array.from({length: 20}, (_, i) => `Team${i + 1}|`);
+      db.replaceSavedTeams(vgcId, fp.id, teams, now);
+
+      const activeHtml = await (await fetch(`${baseUrl}/admin`, {
+        headers: {Cookie: adminCookie},
+      })).text();
+      expect(activeHtml).toContain('VGC: 20/20 teams (saved)');
+      expect(activeHtml).not.toContain('data-action="wipe-pool"');
+
+      db.db.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run(vgcId);
+      const upcomingHtml = await (await fetch(`${baseUrl}/admin`, {
+        headers: {Cookie: adminCookie},
+      })).text();
+      expect(upcomingHtml).toContain('VGC: 20/20 teams (saved)');
+      expect(upcomingHtml).toContain(
+        `data-action="wipe-pool" data-agent="foul-play" data-ladder="${vgcId}"`
+      );
+    });
+
+  test('wipes upcoming saved pool teams via admin API', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const vgcId = 'gen9championsvgc2026regmc';
+    const fp = db.getAgentBySlug('foul-play')!;
+    const teams = Array.from({length: 20}, (_, i) => `Team${i + 1}|`);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming' WHERE id = ?").run(vgcId);
+    db.replaceSavedTeams(vgcId, fp.id, teams, now);
+
+    const res = await fetch(`${baseUrl}/api/admin/agents/foul-play/pools/${vgcId}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as {ok: boolean; wipedCount: number; ladderId: string};
+    expect(data).toMatchObject({ok: true, wipedCount: 20, ladderId: vgcId});
+    expect(db.getTeamsForAgentLadder(vgcId, fp.id)).toEqual([]);
+  });
+
+  test('rejects admin API pool wipe on an active ladder with 409', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const vgcId = 'gen9championsvgc2026regmc';
+    const fp = db.getAgentBySlug('foul-play')!;
+    const teams = Array.from({length: 20}, (_, i) => `Team${i + 1}|`);
+    db.replaceSavedTeams(vgcId, fp.id, teams, now);
+
+    const res = await fetch(`${baseUrl}/api/admin/agents/foul-play/pools/${vgcId}/wipe`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie, 'Content-Type': 'application/json'},
+      body: '{}',
+    });
+    expect(res.status).toBe(409);
+    expect(db.getTeamsForAgentLadder(vgcId, fp.id, 'saved')).toHaveLength(20);
+  });
 });
 
 describe('/admin recent wiki edits', () => {
