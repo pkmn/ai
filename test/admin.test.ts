@@ -1443,6 +1443,15 @@ describe('/admin dashboard & API', () => {
     expect(html).toContain('>None</span>');
     expect(html).not.toContain('Up to date');
   });
+
+  test('renders non-error admin feedback banners in regular text style', () => {
+    const snap = admin.buildAdminSnapshot(db, 'scheibo', arenaHandle, now);
+    const html = admin.renderAdminPage({snapshot: snap, allLadders: db.getLadders()});
+    expect(html).toContain(
+      "feedback.className = isError ? 'admin-feedback no' : 'admin-feedback';"
+    );
+    expect(html).not.toContain("'admin-feedback ' + (isError ? 'no' : 'yes')");
+  });
 });
 
 describe('/admin recent wiki edits', () => {

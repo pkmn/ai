@@ -184,7 +184,7 @@ const ADMIN_SCRIPT = `
     const showFeedback = (msg, isError) => {
       if (!feedback) return;
       feedback.textContent = msg;
-      feedback.className = 'admin-feedback ' + (isError ? 'no' : 'yes');
+      feedback.className = isError ? 'admin-feedback no' : 'admin-feedback';
     };
 
     const formatAdminReason = (reason) => {
