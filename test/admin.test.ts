@@ -1600,6 +1600,8 @@ describe('/admin dashboard & API', () => {
       targetName: rby.name,
       phase: 'battle',
       turn: 14,
+      p1: {bankSeconds: 141},
+      p2: {bankSeconds: 144},
       peakRam: 612,
       startedAt: now - 45,
     });

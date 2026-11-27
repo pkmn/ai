@@ -132,9 +132,8 @@ export interface AdminRunningSmoke {
   targetName: string;
   phase?: arena.LivePhase;
   turn: number;
-  activeSlot?: 'p1' | 'p2';
-  p1BankSeconds: number;
-  p2BankSeconds: number;
+  p1: {bankSeconds: number};
+  p2: {bankSeconds: number};
   peakRam?: number;
   startedAt: number;
   updatedAt: number;
@@ -1864,9 +1863,8 @@ function collectSmokeQueue(
         targetName: d.targetName,
         ...(d.phase ? {phase: d.phase} : {}),
         turn: d.turn,
-        ...(d.activeSlot ? {activeSlot: d.activeSlot} : {}),
-        p1BankSeconds: d.p1.bankSeconds,
-        p2BankSeconds: d.p2.bankSeconds,
+        p1: {bankSeconds: d.p1.bankSeconds},
+        p2: {bankSeconds: d.p2.bankSeconds},
         ...(maxRam > 0 ? {peakRam: Math.round(maxRam)} : {}),
         startedAt: d.startedAt,
         updatedAt: d.updatedAt,
@@ -3044,8 +3042,8 @@ function renderSmokeQueueInner(opts: {
       targets.length > 1 || (targets.length === 1 && targets[0] !== activeTarget);
     const tipAttrs = util.localizedTitle([
       {prefix: 'Started ', epoch: r.startedAt},
-      `P1 ${Math.max(0, Math.round(r.p1BankSeconds))}s · ` +
-        `P2 ${Math.max(0, Math.round(r.p2BankSeconds))}s`,
+      `P1 ${Math.max(0, Math.round(r.p1.bankSeconds))}s · ` +
+        `P2 ${Math.max(0, Math.round(r.p2.bankSeconds))}s`,
       ...(r.peakRam !== undefined ? [`${r.peakRam.toLocaleString('en-US')} MiB peak`] : []),
       {prefix: 'Updated ', epoch: r.updatedAt},
     ]);
@@ -3268,9 +3266,9 @@ export function register(app: polka.Polka, options: Options): Handle {
   });
 
   const adminStreamClients = new Set<http.ServerResponse>();
-  let lastBroadcastMs = 0;
+  let lastBroadcastMillis = 0;
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
-  let lastSmokeQueueBroadcastMs = 0;
+  let lastSmokeQueueBroadcastMillis = 0;
   let pendingSmokeQueueTimer: ReturnType<typeof setTimeout> | undefined;
 
   const evictIfStalled = (client: http.ServerResponse): boolean => {
@@ -3317,30 +3315,43 @@ export function register(app: polka.Polka, options: Options): Handle {
     };
   };
 
-  const buildSmokeQueueEventPayload = (now: number) => {
+  const collectSmokeQueueView = (now: number) => {
     const {pendingSubmissions, runningSmokeTests, queuedCount} = collectSmokeQueue(db, arenaHandle);
     const stagedCount = db.countStagedVersions();
     const smokeCadence = db.getSmokeCadence();
     const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
     const tournamentNameById = new Map(db.getTournaments().map(t => [t.id, t.name]));
+    const smokeQueueHtml = renderSmokeQueueInner({
+      runningSmokeTests,
+      pendingSubmissions,
+      now,
+      ladderNameById,
+      tournamentNameById,
+    }).toString();
+    return {
+      pendingSubmissions,
+      runningSmokeTests,
+      queuedCount,
+      stagedCount,
+      smokeCadence,
+      smokeQueueHtml,
+    };
+  };
+
+  const buildSmokeQueueEventPayload = (now: number) => {
+    const view = collectSmokeQueueView(now);
     const outboxPending = arenaHandle?.getState().arenaSystem?.outboxPending;
     return {
       generatedAt: now,
-      runningSmokeTests,
-      pendingSubmissions,
-      smokeCadence,
-      innerHtml: renderSmokeQueueInner({
-        runningSmokeTests,
-        pendingSubmissions,
-        now,
-        ladderNameById,
-        tournamentNameById,
-      }).toString(),
+      runningSmokeTests: view.runningSmokeTests,
+      pendingSubmissions: view.pendingSubmissions,
+      smokeCadence: view.smokeCadence,
+      innerHtml: view.smokeQueueHtml,
       queueLineHtml: renderArenaQueueLine({
-        runningSmoke: runningSmokeTests.length,
-        queuedSmoke: queuedCount,
-        stagedCount,
-        smokeCadence,
+        runningSmoke: view.runningSmokeTests.length,
+        queuedSmoke: view.queuedCount,
+        stagedCount: view.stagedCount,
+        smokeCadence: view.smokeCadence,
       }, outboxPending).toString(),
     };
   };
@@ -3348,41 +3359,31 @@ export function register(app: polka.Polka, options: Options): Handle {
   const buildSystemEventPayload = (now: number) => {
     const sys = collectSystemSnapshot(now);
     const runner = computeRunnerHealth(arenaHandle, now);
-    const {pendingSubmissions, runningSmokeTests, queuedCount} = collectSmokeQueue(db, arenaHandle);
-    const stagedCount = db.countStagedVersions();
+    const view = collectSmokeQueueView(now);
     const unsentDms = db.getPendingVersionDms().length;
-    const smokeCadence = db.getSmokeCadence();
-    const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
-    const tournamentNameById = new Map(db.getTournaments().map(t => [t.id, t.name]));
     return {
       generatedAt: now,
       ...(sys.lastHeartbeatAt !== undefined ? {lastHeartbeatAt: sys.lastHeartbeatAt} : {}),
       runner,
-      smokeCadence,
-      runningSmokeTests,
-      pendingSubmissions,
+      smokeCadence: view.smokeCadence,
+      runningSmokeTests: view.runningSmokeTests,
+      pendingSubmissions: view.pendingSubmissions,
       vps: sys.vps,
       ...(sys.arena ? {arena: sys.arena} : {}),
       cardsHtml: renderSystemCards(sys, now, {
-        runningSmoke: runningSmokeTests.length,
-        queuedSmoke: queuedCount,
-        stagedCount,
+        runningSmoke: view.runningSmokeTests.length,
+        queuedSmoke: view.queuedCount,
+        stagedCount: view.stagedCount,
         unsentDms,
-        smokeCadence,
+        smokeCadence: view.smokeCadence,
       }).toString(),
-      smokeQueueHtml: renderSmokeQueueInner({
-        runningSmokeTests,
-        pendingSubmissions,
-        now,
-        ladderNameById,
-        tournamentNameById,
-      }).toString(),
+      smokeQueueHtml: view.smokeQueueHtml,
     };
   };
 
   const pushSystemEventNow = () => {
     if (adminStreamClients.size === 0) return;
-    lastBroadcastMs = Date.now();
+    lastBroadcastMillis = Date.now();
     let frame: string;
     try {
       frame = `event: system\ndata: ${JSON.stringify(buildSystemEventPayload(getNow()))}\n\n`;
@@ -3399,7 +3400,7 @@ export function register(app: polka.Polka, options: Options): Handle {
 
   const pushSmokeQueueEventNow = () => {
     if (adminStreamClients.size === 0) return;
-    lastSmokeQueueBroadcastMs = Date.now();
+    lastSmokeQueueBroadcastMillis = Date.now();
     let frame: string;
     try {
       const payload = buildSmokeQueueEventPayload(getNow());
@@ -3417,7 +3418,7 @@ export function register(app: polka.Polka, options: Options): Handle {
 
   const notifySmokeQueue = (immediate = false) => {
     if (adminStreamClients.size === 0) return;
-    const elapsed = Date.now() - lastSmokeQueueBroadcastMs;
+    const elapsed = Date.now() - lastSmokeQueueBroadcastMillis;
     if (immediate || elapsed >= SMOKE_QUEUE_PUSH_THROTTLE_MILLIS) {
       if (pendingSmokeQueueTimer) {
         clearTimeout(pendingSmokeQueueTimer);
@@ -3474,7 +3475,7 @@ export function register(app: polka.Polka, options: Options): Handle {
 
   const notifyHeartbeat = () => {
     if (adminStreamClients.size === 0) return;
-    const elapsed = Date.now() - lastBroadcastMs;
+    const elapsed = Date.now() - lastBroadcastMillis;
     if (elapsed >= HEARTBEAT_PUSH_THROTTLE_MILLIS) {
       if (pendingBroadcastTimer) {
         clearTimeout(pendingBroadcastTimer);
