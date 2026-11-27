@@ -25,6 +25,7 @@ export interface ArenaInfo {
 
 export type Engine = string | {name: string; url: string};
 export type Company = string | {name: string; url?: string};
+export type Logo = string | {file?: string; width: number; height: number};
 
 export interface Project {
   name?: string;
@@ -42,7 +43,7 @@ export interface Project {
   release?: {name: string; url: string};
   arena?: {
     owners: {[github: string]: string | number};
-    logo?: string;
+    logo?: Logo;
   };
 }
 

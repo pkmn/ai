@@ -234,7 +234,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    logo: foul-play.gif
+    logo: {file: foul-play.gif, width: 46, height: 70}
     owners:
       pmariglia: pmariglia.475056
 - name: 0 ERROR # April 20
@@ -548,7 +548,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    logo: twinbeam.svg
+    logo: {file: twinbeam.svg, width: 168, height: 168}
     owners:
       spktrm: spktrm.620853
 - name: Optimal Pokémon Battler
@@ -590,6 +590,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 412, height: 335}
     owners:
       jakegrigsby: pokeagentchallenge.728597
 - name: PokéAgent
@@ -605,6 +606,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 336, height: 336}
     owners:
       heyo392: Nobodynobody.450733
 - name: Magpie
@@ -619,7 +621,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    logo: magpie.svg
+    logo: {file: magpie.svg, width: 168, height: 168}
     owners:
       open-cover: opencover.723102
 - name: Algorithmic Pokémon Teambuilding
@@ -663,6 +665,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 1204, height: 336}
     owners:
       74togo: incin_dev.767200
 - name: PokeCHAD
@@ -718,6 +721,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 629, height: 168}
     owners:
       spedr: Shao.45406
 - name: Porimon
@@ -745,6 +749,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 180, height: 168}
     owners:
       Ostro2: Ostro.765899
 - name: Xatu Zero
@@ -795,6 +800,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 336, height: 336}
     owners:
       pkmnbotguy: BotMakerGuy.765140
 - name: openvgc
@@ -826,6 +832,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 96, height: 96}
     owners:
       lucaspellegrinelli: lucaspll.765230
 - name: MysteriousWind
@@ -868,7 +875,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
-    logo: awsome-battler.svg
+    logo: {file: awsome-battler.svg, width: 168, height: 168}
     owners:
       danqai: danq.ai.767218
 - name: AsterAI
@@ -901,6 +908,7 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 168, height: 168}
     owners:
       ScottehMax: Scotteh.65398
 - name: xTimeCrystal
@@ -934,5 +942,6 @@
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
   arena:
+    logo: {width: 480, height: 480}
     owners:
       nickgreenquist: AlphaStaryu.764554

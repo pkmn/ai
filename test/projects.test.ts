@@ -3,10 +3,13 @@ import * as path from 'path';
 
 import * as yaml from 'yaml';
 
+import {parseArenaProjects} from '../db';
+import {Project} from '../static/projects';
 import {root} from '../static/util';
 
 const STATIC = root('static');
-const projects = yaml.parse(fs.readFileSync(path.join(STATIC, 'projects.yml'), 'utf8'));
+const projectsYaml = fs.readFileSync(path.join(STATIC, 'projects.yml'), 'utf8');
+const projects = yaml.parse(projectsYaml) as Project[];
 
 const GITHUB = /^https:\/\/github\.com\/([^\s/]+\/[^\s/]+)\/releases\/tag\/([^\s/]+)$/;
 const NPM = /^https:\/\/www\.npmjs\.(?:org|com)\/package\/(\S+)\/v\/([^\s/]+)$/;
@@ -31,6 +34,20 @@ describe('projects', () => {
       const valid = GITHUB.test(url) || NPM.test(url) || PYPI.test(url) || CHROME.test(url);
       if (!valid) throw new Error(`Invalid URL: '${url}'`);
       expect(valid).toBe(true);
+    }
+  });
+
+  test('arena projects with logos declare positive integer dimensions', () => {
+    const avatarsDir = path.join(STATIC, 'avatars');
+    const byName = new Map(projects.filter(p => p.name).map(p => [p.name!, p]));
+    const withLogos = parseArenaProjects(projectsYaml, avatarsDir).filter(p => p.logo);
+    expect(withLogos.length).toBeGreaterThan(0);
+    for (const proj of withLogos) {
+      const logo = byName.get(proj.name)?.arena?.logo;
+      expect(typeof logo).toBe('object');
+      const dims = logo as {width: number; height: number};
+      expect(Number.isInteger(dims.width) && dims.width > 0).toBe(true);
+      expect(Number.isInteger(dims.height) && dims.height > 0).toBe(true);
     }
   });
 

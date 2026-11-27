@@ -185,9 +185,12 @@ export function parseArenaProjects(
       }
     }
 
+    const explicitLogo = typeof entry.arena.logo === 'string'
+      ? entry.arena.logo.trim()
+      : entry.arena.logo?.file?.trim();
     let logo: string | undefined;
-    if (entry.arena.logo?.trim()) {
-      logo = entry.arena.logo.trim();
+    if (explicitLogo) {
+      logo = explicitLogo;
     } else if (avatarsDir) {
       for (const ext of ['.webp', '.png']) {
         if (fs.existsSync(path.join(avatarsDir, `${slug}${ext}`))) {

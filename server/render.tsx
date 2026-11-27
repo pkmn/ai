@@ -2048,26 +2048,37 @@ function buildLadderTeamsDocument(
   };
 }
 
-const projectMetaCache = new Map<string, {mtimeMs: number; map: Map<string, ProjectMeta>}>();
+export interface LogoSize {
+  width: number;
+  height: number;
+}
 
-function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
+const projectMetaCache = new Map<
+  string,
+  {mtimeMs: number; meta: Map<string, ProjectMeta>; logoSizes: Map<string, LogoSize>}
+>();
+
+function loadProjectCatalog(
+  staticDir: string
+): {meta: Map<string, ProjectMeta>; logoSizes: Map<string, LogoSize>} {
   const file = path.join(staticDir, 'projects.yml');
   let mtimeMs: number;
   try {
     mtimeMs = fs.statSync(file).mtimeMs;
   } catch {
-    return new Map();
+    return {meta: new Map(), logoSizes: new Map()};
   }
   const hit = projectMetaCache.get(file);
-  if (hit?.mtimeMs === mtimeMs) return hit.map;
+  if (hit?.mtimeMs === mtimeMs) return {meta: hit.meta, logoSizes: hit.logoSizes};
 
-  const map = new Map<string, ProjectMeta>();
+  const meta = new Map<string, ProjectMeta>();
+  const logoSizes = new Map<string, LogoSize>();
   const parsed = yaml.parse(fs.readFileSync(file, 'utf8')) as projects.Project[] | undefined;
   if (Array.isArray(parsed)) {
     for (const p of parsed) {
       if (!p.name) continue;
       const id = p.name.replaceAll(' ', '');
-      map.set(p.name, {
+      meta.set(p.name, {
         id,
         site: p.site,
         company: p.company,
@@ -2077,10 +2088,21 @@ function loadProjectMetaMap(staticDir: string): Map<string, ProjectMeta> {
         engine: p.engine,
         language: p.language,
       });
+      const logo = p.arena?.logo;
+      if (
+        logo &&
+        typeof logo === 'object' &&
+        Number.isInteger(logo.width) &&
+        logo.width > 0 &&
+        Number.isInteger(logo.height) &&
+        logo.height > 0
+      ) {
+        logoSizes.set(p.name, {width: logo.width, height: logo.height});
+      }
     }
   }
-  projectMetaCache.set(file, {mtimeMs, map});
-  return map;
+  projectMetaCache.set(file, {mtimeMs, meta, logoSizes});
+  return {meta, logoSizes};
 }
 
 const arenaBlurbCache = new Map<string, {mtimeMs: number; html: string}>();
@@ -2103,6 +2125,7 @@ function loadArenaBlurbHtml(staticDir: string): string {
 export interface AgentLinkContext {
   publicDir: string;
   projectMeta: ReadonlyMap<string, ProjectMeta>;
+  logoSizes?: ReadonlyMap<string, LogoSize>;
   profileSlugs?: ReadonlySet<string>;
 }
 
@@ -4351,11 +4374,15 @@ export function register(app: polka.Polka, options: Options) {
 
   const renderer = build.renderer;
 
-  const getLinks = (): AgentLinkContext => ({
-    publicDir,
-    projectMeta: loadProjectMetaMap(staticDir),
-    profileSlugs: new Set(db.getAllActiveAgents().map(a => a.slug)),
-  });
+  const getLinks = (): AgentLinkContext => {
+    const {meta, logoSizes} = loadProjectCatalog(staticDir);
+    return {
+      publicDir,
+      projectMeta: meta,
+      logoSizes,
+      profileSlugs: new Set(db.getAllActiveAgents().map(a => a.slug)),
+    };
+  };
 
   const sendWithEtag = (
     req: http.IncomingMessage,
@@ -4750,7 +4777,7 @@ export function register(app: polka.Polka, options: Options) {
             ? 'public, max-age=31536000, immutable'
             : 'public, max-age=604800';
           sendWithEtag(req, res, {
-            body: logo.body,
+            body: fs.readFileSync(logo.filePath),
             contentType: logo.contentType,
             cacheControl,
           });

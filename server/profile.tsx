@@ -1818,114 +1818,21 @@ const LOGO_CONTENT_TYPES: Record<string, string> = {
   '.gif': 'image/gif',
 };
 
-const LOGO_MAX_HEIGHT = 168;
+const logoHashCache = new Map<string, {mtimeMs: number; size: number; hash: string}>();
 
-function parseSvgNumericAttr(tag: string, name: string): number | undefined {
-  const match = new RegExp(`\\b${name}\\s*=\\s*["']\\s*([0-9]+(?:\\.[0-9]+)?)(?:px)?\\s*["']`, 'i')
-    .exec(tag);
-  if (!match) return undefined;
-  const val = Number(match[1]);
-  return Number.isFinite(val) && val > 0 ? Math.round(val) : undefined;
-}
-
-export function parseImageDimensions(
-  buf: Buffer,
-  ext: string
-): {width: number; height: number} | undefined {
-  if (ext === '.png') {
-    if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return undefined;
-    const width = buf.readUInt32BE(16);
-    const height = buf.readUInt32BE(20);
-    return width > 0 && height > 0 ? {width, height} : undefined;
-  }
-  if (ext === '.gif') {
-    if (buf.length < 10 || buf.toString('ascii', 0, 4) !== 'GIF8') return undefined;
-    const width = buf.readUInt16LE(6);
-    const height = buf.readUInt16LE(8);
-    return width > 0 && height > 0 ? {width, height} : undefined;
-  }
-  if (ext === '.webp') {
-    if (
-      buf.length < 26 ||
-      buf.toString('ascii', 0, 4) !== 'RIFF' ||
-      buf.toString('ascii', 8, 12) !== 'WEBP'
-    ) {
-      return undefined;
-    }
-    const chunk = buf.toString('ascii', 12, 16);
-    if (chunk === 'VP8X' && buf.length >= 30) {
-      const width = 1 + buf.readUIntLE(24, 3);
-      const height = 1 + buf.readUIntLE(27, 3);
-      return width > 0 && height > 0 ? {width, height} : undefined;
-    }
-    if (chunk === 'VP8L' && buf.length >= 25 && buf[20] === 0x2f) {
-      const bits = buf.readUInt32LE(21);
-      const width = (bits & 0x3fff) + 1;
-      const height = ((bits >> 14) & 0x3fff) + 1;
-      return width > 0 && height > 0 ? {width, height} : undefined;
-    }
-    if (chunk === 'VP8 ' && buf.length >= 30 &&
-      buf[23] === 0x9d && buf[24] === 0x01 && buf[25] === 0x2a) {
-      const width = buf.readUInt16LE(26) & 0x3fff;
-      const height = buf.readUInt16LE(28) & 0x3fff;
-      return width > 0 && height > 0 ? {width, height} : undefined;
-    }
+function getLogoHash(filePath: string): string | undefined {
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(filePath);
+  } catch {
     return undefined;
   }
-  if (ext === '.jpg' || ext === '.jpeg') {
-    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8) return undefined;
-    let i = 2;
-    while (i + 3 < buf.length) {
-      if (buf[i] !== 0xff) {
-        i++;
-        continue;
-      }
-      while (i < buf.length && buf[i] === 0xff) i++;
-      if (i >= buf.length) break;
-      const marker = buf[i++];
-      if (marker === 0xd9 || marker === 0xda) break;
-      if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
-      if (i + 1 >= buf.length) break;
-      const segLen = buf.readUInt16BE(i);
-      if (segLen < 2 || i + segLen > buf.length) break;
-      const isSof =
-        (marker >= 0xc0 && marker <= 0xc3) ||
-        (marker >= 0xc5 && marker <= 0xc7) ||
-        (marker >= 0xc9 && marker <= 0xcb) ||
-        (marker >= 0xcd && marker <= 0xcf);
-      if (isSof && segLen >= 7) {
-        const height = buf.readUInt16BE(i + 3);
-        const width = buf.readUInt16BE(i + 5);
-        return width > 0 && height > 0 ? {width, height} : undefined;
-      }
-      i += segLen;
-    }
-    return undefined;
-  }
-  if (ext === '.svg') {
-    const head = buf.subarray(0, 4096).toString('utf8');
-    const tagMatch = /<svg\b[^>]*>/i.exec(head);
-    if (!tagMatch) return undefined;
-    const tag = tagMatch[0];
-    const explicitW = parseSvgNumericAttr(tag, 'width');
-    const explicitH = parseSvgNumericAttr(tag, 'height');
-    if (explicitW && explicitH) return {width: explicitW, height: explicitH};
-    const vbMatch = /\bviewBox\s*=\s*["']\s*([^"']+)\s*["']/i.exec(tag);
-    if (!vbMatch) return undefined;
-    const parts = vbMatch[1].trim().split(/[\s,]+/).map(Number);
-    if (parts.length !== 4 || !Number.isFinite(parts[2]) || !Number.isFinite(parts[3])) {
-      return undefined;
-    }
-    const [, , vw, vh] = parts;
-    if (vw <= 0 || vh <= 0) return undefined;
-    // Scale small viewBox-only SVGs (e.g. `0 0 100 100`) up to `LOGO_MAX_HEIGHT` so HTML
-    // `width`/`height` preserves their full CSS `max-height` size instead of shrinking them.
-    if (vh < LOGO_MAX_HEIGHT) {
-      return {width: Math.max(1, Math.round((vw * LOGO_MAX_HEIGHT) / vh)), height: LOGO_MAX_HEIGHT};
-    }
-    return {width: Math.round(vw), height: Math.round(vh)};
-  }
-  return undefined;
+  const hit = logoHashCache.get(filePath);
+  if (hit?.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.hash;
+  const hash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+    .slice(0, 8);
+  logoHashCache.set(filePath, {mtimeMs: st.mtimeMs, size: st.size, hash});
+  return hash;
 }
 
 export interface ResolvedAgentLogo {
@@ -1934,9 +1841,6 @@ export interface ResolvedAgentLogo {
   hash: string;
   href: string;
   contentType: string;
-  body: Buffer;
-  width?: number;
-  height?: number;
 }
 
 export function resolveAgentLogo(
@@ -1945,21 +1849,16 @@ export function resolveAgentLogo(
 ): ResolvedAgentLogo | undefined {
   if (!agent.logo) return undefined;
   const filePath = path.join(avatarsDir, agent.logo);
-  if (!fs.existsSync(filePath)) return undefined;
-  const body = fs.readFileSync(filePath);
+  const hash = getLogoHash(filePath);
+  if (!hash) return undefined;
   const ext = (path.extname(agent.logo) || '.png').toLowerCase();
   const fileName = `${agent.slug}${ext}`;
-  const hash = crypto.createHash('sha256').update(body).digest('hex').slice(0, 8);
-  const dims = parseImageDimensions(body, ext);
   return {
     filePath,
     fileName,
     hash,
     href: `/projects/${encodeURIComponent(fileName)}?v=${hash}`,
     contentType: LOGO_CONTENT_TYPES[ext] ?? 'application/octet-stream',
-    body,
-    width: dims?.width,
-    height: dims?.height,
   };
 }
 
@@ -2395,18 +2294,19 @@ export function renderAgentProfileHtml(opts: {
     liveTournament,
     nowSec,
   } = opts;
-  const {projectMeta} = links;
+  const {projectMeta, logoSizes} = links;
 
   const ladders = db.getAgentParticipatedLadders(agent.id);
   const resolvedLogo = resolveAgentLogo(agent, avatarsDir);
   const logoHref = resolvedLogo?.href;
+  const logoSize = logoSizes?.get(agent.name);
   const logoNode = logoHref
     ? <img
       className='project-logo'
       src={logoHref}
       alt={agent.name}
-      width={resolvedLogo.width}
-      height={resolvedLogo.height}
+      width={logoSize?.width}
+      height={logoSize?.height}
       fetchpriority='high'
       decoding='async'
     />

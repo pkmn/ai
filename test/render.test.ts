@@ -10,7 +10,6 @@ import polka from 'polka';
 import {ALL_SLOTS, Database} from '../db';
 import type * as db from '../db';
 import * as arena from '../server/arena';
-import * as profile from '../server/profile';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
@@ -809,7 +808,7 @@ describe('populated Arena leaderboard views', () => {
     );
     expect(metaProfileHtml).toContain(
       `<img class="project-logo" src="${expectedLogoHref}" alt="Metamon" ` +
-      'width="1" height="1" fetchpriority="high" decoding="async">'
+      'width="412" height="335" fetchpriority="high" decoding="async">'
     );
     expect(metaProfileHtml).toContain('UT-Austin-RPL/metamon');
     expect(metaProfileHtml).toContain('id="ver-picker" class="ver-picker"');
@@ -827,28 +826,6 @@ describe('populated Arena leaderboard views', () => {
     const athenaProfileHtml = await h.getText('/projects/athena/');
     expect(athenaProfileHtml).toContain('class="table-wrap reign hide"');
     expect(athenaProfileHtml).toContain('id="ver-picker" class="ver-picker hide"');
-  });
-
-  test('parses intrinsic dimensions for all repository project logos', () => {
-    const avatarsDir = root('static', 'avatars');
-    const files = fs.readdirSync(avatarsDir).filter(f => !f.startsWith('.'));
-    expect(files.length).toBeGreaterThan(0);
-    for (const file of files) {
-      const ext = path.extname(file).toLowerCase();
-      const dims = profile.parseImageDimensions(fs.readFileSync(path.join(avatarsDir, file)), ext);
-      expect(dims).toBeDefined();
-      expect(dims!.width).toBeGreaterThan(0);
-      expect(dims!.height).toBeGreaterThan(0);
-    }
-    expect(
-      profile.parseImageDimensions(
-        fs.readFileSync(path.join(avatarsDir, 'mewstruck.webp')),
-        '.webp'
-      )
-    ).toEqual({width: 336, height: 336});
-    expect(
-      profile.parseImageDimensions(fs.readFileSync(path.join(avatarsDir, 'magpie.svg')), '.svg')
-    ).toEqual({width: 168, height: 168});
   });
 
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {

@@ -1348,11 +1348,13 @@ describe('project ownership sync', () => {
     fs.writeFileSync(path.join(avatarsDir, 'mewstruck.webp'), 'WEBP');
     fs.writeFileSync(path.join(avatarsDir, 'mewstruck.png'), 'PNG');
     fs.writeFileSync(path.join(avatarsDir, 'mikumiku.png'), 'PNG');
+    fs.writeFileSync(path.join(avatarsDir, 'foul-play.gif'), 'GIF');
 
     const parsed = database.parseArenaProjects(`
 - name: mewstruck
   active: 2025
   arena:
+    logo: {width: 336, height: 336}
     owners:
       dev1: dev1.1001
 - name: mikumiku
@@ -1360,10 +1362,17 @@ describe('project ownership sync', () => {
   arena:
     owners:
       dev2: dev2.1002
+- name: Foul Play
+  active: 2019
+  arena:
+    logo: {file: foul-play.gif, width: 46, height: 70}
+    owners:
+      dev3: dev3.1003
 `, avatarsDir);
 
     expect(parsed.find(p => p.slug === 'mewstruck')?.logo).toBe('mewstruck.webp');
     expect(parsed.find(p => p.slug === 'mikumiku')?.logo).toBe('mikumiku.png');
+    expect(parsed.find(p => p.slug === 'foul-play')?.logo).toBe('foul-play.gif');
   });
 
   test('preserves linked GitHub or Discord OAuth IDs across YAML re-syncs', () => {

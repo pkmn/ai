@@ -142,8 +142,9 @@ Download the image to `<scratch>/register-<N>/logo.raw` and run `file` + `ls -lh
 - **SVG:**
   - Security-scan for `<script`, `on[a-z]+=`, `javascript:`, `<foreignObject`, `<image`,
     or external `http://`/`https://` links. Reject/flag if anything suspicious appears.
-  - Remember **non-`.webp`/`.png` logos MUST set `arena.logo: <slug>.svg`** in `projects.yml`
-    (auto-detection only checks `<slug>.webp` then `<slug>.png`).
+  - Record `arena.logo: {file: <slug>.svg, width: <w>, height: <h>}` in `projects.yml`
+    (non-`.webp`/`.png` logos must specify `file`; use explicit `<svg width/height>` or,
+    for `viewBox`-only SVGs, scale to `height: 168` preserving aspect ratio, e.g. `168 × 168`).
 - **Raster (PNG / WebP / JPEG / GIF):**
   - Inspect the raw image with `read_file`.
   - Check **alpha channel & dark-mode look**: logos render up to `168px` tall (wide
@@ -154,8 +155,11 @@ Download the image to `<scratch>/register-<N>/logo.raw` and run `file` + `ls -lh
     intact if needed for contrast.
   - Prefer high-quality WebP (`cwebp -q 90 -m 6 -sharp_yuv`) as `<slug>.webp` for large
     photographic/illustrative rasters, or palette-optimized PNG (`pngquant` / `optipng`)
-    as `<slug>.png` for tiny pixel-art or flat-color graphics where PNG is smaller;
-    non-`.webp`/`.png` extensions (`.gif`, `.svg`) require `arena.logo: <slug>.<ext>`.
+    as `<slug>.png` for tiny pixel-art or flat-color graphics where PNG is smaller.
+  - Always record the final image dimensions in `static/projects.yml` so `<img class="project-logo">`
+    avoids layout shift without runtime image parsing:
+    - Auto-detected `.webp`/`.png`: `arena.logo: {width: <w>, height: <h>}`
+    - Explicit extension (`.gif`, `.svg`): `arena.logo: {file: <slug>.<ext>, width: <w>, height: <h>}`
 
 ---
 
