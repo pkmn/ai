@@ -16,6 +16,14 @@ h2 svg {
   image-rendering: pixelated;
 }
 
+/* `.project-logo` sets `width: auto; height: auto;` which overrides HTML `width`/`height`
+   presentational hints before the image decodes (collapsing the box to 0×0 and causing a layout
+   shift). Computing the exact clamped width from `--logo-w`/`--logo-h` reserves the final box
+   before the image arrives across every aspect ratio and viewport. */
+.project-logo[width][height] {
+  width: min(100%, calc(var(--logo-w) * 1px), calc(min(22dvh, 168px) * var(--logo-w) / var(--logo-h)));
+}
+
 .controls-bar {
   display: flex;
   flex-wrap: wrap;

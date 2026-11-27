@@ -1756,6 +1756,64 @@ describe('mock scenarios & E2E lifecycle', () => {
           await avatarCtx.close();
         }
 
+        // Verify project profile logos reserve their exact final layout box before the image
+        // finishes downloading (zero vertical layout shift across desktop and phone viewports).
+        sseDb.db.prepare("UPDATE agents SET logo = 'metamon.webp' WHERE slug = 'metamon'").run();
+        for (const vp of [{width: 1280, height: 900}, {width: 375, height: 667}]) {
+          const logoCtx = await browser.newContext({viewport: vp});
+          try {
+            const logoPage = await logoCtx.newPage();
+            let releaseLogo: (() => void) | undefined;
+            let resolveRequested: (() => void) | undefined;
+            const logoRequested = new Promise<void>(resolve => {
+              resolveRequested = resolve;
+            });
+            await logoPage.route('**/projects/metamon.webp*', async route => {
+              resolveRequested?.();
+              await new Promise<void>(r => {
+                releaseLogo = r;
+              });
+              await route.continue();
+            });
+            await logoPage.goto(
+              `${viewBaseUrl}/projects/metamon/`,
+              {waitUntil: 'domcontentloaded'}
+            );
+            await logoRequested;
+            const pre = await logoPage.evaluate(() => {
+              const img = document.querySelector<HTMLImageElement>('img.project-logo')!;
+              const r = img.getBoundingClientRect();
+              const overviewTop = document.getElementById('overview')!.getBoundingClientRect().top;
+              return {
+                complete: img.complete,
+                w: Math.round(r.width),
+                h: Math.round(r.height),
+                overviewTop: Math.round(overviewTop),
+              };
+            });
+            expect(pre.complete).toBe(false);
+            expect(pre.w).toBeGreaterThan(0);
+            expect(pre.h).toBeGreaterThan(0);
+            releaseLogo!();
+            await logoPage.waitForFunction(() => {
+              const img = document.querySelector<HTMLImageElement>('img.project-logo');
+              return Boolean(img?.complete && img.naturalWidth > 0);
+            });
+            const post = await logoPage.evaluate(() => {
+              const r = document.querySelector('img.project-logo')!.getBoundingClientRect();
+              const overviewTop = document.getElementById('overview')!.getBoundingClientRect().top;
+              return {
+                w: Math.round(r.width),
+                h: Math.round(r.height),
+                overviewTop: Math.round(overviewTop),
+              };
+            });
+            expect(post).toEqual({w: pre.w, h: pre.h, overviewTop: pre.overviewTop});
+          } finally {
+            await logoCtx.close();
+          }
+        }
+
         await liveCtx.close();
       } finally {
         await browser.close();

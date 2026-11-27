@@ -2307,6 +2307,7 @@ export function renderAgentProfileHtml(opts: {
       alt={agent.name}
       width={logoSize?.width}
       height={logoSize?.height}
+      style={logoSize ? {'--logo-w': logoSize.width, '--logo-h': logoSize.height} : undefined}
       fetchpriority='high'
       decoding='async'
     />

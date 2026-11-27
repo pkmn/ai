@@ -808,7 +808,8 @@ describe('populated Arena leaderboard views', () => {
     );
     expect(metaProfileHtml).toContain(
       `<img class="project-logo" src="${expectedLogoHref}" alt="Metamon" ` +
-      'width="412" height="335" fetchpriority="high" decoding="async">'
+      'width="412" height="335" style="--logo-w:412;--logo-h:335" ' +
+      'fetchpriority="high" decoding="async">'
     );
     expect(metaProfileHtml).toContain('UT-Austin-RPL/metamon');
     expect(metaProfileHtml).toContain('id="ver-picker" class="ver-picker"');
