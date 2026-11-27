@@ -1391,18 +1391,20 @@ describe('Coordinator', () => {
     }
   });
 
-  test('deploy.sh waits for match.lock under deploy.lock before merging or compiling', () => {
+  test('deploy.sh waits for active locks under deploy.lock before mutating', () => {
     const script = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
     const fetchIdx = script.indexOf('git fetch origin main');
     const lockIdx = script.search(/mv -f ".*DEPLOY_LOCK.*\.tmp\.\$\$" "\$DEPLOY_LOCK"/);
-    const waitIdx = script.indexOf('while [[ -f "$MATCH_LOCK" ]]; do');
+    const matchWaitIdx = script.indexOf('if [[ -f "$MATCH_LOCK" ]]; then');
+    const maintWaitIdx = script.indexOf('if [[ -z "$BLOCKER" && -f "$MAINT_LOCK" ]]; then');
     const mergeIdx = script.indexOf('git merge --ff-only origin/main');
     const compileIdx = script.indexOf('npm run compile');
     const sigIdx = script.indexOf('launchctl kill SIGUSR1 system/ai.pkmn.arena');
     expect(fetchIdx).toBeGreaterThan(0);
     expect(lockIdx).toBeGreaterThan(fetchIdx);
-    expect(waitIdx).toBeGreaterThan(lockIdx);
-    expect(mergeIdx).toBeGreaterThan(waitIdx);
+    expect(matchWaitIdx).toBeGreaterThan(lockIdx);
+    expect(maintWaitIdx).toBeGreaterThan(matchWaitIdx);
+    expect(mergeIdx).toBeGreaterThan(maintWaitIdx);
     expect(compileIdx).toBeGreaterThan(mergeIdx);
     expect(sigIdx).toBeGreaterThan(compileIdx);
     expect(script).toContain('trap cleanup EXIT');
@@ -1410,6 +1412,20 @@ describe('Coordinator', () => {
     expect(script).toContain("trap 'exit 130' INT");
     expect(script).toContain("trap 'exit 129' HUP");
     expect(script).not.toContain('ARENA_STATE_DIR');
+  });
+
+  test('deploy.sh gates compilation on NEEDS_COMPILE including transitive Arena files', () => {
+    const script = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
+    const restartBlockStart = script.indexOf('NEEDS_RESTART=0');
+    const compileCheckIdx = script.indexOf('NEEDS_COMPILE=0');
+    const restartBlock = script.slice(restartBlockStart, compileCheckIdx);
+    expect(restartBlock).toContain('static/dom.ts');
+    expect(restartBlock).toContain('static/build.tsx');
+    expect(restartBlock).toContain('tsconfig.json');
+    const compileGateIdx = script.lastIndexOf('if [ "$NEEDS_COMPILE" -ne 0 ]; then');
+    const compileIdx = script.indexOf('npm run compile');
+    expect(compileGateIdx).toBeGreaterThan(compileCheckIdx);
+    expect(compileIdx).toBeGreaterThan(compileGateIdx);
   });
 
   test('deploy.sh recommends SIGUSR1 rather than kickstart -k after setup-arena.sh', () => {

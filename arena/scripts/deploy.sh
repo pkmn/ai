@@ -15,6 +15,7 @@ cd "$REPO_DIR"
 STATE_DIR="/opt/arena/state"
 DEPLOY_LOCK="${STATE_DIR}/deploy.lock"
 MATCH_LOCK="${STATE_DIR}/match.lock"
+MAINT_LOCK="${STATE_DIR}/maintenance.lock"
 
 pid_alive() {
     local pid="$1"
@@ -45,12 +46,19 @@ git merge-base --is-ancestor "$HEAD" origin/main
 
 NEEDS_RESTART=0
 if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" origin/main -- \
-    arena/ server/ db/ teams/ static/util.tsx package.json teams/package.json; then
+    arena/ server/ db/ teams/ static/util.tsx static/dom.ts static/build.tsx \
+    package.json teams/package.json tsconfig.json; then
     NEEDS_RESTART=1
 fi
 
-# Pause scheduling and wait for any in-flight match to finish before mutating repo/node_modules/build
-if [ "$NEEDS_RESTART" -ne 0 ]; then
+NEEDS_COMPILE=0
+if [ "$NEEDS_RESTART" -ne 0 ] || [ ! -s build/arena/index.js ]; then
+    NEEDS_COMPILE=1
+fi
+
+# Pause scheduling and wait for any in-flight match or nightly maintenance to finish before
+# mutating repo/node_modules/build.
+if [ "$NEEDS_COMPILE" -ne 0 ]; then
     mkdir -p "$STATE_DIR"
     if [[ -f "$DEPLOY_LOCK" ]]; then
         EXISTING_PID="$(cat "$DEPLOY_LOCK" 2>/dev/null || true)"
@@ -64,14 +72,30 @@ if [ "$NEEDS_RESTART" -ne 0 ]; then
 
     set +x
     WAITED=0
-    while [[ -f "$MATCH_LOCK" ]]; do
-        MATCH_PID="$(cat "$MATCH_LOCK" 2>/dev/null || true)"
-        if ! pid_alive "$MATCH_PID"; then
-            rm -f "$MATCH_LOCK"
-            break
+    while true; do
+        BLOCKER=""
+        BLOCKER_PID=""
+        if [[ -f "$MATCH_LOCK" ]]; then
+            MATCH_PID="$(cat "$MATCH_LOCK" 2>/dev/null || true)"
+            if pid_alive "$MATCH_PID"; then
+                BLOCKER="in-flight match"
+                BLOCKER_PID="$MATCH_PID"
+            else
+                rm -f "$MATCH_LOCK"
+            fi
         fi
+        if [[ -z "$BLOCKER" && -f "$MAINT_LOCK" ]]; then
+            MAINT_PID="$(cat "$MAINT_LOCK" 2>/dev/null || true)"
+            if pid_alive "$MAINT_PID"; then
+                BLOCKER="nightly maintenance"
+                BLOCKER_PID="$MAINT_PID"
+            else
+                rm -f "$MAINT_LOCK"
+            fi
+        fi
+        [[ -z "$BLOCKER" ]] && break
         if (( WAITED == 0 || WAITED % 60 == 0 )); then
-            echo "Waiting for in-flight match (PID ${MATCH_PID}) to finish before deploying..." >&2
+            echo "Waiting for ${BLOCKER} (PID ${BLOCKER_PID}) to finish before deploying..." >&2
         fi
         sleep 2
         WAITED=$((WAITED + 2))
@@ -81,12 +105,29 @@ fi
 
 git merge --ff-only origin/main
 
-# Update dependencies if package.json has changed (`npm_config_allow_git=all` for npm 12+)
-git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
-    npm_config_allow_git=all npm install --silent
+if [ "$NEEDS_COMPILE" -ne 0 ]; then
+    # Update dependencies if package.json has changed (`npm_config_allow_git=all` for npm 12+)
+    git diff --quiet "$HEAD" package.json teams/package.json >/dev/null ||
+        npm_config_allow_git=all npm install --silent
 
-# Compile TypeScript
-npm run compile
+    # Compile TypeScript
+    npm run compile
+
+    # Post-compile smoke verification with automatic rollback on failure
+    verify_arena() {
+        test -s build/arena/index.js || return 1
+        node -e "const a = require('./build/arena'); if (typeof a.runDaemon !== 'function') process.exit(1);"
+    }
+
+    if ! verify_arena; then
+        echo "Post-deploy Arena build check failed; rolling back to $HEAD" >&2
+        if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
+            git reset --hard "$HEAD"
+            npm run compile
+        fi
+        exit 1
+    fi
+fi
 
 # Ensure default pinned @pkmn/sim 0.11.0 worker directory is installed
 if [ ! -f sim/0.11.0/node_modules/@pkmn/sim/package.json ]; then
@@ -94,21 +135,6 @@ if [ ! -f sim/0.11.0/node_modules/@pkmn/sim/package.json ]; then
         --dex @pkmn/dex@0.11.0 \
         --mods @pkmn/mods@0.11.0 \
         --randoms @pkmn/randoms@0.11.0
-fi
-
-# Post-compile smoke verification with automatic rollback on failure
-verify_arena() {
-    test -s build/arena/index.js || return 1
-    node -e "const a = require('./build/arena'); if (typeof a.runDaemon !== 'function') process.exit(1);"
-}
-
-if ! verify_arena; then
-    echo "Post-deploy Arena build check failed; rolling back to $HEAD" >&2
-    if [ "$(git rev-parse HEAD)" != "$HEAD" ]; then
-        git reset --hard "$HEAD"
-        npm run compile
-    fi
-    exit 1
 fi
 
 # Refuse to restart the daemon if Mac mini privileged helpers or system configs changed or
