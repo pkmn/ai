@@ -457,10 +457,12 @@ npm run deploy:arena
 ```
 
 Runs [`arena/scripts/deploy.sh`](scripts/deploy.sh) on `arena`: verifies `--ff-only` pull from
-`origin/main`, installs deps if `package.json` changed, compiles, smoke-tests `build/arena` (auto-
-rollback on failure), and sends `SIGUSR1` to drain the current match and flush `outbox` before
-`launchd` respawns (`KeepAlive = true`, `ExitTimeOut = 900`). Mid-match restarts resume via
-`coord.recoverIncompleteMatches()` using persisted `seed` and packed teams.
+`origin/main`, acquires `/opt/arena/state/deploy.lock` and waits for any in-flight `match.lock` to
+clear before mutating the checkout/`node_modules`/`build/`, installs deps if `package.json` changed,
+compiles, smoke-tests `build/arena` (auto-rollback on failure), and sends `SIGUSR1` to flush
+`outbox` and exit before `launchd` respawns (`KeepAlive = true`, `ExitTimeOut = 900`). Mid-match
+crashes or reboots resume via `coord.recoverIncompleteMatches()` using persisted `seed` and packed
+teams.
 
 If a commit touches native/system files (`limit.c`, `bin/{arena,baseline}`, `config/*`,
 `setup-arena.sh`), `deploy.sh` refuses to restart until you re-run idempotent `setup-arena.sh`:

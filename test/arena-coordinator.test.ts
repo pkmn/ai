@@ -1357,6 +1357,61 @@ describe('Coordinator', () => {
     }
   });
 
+  test('isDeployLockActive reports live deploy.lock PID', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-deploy-lock-'));
+    try {
+      expect(arenaIndex.isDeployLockActive(stateDir)).toBe(false);
+      fs.writeFileSync(path.join(stateDir, 'deploy.lock'), `${process.pid}\n`);
+      expect(arenaIndex.isDeployLockActive(stateDir)).toBe(true);
+      expect(arenaIndex.isPauseLockActive(stateDir)).toBe(true);
+    } finally {
+      fs.rmSync(stateDir, {recursive: true, force: true});
+    }
+  });
+
+  test('isDeployLockActive clears stale deploy.lock PID', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-deploy-stale-'));
+    try {
+      fs.writeFileSync(path.join(stateDir, 'deploy.lock'), '99999999\n');
+      expect(arenaIndex.isDeployLockActive(stateDir)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, 'deploy.lock'))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, {recursive: true, force: true});
+    }
+  });
+
+  test('tryAcquireMatchLock yields without leaving match.lock when deploy.lock is active', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-deploy-dekker-'));
+    try {
+      fs.writeFileSync(path.join(stateDir, 'deploy.lock'), `${process.pid}\n`);
+      expect(arenaIndex.tryAcquireMatchLock(stateDir, process.pid)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, 'match.lock'))).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, {recursive: true, force: true});
+    }
+  });
+
+  test('deploy.sh waits for match.lock under deploy.lock before merging or compiling', () => {
+    const script = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
+    const fetchIdx = script.indexOf('git fetch origin main');
+    const lockIdx = script.search(/mv -f ".*DEPLOY_LOCK.*\.tmp\.\$\$" "\$DEPLOY_LOCK"/);
+    const waitIdx = script.indexOf('while [[ -f "$MATCH_LOCK" ]]; do');
+    const mergeIdx = script.indexOf('git merge --ff-only origin/main');
+    const compileIdx = script.indexOf('npm run compile');
+    const sigIdx = script.indexOf('launchctl kill SIGUSR1 system/ai.pkmn.arena');
+    expect(fetchIdx).toBeGreaterThan(0);
+    expect(lockIdx).toBeGreaterThan(fetchIdx);
+    expect(waitIdx).toBeGreaterThan(lockIdx);
+    expect(mergeIdx).toBeGreaterThan(waitIdx);
+    expect(compileIdx).toBeGreaterThan(mergeIdx);
+    expect(sigIdx).toBeGreaterThan(compileIdx);
+    expect(script).toContain('trap cleanup EXIT');
+    expect(script).toContain("trap 'exit 143' TERM");
+    expect(script).toContain("trap 'exit 130' INT");
+    expect(script).toContain("trap 'exit 129' HUP");
+    expect(script).not.toContain('ARENA_STATE_DIR');
+  });
+
   test('syncActivatedAgents prunes discarded staged builds while keeping outbox-pending ones',
     async () => {
       const h = createMockCoordHarness('prune-staged');

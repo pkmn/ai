@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # arena/scripts/deploy.sh
-# Pulls origin/main on the Mac mini Arena runner, compiles TypeScript, verifies the build, and
-# signals `ai.pkmn.arena` with SIGUSR1 so it drains any in-flight match before `launchd` respawns it.
+# Pulls origin/main on the Mac mini Arena runner, pauses new matches via deploy.lock while waiting
+# for any in-flight match to finish before mutating the checkout/build, compiles TypeScript, verifies
+# the build, and signals `ai.pkmn.arena` with SIGUSR1 before `launchd` respawns it.
 set -euxo pipefail
 
 export PATH="/opt/arena/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
@@ -11,12 +12,73 @@ command=${1:-reload}
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_DIR"
 
+STATE_DIR="/opt/arena/state"
+DEPLOY_LOCK="${STATE_DIR}/deploy.lock"
+MATCH_LOCK="${STATE_DIR}/match.lock"
+
+pid_alive() {
+    local pid="$1"
+    [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+}
+
+cleanup() {
+    rm -f "${DEPLOY_LOCK}.tmp.$$"
+    if [[ -f "$DEPLOY_LOCK" ]]; then
+        local owner=""
+        owner="$(cat "$DEPLOY_LOCK" 2>/dev/null || true)"
+        if [[ "$owner" == "$$" ]]; then
+            rm -f "$DEPLOY_LOCK"
+        fi
+    fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
 # Save our current commit to use for comparison and rollback
 HEAD=$(git rev-parse HEAD)
 
 # Fetch and verify fast-forward ancestor before modifying checkout
 git fetch origin main
 git merge-base --is-ancestor "$HEAD" origin/main
+
+NEEDS_RESTART=0
+if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" origin/main -- \
+    arena/ server/ db/ teams/ static/util.tsx package.json teams/package.json; then
+    NEEDS_RESTART=1
+fi
+
+# Pause scheduling and wait for any in-flight match to finish before mutating repo/node_modules/build
+if [ "$NEEDS_RESTART" -ne 0 ]; then
+    mkdir -p "$STATE_DIR"
+    if [[ -f "$DEPLOY_LOCK" ]]; then
+        EXISTING_PID="$(cat "$DEPLOY_LOCK" 2>/dev/null || true)"
+        if pid_alive "$EXISTING_PID"; then
+            echo "ERROR: Another deploy (PID ${EXISTING_PID}) is already in progress." >&2
+            exit 1
+        fi
+    fi
+    (umask 077 && printf '%s\n' "$$" > "${DEPLOY_LOCK}.tmp.$$")
+    mv -f "${DEPLOY_LOCK}.tmp.$$" "$DEPLOY_LOCK"
+
+    set +x
+    WAITED=0
+    while [[ -f "$MATCH_LOCK" ]]; do
+        MATCH_PID="$(cat "$MATCH_LOCK" 2>/dev/null || true)"
+        if ! pid_alive "$MATCH_PID"; then
+            rm -f "$MATCH_LOCK"
+            break
+        fi
+        if (( WAITED == 0 || WAITED % 60 == 0 )); then
+            echo "Waiting for in-flight match (PID ${MATCH_PID}) to finish before deploying..." >&2
+        fi
+        sleep 2
+        WAITED=$((WAITED + 2))
+    done
+    set -x
+fi
+
 git merge --ff-only origin/main
 
 # Update dependencies if package.json has changed (`npm_config_allow_git=all` for npm 12+)
@@ -85,8 +147,8 @@ if [ "$NEEDS_SETUP" -ne 0 ]; then
     exit 1
 fi
 
-# Signal the running coordinator to drain after the current match (if Arena files changed)
-if [ "${command}" = "restart" ] || ! git diff --quiet "$HEAD" arena/ server/ db/ teams/ static/util.tsx package.json teams/package.json; then
+# Signal the paused coordinator to exit and respawn via launchd (if Arena files changed)
+if [ "$NEEDS_RESTART" -ne 0 ]; then
     sudo -n /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena 2>/dev/null ||
         pkill -USR1 -u "$(id -un)" -f '/build/arena' || true
 fi

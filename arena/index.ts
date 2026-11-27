@@ -33,8 +33,8 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-export function isMaintenanceLockActive(stateDir: string): boolean {
-  const lockPath = path.join(stateDir, 'maintenance.lock');
+function isPidLockActive(stateDir: string, fileName: string): boolean {
+  const lockPath = path.join(stateDir, fileName);
   if (!fs.existsSync(lockPath)) return false;
   try {
     const raw = fs.readFileSync(lockPath, 'utf8').trim();
@@ -45,6 +45,18 @@ export function isMaintenanceLockActive(stateDir: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function isMaintenanceLockActive(stateDir: string): boolean {
+  return isPidLockActive(stateDir, 'maintenance.lock');
+}
+
+export function isDeployLockActive(stateDir: string): boolean {
+  return isPidLockActive(stateDir, 'deploy.lock');
+}
+
+export function isPauseLockActive(stateDir: string): boolean {
+  return isMaintenanceLockActive(stateDir) || isDeployLockActive(stateDir);
 }
 
 export function acquireMatchLock(stateDir: string, pid = process.pid): void {
@@ -65,13 +77,14 @@ export function releaseMatchLock(stateDir: string, pid = process.pid): void {
   } catch {}
 }
 
-// Dekker double-check against `maintenance.sh`: write `match.lock` before re-reading
-// `maintenance.lock`, matching `maintenance.sh` writing `maintenance.lock` before reading
-// `match.lock`, so archival and Arena work can never overlap on a TOCTOU window.
+// Dekker double-check against `maintenance.sh` and `deploy.sh`: write `match.lock` before
+// re-reading `maintenance.lock` / `deploy.lock`, matching those scripts writing their lock before
+// reading `match.lock`, so archival/deploy work and Arena work can never overlap on a TOCTOU
+// window.
 export function tryAcquireMatchLock(stateDir: string, pid = process.pid): boolean {
-  if (isMaintenanceLockActive(stateDir)) return false;
+  if (isPauseLockActive(stateDir)) return false;
   acquireMatchLock(stateDir, pid);
-  if (isMaintenanceLockActive(stateDir)) {
+  if (isPauseLockActive(stateDir)) {
     releaseMatchLock(stateDir, pid);
     return false;
   }
@@ -272,8 +285,8 @@ export async function runDaemon(opts: {
         }
         let ingested = 0;
         let played: unknown;
-        const shouldYieldForMaintenance = stateDir
-          ? () => isMaintenanceLockActive(stateDir)
+        const shouldYieldForPause = stateDir
+          ? () => isPauseLockActive(stateDir)
           : undefined;
         try {
           const initialSnap = await client.getPlayableLadders();
@@ -293,31 +306,31 @@ export async function runDaemon(opts: {
               stagedVersionIds !== undefined ||
               knownVersionIds !== undefined
             ) &&
-            !shouldYieldForMaintenance?.()
+            !shouldYieldForPause?.()
           ) {
             await coord.syncActivatedAgents(activatedVersionIds, {
               stagedVersionIds,
               knownVersionIds,
-              shouldYield: shouldYieldForMaintenance,
+              shouldYield: shouldYieldForPause,
             });
           }
           if (
             initialSnap.unpublishedArchivedPoolsLadders?.length &&
-            !shouldYieldForMaintenance?.()
+            !shouldYieldForPause?.()
           ) {
             await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
           }
           const byId = new Map(ladders.map(l => [l.id, l]));
           const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);
-          ingested = smokeBudget > 0 && !shouldYieldForMaintenance?.()
-            ? await coord.processPendingSubmissions(byId, smokeBudget, shouldYieldForMaintenance)
+          ingested = smokeBudget > 0 && !shouldYieldForPause?.()
+            ? await coord.processPendingSubmissions(byId, smokeBudget, shouldYieldForPause)
             : 0;
-          if (ingested > 0 && !coord.isDraining() && !shouldYieldForMaintenance?.()) {
+          if (ingested > 0 && !coord.isDraining() && !shouldYieldForPause?.()) {
             const refreshed = await client.getPlayableLadders();
             ladders = refreshed.ladders;
             quarantinedVersionIds = refreshed.quarantinedVersionIds ?? [];
           }
-          if (!shouldYieldForMaintenance?.()) {
+          if (!shouldYieldForPause?.()) {
             played = await coord.playNextScheduledMatch(ladders, quarantinedVersionIds);
             smokeCadence.recordCycle(ingested, Boolean(played));
           }
