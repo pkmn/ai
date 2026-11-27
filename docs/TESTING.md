@@ -40,7 +40,7 @@ Run [`tools/shots.tsx`](../tools/shots.tsx) whenever editing TSX views, CSS, Djo
 scripts:
 
 ```sh
-npm run shots -- --list                          # list all 7 sections and 107 scenario names
+npm run shots -- --list                          # list all 7 sections and 108 scenario names
 npm run shots -- --baseline --only ladders,battles  # snapshot only affected states before edits
 npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
 npm run shots -- --baseline && npm run shots     # full 108-state capture (for shared layout/global CSS)
@@ -71,9 +71,9 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    version & H2H filters, expanded telemetry, empty filter), provisional w/ company
    (`/projects/pokerus/`), qualified w/ 0 entries (`/projects/cynthiai/`), pending
    (`/projects/asterai/`).
-3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, restarting `#topbar` hub, RBY (`Active`/`Best`/`All`,
-   secondary `1500 ±0` anchor), VGC `pools`, RAND (`<id>-logs.tar`), `settling` season
-   (`#season-select`), `archived` season (`<id>-logs.tar`), `upcoming` ladder.
+3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, restarting `#topbar` hub,
+   RBY (`Active`/`Best`/`All`, secondary `1500 ±0` anchor), VGC `pools`, RAND (`<id>-logs.tar`),
+   `settling` season (`#season-select`), `archived` season (`<id>-logs.tar`), `upcoming` ladder.
 4. **`battles`:** Live VGC (`Initializing (/ready)`, `Team Preview` 6 HP circles, mid-battle 4
    brought, `Game 2 / 2` w/ Game 1 summary + swapped hashes), live Singles `Game 2 / 2` w/ Game 1
    `[Timeout]`, live `RAND` + Showdown viewer, expanded `RAND` & archived `VGC` replay rows
