@@ -401,7 +401,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     db,
     auth: wikiInstance.auth,
     arena: arenaHandle,
-    onSubmissionCreated: () => notifyAdminSmokeQueue(true),
+    onSubmissionChanged: () => notifyAdminSmokeQueue(true),
   });
   getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
   getLiveMatch = () => {

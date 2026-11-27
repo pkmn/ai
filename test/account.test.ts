@@ -286,6 +286,7 @@ describe('account routes', () => {
   let baseUrl: string;
   let currentNow: number;
   let wikiDirty = false;
+  let submissionChanges = 0;
   const realFetch = globalThis.fetch;
 
   beforeAll(() => {
@@ -339,6 +340,7 @@ describe('account routes', () => {
     }
 
     currentNow = 1_760_000_000;
+    submissionChanges = 0;
     const nextDb = new Database(':memory:');
     db = nextDb;
     nextDb.syncLadders();
@@ -365,6 +367,9 @@ describe('account routes', () => {
       auth: wikiInstance.auth,
       poolsByLadder: new Map([['gen9championsvgc2026regmc', [poolDir]]]),
       now: () => currentNow,
+      onSubmissionChanged: () => {
+        submissionChanges++;
+      },
     });
     wiki.register(app, wikiInstance);
 
@@ -2583,5 +2588,73 @@ describe('account routes', () => {
           })).status
         ).toBe(401);
       });
+
+    test('notifies onSubmissionChanged when a submission is created', async () => {
+      openLadders(['gen1ou20261109']);
+      const res = await postSubmission('pmariglia', {
+        version: '3.1.0',
+        url: 'https://github.com/pkmn/fp.tar.zst',
+        sha256: SHA_A,
+        ladders: ['RBY'],
+      });
+      expect(res.status).toBe(201);
+      expect(submissionChanges).toBe(1);
+    });
+
+    test('notifies onSubmissionChanged when a staged version is activated', async () => {
+      openLadders(['gen1ou20261109']);
+      const fp = db.getAgentBySlug('foul-play')!;
+      const created = db.createSubmission({
+        agentId: fp.id,
+        version: '3.2.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/fp.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      db.applySubmissionStatus({
+        versionId: created.id,
+        smokeStatus: 'staged',
+        sha256: SHA_A,
+        unpackedBytes: 1024,
+        now: currentNow + 5,
+      });
+
+      const res = await fetch(`${baseUrl}/api/account/versions/${created.id}/activate`, {
+        method: 'POST',
+        headers: {Cookie: cookieFor('pmariglia')},
+      });
+      expect(res.status).toBe(200);
+      expect(submissionChanges).toBe(1);
+    });
+
+    test('notifies onSubmissionChanged when a staged version is discarded', async () => {
+      openLadders(['gen1ou20261109']);
+      const fp = db.getAgentBySlug('foul-play')!;
+      const created = db.createSubmission({
+        agentId: fp.id,
+        version: '3.3.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/fp.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      db.applySubmissionStatus({
+        versionId: created.id,
+        smokeStatus: 'staged',
+        sha256: SHA_A,
+        unpackedBytes: 1024,
+        now: currentNow + 5,
+      });
+
+      const res = await fetch(`${baseUrl}/api/account/versions/${created.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: cookieFor('pmariglia')},
+      });
+      expect(res.status).toBe(200);
+      expect(submissionChanges).toBe(1);
+    });
   });
 });

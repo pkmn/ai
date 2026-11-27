@@ -1177,7 +1177,7 @@ export interface Options {
   poolsByLadder?: Map<string, string[]>;
   rateLimitMaxAttempts?: number;
   now?: () => number;
-  onSubmissionCreated?: () => void;
+  onSubmissionChanged?: () => void;
 }
 
 function sendHtml(res: http.ServerResponse, status: number, html: string) {
@@ -2942,6 +2942,7 @@ export function register(app: polka.Polka, options: Options) {
         agentId: session.agent.id,
         now: getNow(),
       });
+      options.onSubmissionChanged?.();
       sendJson(res, 200, {
         ok: true,
         versionId: result.version.id,
@@ -2971,6 +2972,7 @@ export function register(app: polka.Polka, options: Options) {
         versionId,
         agentId: session.agent.id,
       });
+      options.onSubmissionChanged?.();
       sendJson(res, 200, {
         ok: true,
         versionId: updated.id,
@@ -3270,7 +3272,7 @@ export function register(app: polka.Polka, options: Options) {
         teamsByLadder: Object.keys(teamsByLadder).length ? teamsByLadder : undefined,
         now,
       });
-      options.onSubmissionCreated?.();
+      options.onSubmissionChanged?.();
 
       if (
         viaApiToken ||
