@@ -1093,8 +1093,8 @@ function buildProjectMetaRows(
         <td>
           {devs.map((d, i) => [
             i > 0 && ', ',
-            <a href={`https://github.com/${encodeURIComponent(d.githubLogin)}`} className='subtle'>
-              {d.githubLogin}
+            <a href={`https://www.smogon.com/forums/members/${d.smogonId}/`} className='subtle'>
+              {d.smogonUsername}
             </a>,
           ])}
         </td>

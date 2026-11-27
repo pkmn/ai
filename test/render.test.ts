@@ -2168,6 +2168,53 @@ describe('SSR cache invalidation', () => {
     });
   });
 
+  const SMOGON_AUTHOR_PROJECTS_YAML = [
+    '- name: Smogon Linked',
+    '  active: 2026',
+    '  arena:',
+    '    owners:',
+    '      gh-alice: AliceSmogon.12345',
+    '- name: Coauthored Agent',
+    '  active: 2026',
+    '  arena:',
+    '    owners:',
+    '      gh-bob: BobSmogon.23456',
+    '      gh-carol: carol.ai.34567',
+    '',
+  ].join('\n');
+
+  test('links active /projects/:slug/ author to Smogon profile', async () => {
+    await withCompanyProjectsHarness(SMOGON_AUTHOR_PROJECTS_YAML, async h => {
+      db.setAgentLadders('smogon-linked', ALL_SLOTS, NOW);
+      const ladder = db.getLadders().find(l => l.slot === 'rby')!;
+      forceLadderActive(db, ladder.id);
+      createVersionAndPassSmoke(db, 'smogon-linked', '1.0.0', [ladder.id], DAY_1);
+
+      const html = await h.getText('/projects/smogon-linked/');
+      expect(html).toContain(
+        '<tr><td><strong>Author</strong></td>' +
+        '<td><a href="https://www.smogon.com/forums/members/12345/" class="subtle">' +
+        'AliceSmogon</a></td></tr>'
+      );
+      expect(html).not.toContain('https://github.com/gh-alice');
+    });
+  });
+
+  test('links zero-entry /projects/:slug/ co-authors to Smogon profiles', async () => {
+    await withCompanyProjectsHarness(SMOGON_AUTHOR_PROJECTS_YAML, async h => {
+      const html = await h.getText('/projects/coauthored-agent/');
+      expect(html).toContain(
+        '<tr><td><strong>Author</strong></td>' +
+        '<td><a href="https://www.smogon.com/forums/members/23456/" class="subtle">' +
+        'BobSmogon</a>, ' +
+        '<a href="https://www.smogon.com/forums/members/34567/" class="subtle">' +
+        'carol.ai</a></td></tr>'
+      );
+      expect(html).not.toContain('https://github.com/gh-bob');
+      expect(html).not.toContain('https://github.com/gh-carol');
+    });
+  });
+
   function seedInlineVgcBattleFixture() {
     forceLadderActive(db, 'gen9championsvgc2026regmc');
     const vFoul = createVersionAndPassSmoke(
