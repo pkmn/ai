@@ -3993,4 +3993,39 @@ describe('createServerApp production HTTP hardening', () => {
         await srv.close();
       }
     });
+
+  test('marks setLiveDiagnostic targetName switch within same format as transition', () => {
+    const app = polka();
+    const transitions: boolean[] = [];
+    const ctrl = arena.register(app, {
+      db,
+      arenaSecret: 'test-diagnostic-secret',
+      onDiagnosticLive: (_payload, transition) => transitions.push(transition),
+    });
+    try {
+      const base: arena.DiagnosticLivePayload = {
+        versionId: 42,
+        agentId: 1,
+        agentSlug: '0-error',
+        agentName: '0 ERROR',
+        version: '1.0.0',
+        format: 'gen9ou',
+        targetName: 'Tournament #1: Gen 9 OU',
+        phase: 'battle',
+        turn: 1,
+        turnStartedAt: 1_760_000_000,
+        turnBudgetSeconds: 150,
+        incrementSeconds: 15,
+        p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+        p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+        lines: ['|turn|1'],
+      };
+      ctrl.setLiveDiagnostic(base);
+      ctrl.setLiveDiagnostic({...base, turn: 2});
+      ctrl.setLiveDiagnostic({...base, targetName: 'Tournament #2: Gen 9 OU', turn: 1});
+      expect(transitions).toEqual([true, false, true]);
+    } finally {
+      ctrl.close();
+    }
+  });
 });

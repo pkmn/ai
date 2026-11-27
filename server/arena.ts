@@ -2018,6 +2018,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const transition =
       existing?.versionId !== payload.versionId ||
       existing.format !== payload.format ||
+      existing.targetName !== payload.targetName ||
       existing.phase !== payload.phase;
     const startedAt = payload.startedAt ??
       (existing?.versionId === payload.versionId ? existing.startedAt : nowSec);
