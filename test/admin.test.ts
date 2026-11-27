@@ -258,6 +258,24 @@ describe('/admin dashboard & API', () => {
     expect(j1.agents.map(a => a.agent.slug)).toEqual(['0-error', 'foul-play', 'newcomer']);
   });
 
+  test('shows eligible project count in /admin Entrants hovertext', async () => {
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).text();
+    expect(html).toContain('title="0 settled of 0 active entries (2 eligible)"');
+    expect(html).toContain('title="0 settled of 0 active entries (1 eligible)"');
+    expect(html).not.toMatch(/\(min \d+ projects\)/);
+
+    db.db.prepare("UPDATE developers SET smogon_standing = 'bad' WHERE github_login = 'pmariglia'")
+      .run();
+    const afterBadSmogon = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: cookieFor('scheibo')},
+    })).text();
+    expect(afterBadSmogon).not.toContain('title="0 settled of 0 active entries (2 eligible)"');
+    expect(afterBadSmogon).toContain('title="0 settled of 0 active entries (1 eligible)"');
+    expect(afterBadSmogon).toContain('title="0 settled of 0 active entries (0 eligible)"');
+  });
+
   test('toggles per-ladder eligibility via admin API', async () => {
     const enableRes = await fetch(`${baseUrl}/api/admin/agents/newcomer/ladders`, {
       method: 'POST',

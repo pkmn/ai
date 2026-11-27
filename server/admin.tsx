@@ -1759,6 +1759,7 @@ export function buildAdminSnapshot(
     ladder,
     summary: ladderSummaries.get(ladder.id) ?? {
       ladderId: ladder.id,
+      eligibleAgents: 0,
       activeAgents: 0,
       activeEntries: 0,
       unsettledEntries: 0,
@@ -1901,7 +1902,7 @@ function renderLaddersSection(
                     className='num'
                     title={
                       `${settled} settled of ${total} active entries ` +
-                      `(min ${ladder.min} projects)`
+                      `(${summary.eligibleAgents} eligible)`
                     }
                   >
                     {settled}/{total}

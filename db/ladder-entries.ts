@@ -1710,6 +1710,7 @@ export function getAdminEntriesByAgent(db: DatabaseSync): Map<number, AdminEntry
 
 export interface LadderAdminSummary {
   ladderId: string;
+  eligibleAgents: number;
   activeAgents: number;
   activeEntries: number;
   unsettledEntries: number;
@@ -1817,16 +1818,30 @@ export function getLadderAdminSummaries(
   `).all() as Array<{ladder_id: string; locked_pools: number; saved_pools: number}>;
   const poolsByLadder = new Map(poolRows.map(r => [r.ladder_id, r]));
 
-  const ladders = db.prepare("SELECT id FROM ladders WHERE status != 'archived'")
-    .all() as Array<{id: string}>;
+  const eligibleRows = db.prepare(`
+    SELECT al.slot, COUNT(DISTINCT al.agent_id) AS count
+    FROM agent_ladders al
+    JOIN agents a ON a.id = al.agent_id
+    WHERE a.status != 'disabled'
+      AND NOT EXISTS (
+        SELECT 1 FROM developers d
+        WHERE d.agent_id = a.id AND d.smogon_standing = 'bad'
+      )
+    GROUP BY al.slot
+  `).all() as Array<{slot: LadderSlot; count: number}>;
+  const eligibleBySlot = new Map(eligibleRows.map(r => [r.slot, r.count]));
+
+  const ladders = db.prepare("SELECT id, slot FROM ladders WHERE status != 'archived'")
+    .all() as Array<{id: string; slot: LadderSlot}>;
   const entriesByLadder = new Map(entryRows.map(r => [r.ladder_id, r]));
   const out = new Map<string, LadderAdminSummary>();
 
-  for (const {id} of ladders) {
+  for (const {id, slot} of ladders) {
     const e = entriesByLadder.get(id);
     const p = poolsByLadder.get(id);
     out.set(id, {
       ladderId: id,
+      eligibleAgents: eligibleBySlot.get(slot) ?? 0,
       activeAgents: e?.active_agents ?? 0,
       activeEntries: e?.active_entries ?? 0,
       unsettledEntries: e?.unsettled_entries ?? 0,
