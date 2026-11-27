@@ -3283,6 +3283,7 @@ export function renderTournamentPage(opts: {
   staticDir?: string;
   tournamentBroadcast?: arena.LiveBroadcast;
   liveTournament?: {id: string; name: string};
+  arenaRestarting?: boolean;
   nowSec?: number;
 }): {html: string; json: arena.TournamentDocument} {
   const {
@@ -3293,6 +3294,7 @@ export function renderTournamentPage(opts: {
     staticDir = util.root('static'),
     tournamentBroadcast,
     liveTournament,
+    arenaRestarting,
     nowSec = Math.floor(Date.now() / 1000),
   } = opts;
   const {publicDir} = links;
@@ -3479,7 +3481,8 @@ export function renderTournamentPage(opts: {
 
   const pageHeader = injectLiveBanner(
     header(<a href='/arena/' className='subtle'>Tournaments</a>),
-    liveTournament ?? db.getRunningTournament()
+    liveTournament ?? db.getRunningTournament(),
+    arenaRestarting
   );
   const html = renderer.render({
     id: 'tournaments',

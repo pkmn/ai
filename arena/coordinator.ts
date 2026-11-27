@@ -182,6 +182,7 @@ export interface Options {
   maxTurns?: number;
   getSystemInfo?: () =>
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
+  isRestarting?: () => boolean;
   diagnosticWallCapMillis?: number;
 }
 
@@ -245,6 +246,7 @@ export class Coordinator {
   private readonly maxTurns?: number;
   private readonly getSystemInfo?: () =>
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
+  private readonly isRestarting?: () => boolean;
   private readonly diagnosticWallCapMillis?: number;
   private readonly versionByLadderId = new Map<string, string>();
   private readonly teamModeByLadderId = new Map<string, db.TeamMode>();
@@ -268,6 +270,7 @@ export class Coordinator {
     this.dirs = options.rootDir ? packages.dirsForRoot(options.rootDir) : packages.PROD_DIRS;
     this.maxTurns = options.maxTurns;
     this.getSystemInfo = options.getSystemInfo;
+    this.isRestarting = options.isRestarting;
     this.diagnosticWallCapMillis = options.diagnosticWallCapMillis;
   }
 
@@ -665,6 +668,7 @@ export class Coordinator {
       const sysInfo = await this.getSystemInfo?.();
       await this.client.sendHeartbeat({
         idle: true,
+        ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
         ...(sysInfo ? {system: sysInfo} : {}),
       }).catch(() => undefined);
       processed++;
@@ -1447,6 +1451,7 @@ export class Coordinator {
         }
         : {}),
       ...(frame.winHistory && frame.winHistory.length > 0 ? {winHistory: frame.winHistory} : {}),
+      ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
       ...(sysInfo ? {system: sysInfo} : {}),
     }).catch(() => undefined);
   }

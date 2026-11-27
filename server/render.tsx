@@ -1746,12 +1746,37 @@ function buildBattlesScript(
       }
     }, 1000);
 
+    const restartBannerText = ${safeInlineJson(build.ARENA_RESTART_BANNER_TEXT)};
+    const syncRestartBanner = () => {
+      const show = Boolean(
+        state && state.restarting && !state.stale &&
+        !(state.runningTournament && state.runningTournament.id)
+      );
+      const existing = document.getElementById('topbar');
+      if (show) {
+        if (!existing) {
+          const hdr = document.querySelector('header');
+          if (hdr) {
+            const bar = document.createElement('div');
+            bar.id = 'topbar';
+            bar.className = 'restarting';
+            bar.textContent = restartBannerText;
+            hdr.insertBefore(bar, hdr.firstChild);
+          }
+        }
+      } else if (existing && existing.classList.contains('restarting')) {
+        existing.remove();
+      }
+    };
+
     const liveKey = doc => {
       const tourId = (doc && doc.runningTournament && doc.runningTournament.id) || '';
+      const restarting = Boolean(doc && doc.restarting);
       if (doc && doc.live && !doc.stale) {
-        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' + tourId;
+        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' +
+          restarting + ':' + tourId;
       }
-      return 'idle:' + Boolean(doc && doc.stale) + ':' + tourId;
+      return 'idle:' + Boolean(doc && doc.stale) + ':' + restarting + ':' + tourId;
     };
 
     const applySnapshot = next => {
@@ -1760,6 +1785,7 @@ function buildBattlesScript(
       const prevKey = liveKey(state);
       const nextKey = liveKey(next);
       state = next;
+      syncRestartBanner();
       if (prevKey !== nextKey) {
         renderLive(nowSec);
       }
@@ -1785,8 +1811,10 @@ function buildBattlesScript(
           const nowSec = Math.floor(Date.now() / 1000);
           state.updatedAt = data.updatedAt || nowSec;
           state.stale = Boolean(data.stale);
+          state.restarting = !state.stale && Boolean(data.restarting);
           state.live = state.stale ? undefined : data.live;
           state.runningTournament = data.runningTournament;
+          syncRestartBanner();
           renderLive(nowSec);
         } catch {}
       });
@@ -1796,10 +1824,12 @@ function buildBattlesScript(
           const nowSec = Math.floor(Date.now() / 1000);
           state.updatedAt = data.updatedAt || nowSec;
           state.stale = Boolean(data.stale);
+          state.restarting = !state.stale && Boolean(data.restarting);
           state.live = state.stale ? undefined : data.live;
           state.runningTournament = data.runningTournament;
           if (data.totalMatches !== undefined) state.totalMatches = data.totalMatches;
           if (data.countsBySlot) state.countsBySlot = data.countsBySlot;
+          syncRestartBanner();
           renderLive(nowSec);
           if (data.match) {
             prependMatchIfVisible(data.match, nowSec);
@@ -2809,6 +2839,7 @@ function renderLadderHtml(opts: {
   db: db.Database;
   renderer: build.Renderer;
   links: AgentLinkContext;
+  restarting?: boolean;
   nowSec: number;
 }): string {
   const {
@@ -2819,6 +2850,7 @@ function renderLadderHtml(opts: {
     db,
     renderer,
     links,
+    restarting,
     nowSec,
   } = opts;
   const {publicDir, projectMeta} = links;
@@ -3149,7 +3181,8 @@ function renderLadderHtml(opts: {
   const liveTournament = db.getRunningTournament();
   const ladderHeader = build.injectLiveBanner(
     build.header(<a href='/arena/' className='subtle'>Ladders</a>),
-    liveTournament
+    liveTournament,
+    restarting
   );
   return renderer.render({
     id: 'leaderboard',
@@ -3264,9 +3297,10 @@ function renderArenaHubHtml(opts: {
   links: AgentLinkContext;
   staticDir: string;
   liveMatch?: arena.LiveMatch;
+  restarting?: boolean;
   nowSec: number;
 }): string {
-  const {db, renderer, links, staticDir, liveMatch, nowSec} = opts;
+  const {db, renderer, links, staticDir, liveMatch, restarting, nowSec} = opts;
   const ladders = db.getCurrentLadders();
   const allLadders = db.getLadders();
   const pastLadders = getSortedPastLadders(allLadders);
@@ -3479,7 +3513,7 @@ function renderArenaHubHtml(opts: {
   return renderer.render({
     id: 'arena',
     title: 'Arena | pkmn.ai',
-    header: build.injectLiveBanner(build.header('Arena'), db.getRunningTournament()),
+    header: build.injectLiveBanner(build.header('Arena'), db.getRunningTournament(), restarting),
     path: '/arena/',
     style: ARENA_STYLE,
     content: arenaContent,
@@ -4252,7 +4286,8 @@ function renderBattlesPage(opts: {
     title: 'Arena — Battles | pkmn.ai',
     header: build.injectLiveBanner(
       build.header(<a href='/arena/' className='subtle'>Battles</a>),
-      db.getRunningTournament()
+      db.getRunningTournament(),
+      Boolean(liveDoc && !liveDoc.stale && liveDoc.restarting)
     ),
     path: '/arena/battles/',
     style: ARENA_STYLE,
@@ -4414,6 +4449,7 @@ export function register(app: polka.Polka, options: Options) {
         links: getLinks(),
         staticDir,
         liveMatch: !state.stale ? state.live : undefined,
+        restarting: !state.stale && state.restarting,
         nowSec,
       }),
       contentType: 'text/html; charset=utf-8',
@@ -4497,6 +4533,7 @@ export function register(app: polka.Polka, options: Options) {
       });
       return;
     }
+    const state = arenaHandle.getState();
     sendWithEtag(req, res, {
       body: renderLadderHtml({
         ladder,
@@ -4506,6 +4543,7 @@ export function register(app: polka.Polka, options: Options) {
         db,
         renderer,
         links: getLinks(),
+        restarting: !state.stale && state.restarting,
         nowSec: getNowSec(),
       }),
       contentType: 'text/html; charset=utf-8',
@@ -4611,6 +4649,7 @@ export function register(app: polka.Polka, options: Options) {
       });
       return;
     }
+    const state = arenaHandle.getState();
     sendWithEtag(req, res, {
       body: tournaments.renderTournamentPage({
         db,
@@ -4620,6 +4659,7 @@ export function register(app: polka.Polka, options: Options) {
         staticDir,
         tournamentBroadcast: arenaHandle.getTournamentBroadcast(tournament.id),
         liveTournament: db.getRunningTournament(),
+        arenaRestarting: !state.stale && state.restarting,
         nowSec: getNowSec(),
       }).html,
       contentType: 'text/html; charset=utf-8',

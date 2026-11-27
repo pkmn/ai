@@ -43,7 +43,7 @@ scripts:
 npm run shots -- --list                          # list all 7 sections and 107 scenario names
 npm run shots -- --baseline --only ladders,battles  # snapshot only affected states before edits
 npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
-npm run shots -- --baseline && npm run shots     # full 107-state capture (for shared layout/global CSS)
+npm run shots -- --baseline && npm run shots     # full 108-state capture (for shared layout/global CSS)
 open .shots/index.html                           # inspect Visual Atlas
 npm run clean && npm test                        # remove mock artifacts from public/ afterward
 ```
@@ -62,7 +62,7 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
   is strict `0`-pixel outside viewers (unless `--tolerance` is passed) and tolerates up to `25%`
   sprite/animation variance inside unchanged viewer frames.
 
-**7 Atlas Sections (107 states):**
+**7 Atlas Sections (108 states):**
 1. **`static`:** Home (normal, signed-out default profile icon, manual Light/Dark theme overrides,
    and `● LIVE` `#topbar`), Background (`Under Construction`), Concepts + 5 subpages (`baselines`,
    `complexity`, `engines`, `protocol`, `variants`), Glossary, Release, Research, Arena Rules,
@@ -71,7 +71,7 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    version & H2H filters, expanded telemetry, empty filter), provisional w/ company
    (`/projects/pokerus/`), qualified w/ 0 entries (`/projects/cynthiai/`), pending
    (`/projects/asterai/`).
-3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, RBY (`Active`/`Best`/`All`,
+3. **`ladders`:** Active hub, expandable past seasons, pre-launch hub, restarting `#topbar` hub, RBY (`Active`/`Best`/`All`,
    secondary `1500 ±0` anchor), VGC `pools`, RAND (`<id>-logs.tar`), `settling` season
    (`#season-select`), `archived` season (`<id>-logs.tar`), `upcoming` ladder.
 4. **`battles`:** Live VGC (`Initializing (/ready)`, `Team Preview` 6 HP circles, mid-battle 4

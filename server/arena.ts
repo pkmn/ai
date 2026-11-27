@@ -217,6 +217,7 @@ export interface BattleHistoryEntry extends Omit<db.RecentMatchView, 'games'> {
 export interface LiveDocument {
   updatedAt: number;
   stale: boolean;
+  restarting?: boolean;
   live?: LiveMatch;
   runningTournament?: {id: string; name: string; href: string};
   pageSize?: number;
@@ -983,7 +984,12 @@ export type DiagnosticLivePayload =
 export interface Handle {
   close: () => void;
   getLiveDocument: (nowSeconds?: number) => LiveDocument;
-  setLiveState: (state: {live?: LiveMatchInput; stale?: boolean; updatedAt?: number}) => void;
+  setLiveState: (state: {
+    live?: LiveMatchInput;
+    stale?: boolean;
+    restarting?: boolean;
+    updatedAt?: number;
+  }) => void;
   setArenaSystem: (info?: system.ArenaSystemInfo, at?: number) => void;
   getTournamentBroadcast: (tournamentId?: string) => LiveBroadcast | undefined;
   getActiveTournamentGames: () => LiveTournamentGame[];
@@ -1003,6 +1009,7 @@ export interface Handle {
     sseViewers: {battles: number; tournaments: number};
     watchdogTriggered: boolean;
     stale: boolean;
+    restarting: boolean;
     live?: LiveMatch;
   };
 }
@@ -1076,8 +1083,8 @@ export interface SubmissionStatusResponse {
 }
 
 export type HeartbeatPayload = (
-  (LiveMatchInput & {system?: system.ArenaSystemInfo}) |
-  {idle: true; system?: system.ArenaSystemInfo}
+  (LiveMatchInput & {system?: system.ArenaSystemInfo; restarting?: boolean}) |
+  {idle: true; system?: system.ArenaSystemInfo; restarting?: boolean}
 );
 
 export interface HeartbeatResponse {
@@ -1925,6 +1932,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   let currentLive: LiveMatch | undefined;
   let liveUpdatedAt: number | undefined;
   let liveStale = false;
+  let liveRestarting = false;
   let lastSeenAt: number | undefined;
   let lastContactAt: number | undefined;
   let lastHeartbeatAt: number | undefined;
@@ -2083,6 +2091,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     return {
       updatedAt: liveUpdatedAt ?? recentMatches[0]?.completedAt ?? 0,
       stale: liveStale,
+      ...(liveRestarting && !liveStale ? {restarting: true} : {}),
       live: liveStale ? undefined : currentLive,
       runningTournament: getRunningTournamentInfo(),
       pageSize: RECENT_MATCHES_LIMIT,
@@ -2135,6 +2144,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       const stalledMatchId = currentLive?.matchId ?? lastMatchId;
       currentLive = undefined;
       liveStale = true;
+      liveRestarting = false;
       liveUpdatedAt = getNowSec();
       pushBattleEvent('live', {
         updatedAt: liveUpdatedAt,
@@ -2441,11 +2451,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       if ('idle' in body && body.idle === true) {
         currentLive = undefined;
         liveStale = false;
+        liveRestarting = Boolean(body.restarting);
         liveUpdatedAt = nowSec;
         armWatchdog(nowSec);
         pushBattleEvent('live', {
           updatedAt: nowSec,
           stale: false,
+          ...(liveRestarting ? {restarting: true} : {}),
           runningTournament: getRunningTournamentInfo(),
         });
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem});
@@ -2453,8 +2465,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      const frame = {...body} as LiveMatchInput & {system?: unknown};
+      const frame = {...body} as LiveMatchInput & {system?: unknown; restarting?: unknown};
       delete frame.system;
+      delete frame.restarting;
       if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
@@ -2483,12 +2496,14 @@ export function register(app: polka.Polka, options: Options): Handle {
       );
       lastMatchId = frame.matchId;
       liveStale = false;
+      liveRestarting = Boolean(body.restarting);
       liveUpdatedAt = nowSec;
 
       armWatchdog(nowSec);
       pushBattleEvent('live', {
         updatedAt: nowSec,
         stale: false,
+        ...(liveRestarting ? {restarting: true} : {}),
         live: currentLive,
         runningTournament: getRunningTournamentInfo(),
       });
@@ -2578,6 +2593,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         pushBattleEvent('match', {
           updatedAt: nowSec,
           stale: false,
+          ...(liveRestarting ? {restarting: true} : {}),
           live: currentLive,
           runningTournament: getRunningTournamentInfo(),
           match: saved ? enrichMatchView(publicDir, saved) : undefined,
@@ -2591,6 +2607,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         pushBattleEvent('live', {
           updatedAt: nowSec,
           stale: false,
+          ...(liveRestarting ? {restarting: true} : {}),
           live: currentLive,
           runningTournament: getRunningTournamentInfo(),
         });
@@ -2636,6 +2653,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           pushBattleEvent('live', {
             updatedAt: nowSec,
             stale: liveStale,
+            ...(liveRestarting && !liveStale ? {restarting: true} : {}),
             live: liveStale ? undefined : currentLive,
             runningTournament: getRunningTournamentInfo(),
           });
@@ -2974,6 +2992,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         pushBattleEvent('live', {
           updatedAt: getNowSec(),
           stale: liveStale,
+          ...(liveRestarting && !liveStale ? {restarting: true} : {}),
           live: liveStale ? undefined : currentLive,
           runningTournament: getRunningTournamentInfo(),
         });
@@ -3452,10 +3471,12 @@ export function register(app: polka.Polka, options: Options): Handle {
     setLiveState: state => {
       currentLive = state.live ? sanitizeLiveMatch(state.live, true) : undefined;
       liveStale = state.stale ?? false;
+      liveRestarting = state.restarting ?? false;
       liveUpdatedAt = state.updatedAt ?? getNowSec();
       pushBattleEvent('live', {
         updatedAt: liveUpdatedAt,
         stale: liveStale,
+        ...(liveRestarting && !liveStale ? {restarting: true} : {}),
         live: liveStale ? undefined : currentLive,
         runningTournament: getRunningTournamentInfo(),
       });
@@ -3523,6 +3544,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         },
         watchdogTriggered,
         stale: liveStale,
+        restarting: liveRestarting,
         live: currentLive,
       };
     },

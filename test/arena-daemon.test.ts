@@ -688,6 +688,37 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
       }, 50);
       await daemonPromise;
       expect(Date.now() - start).toBeLessThan(2000);
+      const live = await (await fetch(`${serverUrl}/api/live.json`)).json() as {
+        restarting?: boolean;
+      };
+      expect(live.restarting).toBe(true);
+    });
+  });
+
+  test('runDaemon reports restarting heartbeat while deploy.lock is active', async () => {
+    await withRealArenaServer(tmpDir, 'deploy-hb', async ({serverUrl, secret}) => {
+      const stateDir = path.join(tmpDir, 'deploy-hb-state');
+      fs.mkdirSync(stateDir, {recursive: true});
+      fs.writeFileSync(path.join(stateDir, 'deploy.lock'), `${process.pid}\n`);
+      const daemonPromise = arenaIndex.runDaemon({
+        serverUrl,
+        arenaSecret: secret,
+        stateDbPath: path.join(stateDir, 'arena.sqlite'),
+        rootDir: path.join(tmpDir, 'deploy-hb-root'),
+        pollIntervalMillis: 60_000,
+      });
+      const deadline = Date.now() + 3000;
+      let restarting = false;
+      while (!restarting && Date.now() < deadline) {
+        const live = await (await fetch(`${serverUrl}/api/live.json`)).json() as {
+          restarting?: boolean;
+        };
+        restarting = Boolean(live.restarting);
+        if (!restarting) await new Promise(resolve => setTimeout(resolve, 15));
+      }
+      expect(restarting).toBe(true);
+      process.emit('SIGUSR1');
+      await daemonPromise;
     });
   });
 

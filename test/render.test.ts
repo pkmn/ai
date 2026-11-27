@@ -198,6 +198,40 @@ interface RenderHarnessOptions {
 }
 
 type RenderHarness = Awaited<ReturnType<typeof startRenderHarness>>;
+type RequestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => void;
+
+// Reuse a single listening TCP socket across sequential `startRenderHarness` calls so rapid
+// ephemeral-port churn + `closeAllConnections()` never trips macOS loopback TIME_WAIT ETIMEDOUT.
+let sharedServer: http.Server | undefined;
+let sharedBaseUrl: string | undefined;
+let sharedHandler: RequestHandler | undefined;
+
+async function ensureSharedServer(): Promise<string> {
+  if (sharedServer && sharedBaseUrl) return sharedBaseUrl;
+  sharedServer = http.createServer((req, res) => {
+    if (!sharedHandler) {
+      res.statusCode = 503;
+      res.end('No active test handler');
+      return;
+    }
+    sharedHandler(req, res);
+  });
+  await new Promise<void>(resolve => sharedServer!.listen(0, '127.0.0.1', resolve));
+  const port = (sharedServer.address() as {port: number}).port;
+  sharedBaseUrl = `http://127.0.0.1:${port}`;
+  return sharedBaseUrl;
+}
+
+afterAll(async () => {
+  if (!sharedServer) return;
+  const srv = sharedServer;
+  sharedServer = undefined;
+  sharedBaseUrl = undefined;
+  sharedHandler = undefined;
+  const closed = new Promise<void>(resolve => srv.close(() => resolve()));
+  srv.closeAllConnections();
+  await closed;
+});
 
 async function startRenderHarness(opts: RenderHarnessOptions) {
   const nowOpt = opts.now;
@@ -241,12 +275,20 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     now: getNow,
   });
 
-  const server = http.createServer((req, res) => {
+  const handler: RequestHandler = (req, res) => {
     void app.handler(req as polka.Request, res);
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = (server.address() as {port: number}).port;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  };
+  let baseUrl: string;
+  let dedicatedServer: http.Server | undefined;
+  if (!sharedHandler) {
+    sharedHandler = handler;
+    baseUrl = await ensureSharedServer();
+  } else {
+    dedicatedServer = http.createServer(handler);
+    await new Promise<void>(resolve => dedicatedServer!.listen(0, '127.0.0.1', resolve));
+    const port = (dedicatedServer.address() as {port: number}).port;
+    baseUrl = `http://127.0.0.1:${port}`;
+  }
 
   return {
     baseUrl,
@@ -264,9 +306,13 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     },
     close: async () => {
       arenaHandle.close();
-      const closed = new Promise<void>(resolve => server.close(() => resolve()));
-      server.closeAllConnections();
-      await closed;
+      if (dedicatedServer) {
+        const closed = new Promise<void>(resolve => dedicatedServer.close(() => resolve()));
+        dedicatedServer.closeAllConnections();
+        await closed;
+      } else if (sharedHandler === handler) {
+        sharedHandler = undefined;
+      }
     },
   };
 }
@@ -4289,6 +4335,103 @@ describe('JSON route parity & retired pool archives', () => {
       expect(profileHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
       expect(profileHtml).toContain('<code><strong>1.0.0</strong></code>');
       expect(profileHtml).toContain('<td><code>1.0.0</code></td>');
+    } finally {
+      arenaHandle.close();
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      testDb.close();
+    }
+  });
+
+  test('renders restarting banner across all /arena/* pages only', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    const app = polka();
+    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
+    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
+    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    try {
+      testDb.syncLadders(undefined, 1_760_000_000);
+      testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+      testDb.upsertTournament({
+        id: '1',
+        name: 'Winter Cup',
+        format: 'gen9vgc2026regf',
+        version: '0.11.0',
+        gamesPerMatchup: 10,
+        parallelTables: 1,
+        hardware: '1x L4',
+        startsAt: 1_760_100_000,
+      });
+
+      const hbRes = await fetch(`${base}/api/arena/heartbeat`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-render-secret',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({idle: true, restarting: true}),
+      });
+      expect(hbRes.status).toBe(200);
+      expect(arenaHandle.getState().restarting).toBe(true);
+
+      const bannerTag = '<div id="topbar" class="restarting">';
+      const arenaRoutes = [
+        '/arena/',
+        '/arena/ladders/rby/',
+        '/arena/battles/',
+        '/arena/tournaments/1/',
+      ];
+      for (const route of arenaRoutes) {
+        const html = await (await fetch(`${base}${route}`)).text();
+        expect(html).toContain(bannerTag);
+      }
+
+      const projectsHtml = await (await fetch(`${base}/projects/`)).text();
+      expect(projectsHtml).not.toContain(bannerTag);
+
+      const liveJson = await (await fetch(`${base}/api/live.json`)).json() as {
+        restarting?: boolean;
+      };
+      expect(liveJson.restarting).toBe(true);
+    } finally {
+      arenaHandle.close();
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      testDb.close();
+    }
+  });
+
+  test('clears restarting banner on normal heartbeat or stale state', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    const app = polka();
+    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
+    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
+    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    try {
+      testDb.syncLadders(undefined, 1_760_000_000);
+      arenaHandle.setLiveState({restarting: true, stale: true, updatedAt: 1_760_000_050});
+      const staleHtml = await (await fetch(`${base}/arena/`)).text();
+      expect(staleHtml).not.toContain('class="restarting"');
+
+      arenaHandle.setLiveState({restarting: true, stale: false, updatedAt: 1_760_000_050});
+      const activeHtml = await (await fetch(`${base}/arena/`)).text();
+      expect(activeHtml).toContain('class="restarting"');
+
+      await fetch(`${base}/api/arena/heartbeat`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-render-secret',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({idle: true}),
+      });
+      expect(arenaHandle.getState().restarting).toBe(false);
+      const clearedHtml = await (await fetch(`${base}/arena/`)).text();
+      expect(clearedHtml).not.toContain('class="restarting"');
     } finally {
       arenaHandle.close();
       srv.closeAllConnections();

@@ -24,6 +24,10 @@
   background-color: black;
 }
 
+#topbar.restarting {
+  background-color: #8a5a00;
+}
+
 #topbar a {
   font-style: normal;
 }

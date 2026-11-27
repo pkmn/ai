@@ -231,6 +231,7 @@ export async function runDaemon(opts: {
     });
   }
 
+  const stateDir = stateDb.dbPath !== ':memory:' ? path.dirname(stateDb.dbPath) : undefined;
   const coord = new coordinator.Coordinator({
     client,
     stateDb,
@@ -239,9 +240,9 @@ export async function runDaemon(opts: {
     maxTurns: opts.maxTurns,
     devMode: isDev,
     getSystemInfo: hostMonitor ? () => hostMonitor.takePendingSnapshot() : undefined,
+    isRestarting: stateDir ? () => isDeployLockActive(stateDir) : undefined,
   });
 
-  const stateDir = stateDb.dbPath !== ':memory:' ? path.dirname(stateDb.dbPath) : undefined;
   const pollIntervalMillis = opts.pollIntervalMillis ?? 5000;
   const sleeper = createWakeableSleep();
   const stop = () => {
@@ -276,6 +277,7 @@ export async function runDaemon(opts: {
             const sysInfo = await hostMonitor?.takePendingSnapshot();
             await client.sendHeartbeat({
               idle: true,
+              ...(isDeployLockActive(stateDir) ? {restarting: true} : {}),
               ...(sysInfo ? {system: sysInfo} : {}),
             }).catch(() => undefined);
             await sleeper.sleep(pollIntervalMillis);
@@ -343,6 +345,7 @@ export async function runDaemon(opts: {
           const sysInfo = await hostMonitor?.takePendingSnapshot();
           await client.sendHeartbeat({
             idle: true,
+            ...(stateDir && isDeployLockActive(stateDir) ? {restarting: true} : {}),
             ...(sysInfo ? {system: sysInfo} : {}),
           }).catch(() => undefined);
           await sleeper.sleep(pollIntervalMillis);
@@ -367,6 +370,9 @@ export async function runDaemon(opts: {
         }
       }
       if (opts.once) break;
+    }
+    if (coord.isDraining() && !opts.once) {
+      await client.sendHeartbeat({idle: true, restarting: true}).catch(() => undefined);
     }
     await coord.flushOutbox().catch(() => undefined);
   } finally {

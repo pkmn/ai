@@ -243,6 +243,9 @@ export const TOP_CONTROLS = String(
   </div>
 );
 
+export const ARENA_RESTART_BANNER_TEXT =
+  'Arena is restarting — match scheduling will resume shortly';
+
 export function formatLiveTournamentBanner(tournament?: {id: string; name: string}): string {
   if (!tournament) return '';
   const href = `/arena/tournaments/${encodeURIComponent(tournament.id)}/`;
@@ -255,12 +258,18 @@ export function formatLiveTournamentBanner(tournament?: {id: string; name: strin
   );
 }
 
+export function formatArenaRestartBanner(restarting?: boolean): string {
+  if (!restarting) return '';
+  return String(<div id='topbar' className='restarting'>{ARENA_RESTART_BANNER_TEXT}</div>);
+}
+
 export function injectLiveBanner(
   headerHtml: Html | string | undefined,
-  tournament?: {id: string; name: string}
+  tournament?: {id: string; name: string},
+  restarting?: boolean
 ): string | undefined {
   const headerStr = headerHtml !== undefined ? String(headerHtml) : undefined;
-  const banner = formatLiveTournamentBanner(tournament);
+  const banner = formatLiveTournamentBanner(tournament) || formatArenaRestartBanner(restarting);
   if (!banner || headerStr?.includes('id="topbar"')) return headerStr;
   return headerStr ? `${banner}\n  ${headerStr}` : banner;
 }

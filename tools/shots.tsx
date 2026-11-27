@@ -577,6 +577,23 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       }),
     },
     {
+      name: 'arena-restarting',
+      section: 'ladders',
+      title: 'Hub (Restarting)',
+      path: '/arena/',
+      setup: fixture => {
+        fixture.arenaHandle.setLiveState({
+          live: undefined,
+          stale: false,
+          restarting: true,
+          updatedAt: NOW_SECONDS,
+        });
+        return () => {
+          fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
+        };
+      },
+    },
+    {
       name: 'arena-ladder-rby',
       section: 'ladders',
       title: 'RBY',
