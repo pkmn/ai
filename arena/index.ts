@@ -318,9 +318,14 @@ export async function runDaemon(opts: {
           }
           if (
             initialSnap.unpublishedArchivedPoolsLadders?.length &&
+            !coord.isDraining() &&
             !shouldYieldForPause?.()
           ) {
-            await coord.publishArchivedPoolsLadders(initialSnap.unpublishedArchivedPoolsLadders);
+            await coord.publishArchivedPoolsLadders(
+              initialSnap.unpublishedArchivedPoolsLadders,
+              undefined,
+              shouldYieldForPause
+            );
           }
           const byId = new Map(ladders.map(l => [l.id, l]));
           const smokeBudget = smokeCadence.budgetForCycle(initialSnap.smokeCadence);

@@ -1436,6 +1436,40 @@ describe('Coordinator', () => {
     expect(script).not.toContain('kickstart -k system/ai.pkmn.arena');
   });
 
+  test('publishArchivedPoolsLadders skips upload when coordinator is draining', async () => {
+    const h = createMockCoordHarness('publish-drain');
+    try {
+      const ladderDir = path.join(h.dirs.logs, 'gen9vgc2026regf20260401');
+      fs.mkdirSync(ladderDir, {recursive: true});
+      fs.writeFileSync(path.join(ladderDir, '2026-04.tar'), 'dummy-tar');
+      h.coord.requestDrain();
+      expect(await h.coord.publishArchivedPoolsLadders(
+        ['gen9vgc2026regf20260401'],
+        1_760_000_000
+      )).toBe(0);
+      expect(fs.existsSync(path.join(ladderDir, 'gen9vgc2026regf20260401-logs.tar'))).toBe(false);
+    } finally {
+      h.stateDb.close();
+    }
+  });
+
+  test('publishArchivedPoolsLadders stops when shouldYield returns true', async () => {
+    const h = createMockCoordHarness('publish-pause');
+    try {
+      const ladderDir = path.join(h.dirs.logs, 'gen9vgc2026regf20260402');
+      fs.mkdirSync(ladderDir, {recursive: true});
+      fs.writeFileSync(path.join(ladderDir, '2026-04.tar'), 'dummy-tar');
+      expect(await h.coord.publishArchivedPoolsLadders(
+        ['gen9vgc2026regf20260402'],
+        1_760_000_000,
+        () => true
+      )).toBe(0);
+      expect(fs.existsSync(path.join(ladderDir, 'gen9vgc2026regf20260402-logs.tar'))).toBe(false);
+    } finally {
+      h.stateDb.close();
+    }
+  });
+
   test('syncActivatedAgents prunes discarded staged builds while keeping outbox-pending ones',
     async () => {
       const h = createMockCoordHarness('prune-staged');

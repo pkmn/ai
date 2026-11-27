@@ -1235,10 +1235,13 @@ export class Coordinator {
 
   async publishArchivedPoolsLadders(
     ladderIds: readonly string[],
-    nowSeconds = Math.floor(Date.now() / 1000)
+    nowSeconds = Math.floor(Date.now() / 1000),
+    shouldYield?: () => boolean
   ): Promise<number> {
+    if (this.draining || shouldYield?.()) return 0;
     let published = 0;
     for (const ladderId of ladderIds) {
+      if (this.draining || shouldYield?.()) break;
       const retryAfter = this.archivePublishCooldownByLadder.get(ladderId);
       if (retryAfter !== undefined && nowSeconds < retryAfter) continue;
       const ok = await this.publishLadderArchive(ladderId);
