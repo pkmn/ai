@@ -738,6 +738,18 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Musette & Drums
+  active: 2026 # October 1
+  engine:
+    - name: pkmn
+      url: https://github.com/pkmn/engine
+  language: Zig
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      bsmathers: Cryolite.499961
 - name: Diagenesis
   active: 2026 # October 3
   engine:
