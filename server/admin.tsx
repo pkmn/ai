@@ -1909,7 +1909,8 @@ function renderLaddersSection(
                   <td>
                     {summary.anchor && anchorHref ? (
                       <a href={anchorHref} className='subtle'>
-                        {summary.anchor.agentName} <code>{summary.anchor.version}</code>
+                        {summary.anchor.agentName}{' '}
+                        <code className='muted'>{summary.anchor.version}</code>
                       </a>
                     ) : (
                       <span className='muted'>—</span>

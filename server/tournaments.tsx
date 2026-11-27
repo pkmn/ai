@@ -985,7 +985,7 @@ function renderTournamentStandingsNode(opts: {
                 <td><strong>{idx + 1}</strong></td>
                 <td>
                   {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
-                  <code>{e.version}</code>
+                  <code className='muted'>{e.version}</code>
                 </td>
                 <td className='num muted'>
                   <util.Time
@@ -1051,7 +1051,7 @@ function renderTournamentStandingsNode(opts: {
               </td>
               <td>
                 {util.raw(render.formatAgentLink(e.agentName, href, true))}{' '}
-                <code>{e.version}</code>
+                <code className='muted'>{e.version}</code>
                 {liveTb && (
                   <>
                     {' '}
@@ -1127,7 +1127,7 @@ function renderTournamentCrosstableNode(opts: {
                   <tr>
                     <td>
                       {util.raw(render.formatAgentLink(rowEnt.agentName, rowHref, true))}{' '}
-                      <code>{rowEnt.version}</code>
+                      <code className='muted'>{rowEnt.version}</code>
                     </td>
                     {entrants.map(colEnt => {
                       if (rowEnt.versionId === colEnt.versionId) {
@@ -1730,7 +1730,7 @@ export function renderArenaTournamentsSummaryHtml(opts: {
             winnerCell = (
               <td>
                 {util.raw(render.formatAgentLink(winner.agentName, wHref, true))}{' '}
-                <code>{winner.version}</code>
+                <code className='muted'>{winner.version}</code>
               </td>
             );
           }
@@ -2303,7 +2303,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
           return '<tr' + hideAttr + '>' +
             '<td><strong>' + (idx + 1) + '</strong></td>' +
             '<td>' + formatAgentLink(e.name, e.slug, true) +
-            ' <code>' + esc(e.version) + '</code></td>' +
+            ' <code class="muted">' + esc(e.version) + '</code></td>' +
             '<td class="num muted">' + formatLocalDateHtml(subTs) + '</td>' +
             '</tr>';
         }).join('');
@@ -2340,7 +2340,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
             liveTb.table + '</a>'
           : '';
         const agentHtml = formatAgentLink(e.name, e.slug, true) +
-          ' <code>' + esc(e.version) + '</code>' + liveBadge;
+          ' <code class="muted">' + esc(e.version) + '</code>' + liveBadge;
         const elo = Math.round(e.elo);
         const ci = Math.round(e.ci95);
         const ptsStr = Number(e.points || 0).toFixed(1);
@@ -2406,7 +2406,7 @@ function buildTournamentScript(viewerInit: unknown, pageInit: unknown): string {
       const colHeaders = order.map(e => '<th>' + esc(e.name) + '</th>').join('');
       const bodyRows = order.map(rowEnt => {
         const rowLabel = formatAgentLink(rowEnt.name, rowEnt.slug, true) +
-          ' <code>' + esc(rowEnt.version) + '</code>';
+          ' <code class="muted">' + esc(rowEnt.version) + '</code>';
         const cells = order.map(colEnt => {
           if (rowEnt.versionId === colEnt.versionId) {
             return '<td class="diag">—</td>';

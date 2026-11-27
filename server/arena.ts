@@ -1792,10 +1792,10 @@ function formatSeriesSummaryPill(
 
 function buildDefaultTableHeaders(tb: BroadcastTable): {left: string; right: string} {
   const left = tb.p1 && tb.p2
-    ? `<span class="font-semibold">${util.escapeHtml(tb.p1.name)}</span>` +
-      (tb.p1.version ? ` <span class="ver">v${util.escapeHtml(tb.p1.version)}</span>` : '') +
-      ` vs <span class="font-semibold">${util.escapeHtml(tb.p2.name)}</span>` +
-      (tb.p2.version ? ` <span class="ver">v${util.escapeHtml(tb.p2.version)}</span>` : '')
+    ? `<strong>${util.escapeHtml(tb.p1.name)}</strong>` +
+      (tb.p1.version ? ` <code class="muted">${util.escapeHtml(tb.p1.version)}</code>` : '') +
+      ` vs <strong>${util.escapeHtml(tb.p2.name)}</strong>` +
+      (tb.p2.version ? ` <code class="muted">${util.escapeHtml(tb.p2.version)}</code>` : '')
     : util.escapeHtml(tb.label);
   const parts: string[] = [util.escapeHtml(tb.stage ?? 'Round Robin')];
   if (tb.cycle !== undefined) parts.push(`Cycle ${tb.cycle}`);

@@ -882,7 +882,7 @@ function renderHeadToHeadPane(opts: {
         title={`Click to filter Matches vs. ${opp.agentName}`}
       >
         <td data-val={opp.agentName}>
-          {util.raw(oppLink)} <code>{opp.version}</code>
+          {util.raw(oppLink)} <code className='muted'>{opp.version}</code>
         </td>
         <td className='num' data-val={oppElo}>
           {oppElo} <span className='muted'>±{oppCi}</span>
@@ -1055,7 +1055,7 @@ function renderRecentMatchesPane(opts: {
                   <td><code>{ourSide.version}</code></td>
                   <td>
                     {util.raw(render.formatAgentLink(oppSide.name, oppHref, false))}{' '}
-                    <code>{oppSide.version}</code>
+                    <code className='muted'>{oppSide.version}</code>
                   </td>
                   <td className='center'>{resNode}</td>
                   <td

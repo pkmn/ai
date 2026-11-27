@@ -606,7 +606,7 @@ export function buildBattleDetailClientJs(): string {
       const inner = bold ? '<strong>' + esc(agent.name) + '</strong>' : esc(agent.name);
       const href = resolveAgentHref(agent.slug);
       const link = href ? '<a href="' + esc(href) + '" class="subtle">' + inner + '</a>' : inner;
-      return link + ' <code>' + esc(agent.version) + '</code>';
+      return link + ' <code class="muted">' + esc(agent.version) + '</code>';
     };
 
     const isFaultReason = r => {
@@ -2623,7 +2623,7 @@ function renderMatchupsSection(
       <tr>
         <td>
           {renderAgentLink(rowEntry.agentName, rowHref, true)}{' '}
-          <code>{rowEntry.version}</code>
+          <code className='muted'>{rowEntry.version}</code>
         </td>
         {cells}
       </tr>
@@ -2909,7 +2909,7 @@ function renderLadderHtml(opts: {
               <td><strong>{idx + 1}</strong></td>
               <td>
                 {renderAgentLink(e.agentName, href, true)}{' '}
-                <code>{e.version}</code>
+                <code className='muted'>{e.version}</code>
               </td>
               <td className='num muted'>
                 <util.Time
@@ -2977,7 +2977,7 @@ function renderLadderHtml(opts: {
       const agentCell = (
         <td>
           {renderAgentLink(e.agentName, href, isRankedPrimary)}{' '}
-          <code>{e.version}</code>
+          <code className='muted'>{e.version}</code>
           {isBestActive && meta?.source ? (
             <>
               {' '}
@@ -3303,7 +3303,7 @@ function renderArenaHubHtml(opts: {
       leaderCell = (
         <td>
           {renderAgentLink(w.name, wHref, true)}{' '}
-          <code>{w.version}</code>
+          <code className='muted'>{w.version}</code>
         </td>
       );
     } else {
@@ -3364,7 +3364,7 @@ function renderArenaHubHtml(opts: {
       const pastLeaderCell = pastW ? (
         <td>
           {renderAgentLink(pastW.name, `/projects/${encodeURIComponent(pastW.slug)}/`, true)}{' '}
-          <code>{pastW.version}</code>
+          <code className='muted'>{pastW.version}</code>
         </td>
       ) : (
         <td className='muted'>—</td>
@@ -3532,7 +3532,7 @@ function renderLiveGame1Side(
       <div className='live-g1-top'>
         <span>
           <tt>{key.toUpperCase()}</tt> {renderAgentLink(slotMeta.name, href, won)}{' '}
-          <code>{slotMeta.version}</code>
+          <code className='muted'>{slotMeta.version}</code>
         </span>
         {renderPokemonOrbsNode(side.pokemon)}
       </div>
@@ -3656,7 +3656,7 @@ function renderLiveSlotCard(
       <div className='slot-top'>
         <span>
           <tt>{key.toUpperCase()}</tt> {renderAgentLink(slotData.name, href, true)}{' '}
-          <code>{slotData.version}</code>
+          <code className='muted'>{slotData.version}</code>
         </span>
         {renderPokemonOrbsNode(slotData.pokemon)}
         {badge}
@@ -4125,8 +4125,14 @@ function renderBattlesPage(opts: {
               <span className='battle-toggle' aria-hidden='true'>{'\u25b8'}</span>
               <code>{m.id}</code>
             </td>
-            <td>{renderAgentLink(m.p1.name, p1Href, r.p1Win)} <code>{m.p1.version}</code></td>
-            <td>{renderAgentLink(m.p2.name, p2Href, r.p2Win)} <code>{m.p2.version}</code></td>
+            <td>
+              {renderAgentLink(m.p1.name, p1Href, r.p1Win)}{' '}
+              <code className='muted'>{m.p1.version}</code>
+            </td>
+            <td>
+              {renderAgentLink(m.p2.name, p2Href, r.p2Win)}{' '}
+              <code className='muted'>{m.p2.version}</code>
+            </td>
             <td className='center' title={tip}>{r.node}</td>
             <td
               className='num muted'

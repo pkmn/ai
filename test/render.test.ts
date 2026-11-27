@@ -1811,9 +1811,9 @@ describe('SSR cache invalidation', () => {
       const tbodyMatch = tbodyRe.exec(lbHtml);
       expect(tbodyMatch).not.toBeNull();
       const trs = Array.from(tbodyMatch![1].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g), m => m[0]);
-      const tr20 = trs.find(r => r.includes('<code>2.0.0</code>'))!;
-      const tr15 = trs.find(r => r.includes('<code>1.5.0</code>'))!;
-      const tr10 = trs.find(r => r.includes('<code>1.0.0</code>'))!;
+      const tr20 = trs.find(r => r.includes('<code class="muted">2.0.0</code>'))!;
+      const tr15 = trs.find(r => r.includes('<code class="muted">1.5.0</code>'))!;
+      const tr10 = trs.find(r => r.includes('<code class="muted">1.0.0</code>'))!;
 
       expect(tr20).not.toContain('class="secondary"');
       expect(tr20).toContain('data-active="true"');
@@ -4225,6 +4225,70 @@ describe('JSON route parity & retired pool archives', () => {
       expect(html).toContain('class="info-dot partial yes"');
       expect(html).toContain("url.searchParams.set('v', curVer)");
       expect(html).toContain('tabindex="0"');
+    } finally {
+      arenaHandle.close();
+      srv.closeAllConnections();
+      await new Promise<void>(resolve => srv.close(() => resolve()));
+      testDb.close();
+    }
+  });
+
+  test('mutes version code when preceded by project name', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    const app = polka();
+    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
+    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
+    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
+    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    try {
+      testDb.syncLadders(undefined, 1_760_000_000);
+      testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+      testDb.syncProjectsFromYaml(
+        '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n' +
+        '- name: Beta\n  slug: beta\n  arena:\n    owner: {github: b1, smogon: b1}\n',
+        undefined,
+        1_760_000_000
+      );
+      const alpha = testDb.getAgentBySlug('alpha')!;
+      const beta = testDb.getAgentBySlug('beta')!;
+      testDb.setAgentLadders(alpha.id, ['rby'], 1_760_000_000);
+      testDb.setAgentLadders(beta.id, ['rby'], 1_760_000_000);
+      const vA = testDb.createSubmission({
+        agentId: alpha.id,
+        version: '1.0.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_000,
+      });
+      const vB = testDb.createSubmission({
+        agentId: beta.id,
+        version: '2.0.0',
+        package: 'bundle',
+        url: 'https://example.com/beta-2.0.0.tar.zst',
+        sha256: 'b'.repeat(64),
+        ladderIds: ['gen1ou20261109'],
+        now: 1_760_000_000,
+      });
+      testDb.applySubmissionStatus({versionId: vA.id, smokeStatus: 'passed', now: 1_760_000_010});
+      testDb.applySubmissionStatus({versionId: vB.id, smokeStatus: 'passed', now: 1_760_000_010});
+      playMatch(testDb, 'gen1ou20261109', vA.id, vB.id, 'W', 'W', 1_760_000_030);
+
+      const ladderHtml = await (await fetch(`${base}/arena/ladders/rby/`)).text();
+      expect(ladderHtml).toContain('Alpha</a> <code class="muted">1.0.0</code>');
+      expect(ladderHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
+
+      const battlesHtml = await (await fetch(`${base}/arena/battles/`)).text();
+      expect(battlesHtml).toContain('<strong>Alpha</strong></a> <code class="muted">1.0.0</code>');
+      expect(battlesHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
+
+      const profileHtml = await (await fetch(`${base}/projects/alpha/`)).text();
+      expect(profileHtml).toContain('<strong>Beta</strong></a> <code class="muted">2.0.0</code>');
+      expect(profileHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
+      expect(profileHtml).toContain('<code><strong>1.0.0</strong></code>');
+      expect(profileHtml).toContain('<td><code>1.0.0</code></td>');
     } finally {
       arenaHandle.close();
       srv.closeAllConnections();

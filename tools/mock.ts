@@ -4001,8 +4001,9 @@ export class Runner {
           ...(g1Summary !== undefined ? {summaries: [g1Summary]} : {}),
           seriesLeftHtml,
           seriesRightHtml:
-            `${escapeHtml(pr[0].name)} <code>${escapeHtml(pr[0].version)}</code> vs ` +
-            `${escapeHtml(pr[1].name)} <code>${escapeHtml(pr[1].version)}</code>`,
+            `${escapeHtml(pr[0].name)} <code class="muted">${escapeHtml(pr[0].version)}</code>` +
+            ` vs ${escapeHtml(pr[1].name)} ` +
+            `<code class="muted">${escapeHtml(pr[1].version)}</code>`,
           p1: {
             slug: pr[0].slug,
             name: pr[0].name,
