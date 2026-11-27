@@ -259,6 +259,7 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     arenaHandle.setLiveState({
       live: opts.liveDoc.live,
       stale: opts.liveDoc.stale,
+      restarting: opts.liveDoc.restarting,
       updatedAt: opts.liveDoc.updatedAt,
     });
   }
@@ -4281,100 +4282,87 @@ describe('JSON route parity & retired pool archives', () => {
 
   test('mutes version code when preceded by project name', async () => {
     const testDb = new Database(':memory:', {now: 1_760_000_000});
-    const app = polka();
-    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
-    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
-    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
-    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
-    try {
-      testDb.syncLadders(undefined, 1_760_000_000);
-      testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
-      testDb.syncProjectsFromYaml(
-        '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n' +
-        '- name: Beta\n  slug: beta\n  arena:\n    owner: {github: b1, smogon: b1}\n',
-        undefined,
-        1_760_000_000
-      );
-      const alpha = testDb.getAgentBySlug('alpha')!;
-      const beta = testDb.getAgentBySlug('beta')!;
-      testDb.setAgentLadders(alpha.id, ['rby'], 1_760_000_000);
-      testDb.setAgentLadders(beta.id, ['rby'], 1_760_000_000);
-      const vA = testDb.createSubmission({
-        agentId: alpha.id,
-        version: '1.0.0',
-        package: 'bundle',
-        url: 'https://example.com/alpha-1.0.0.tar.zst',
-        sha256: 'a'.repeat(64),
-        ladderIds: ['gen1ou20261109'],
-        now: 1_760_000_000,
-      });
-      const vB = testDb.createSubmission({
-        agentId: beta.id,
-        version: '2.0.0',
-        package: 'bundle',
-        url: 'https://example.com/beta-2.0.0.tar.zst',
-        sha256: 'b'.repeat(64),
-        ladderIds: ['gen1ou20261109'],
-        now: 1_760_000_000,
-      });
-      testDb.applySubmissionStatus({versionId: vA.id, smokeStatus: 'passed', now: 1_760_000_010});
-      testDb.applySubmissionStatus({versionId: vB.id, smokeStatus: 'passed', now: 1_760_000_010});
-      playMatch(testDb, 'gen1ou20261109', vA.id, vB.id, 'W', 'W', 1_760_000_030);
+    testDb.syncLadders(undefined, 1_760_000_000);
+    testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+    testDb.syncProjectsFromYaml(
+      '- name: Alpha\n  slug: alpha\n  arena:\n    owner: {github: a1, smogon: a1}\n' +
+      '- name: Beta\n  slug: beta\n  arena:\n    owner: {github: b1, smogon: b1}\n',
+      undefined,
+      1_760_000_000
+    );
+    const alpha = testDb.getAgentBySlug('alpha')!;
+    const beta = testDb.getAgentBySlug('beta')!;
+    testDb.setAgentLadders(alpha.id, ['rby'], 1_760_000_000);
+    testDb.setAgentLadders(beta.id, ['rby'], 1_760_000_000);
+    const vA = testDb.createSubmission({
+      agentId: alpha.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/alpha-1.0.0.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    const vB = testDb.createSubmission({
+      agentId: beta.id,
+      version: '2.0.0',
+      package: 'bundle',
+      url: 'https://example.com/beta-2.0.0.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    testDb.applySubmissionStatus({versionId: vA.id, smokeStatus: 'passed', now: 1_760_000_010});
+    testDb.applySubmissionStatus({versionId: vB.id, smokeStatus: 'passed', now: 1_760_000_010});
+    playMatch(testDb, 'gen1ou20261109', vA.id, vB.id, 'W', 'W', 1_760_000_030);
 
-      const ladderHtml = await (await fetch(`${base}/arena/ladders/rby/`)).text();
+    const h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
+    try {
+      const ladderHtml = await h.getText('/arena/ladders/rby/');
       expect(ladderHtml).toContain('Alpha</a> <code class="muted">1.0.0</code>');
       expect(ladderHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
 
-      const battlesHtml = await (await fetch(`${base}/arena/battles/`)).text();
+      const battlesHtml = await h.getText('/arena/battles/');
       expect(battlesHtml).toContain('<strong>Alpha</strong></a> <code class="muted">1.0.0</code>');
       expect(battlesHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
 
-      const profileHtml = await (await fetch(`${base}/projects/alpha/`)).text();
+      const profileHtml = await h.getText('/projects/alpha/');
       expect(profileHtml).toContain('<strong>Beta</strong></a> <code class="muted">2.0.0</code>');
       expect(profileHtml).toContain('Beta</a> <code class="muted">2.0.0</code>');
       expect(profileHtml).toContain('<code><strong>1.0.0</strong></code>');
       expect(profileHtml).toContain('<td><code>1.0.0</code></td>');
     } finally {
-      arenaHandle.close();
-      srv.closeAllConnections();
-      await new Promise<void>(resolve => srv.close(() => resolve()));
+      await h.close();
       testDb.close();
     }
   });
 
   test('renders restarting banner across all /arena/* pages only', async () => {
     const testDb = new Database(':memory:', {now: 1_760_000_000});
-    const app = polka();
-    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
-    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
-    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
-    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    testDb.syncLadders(undefined, 1_760_000_000);
+    testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+    testDb.upsertTournament({
+      id: '1',
+      name: 'Winter Cup',
+      format: 'gen9vgc2026regf',
+      version: '0.11.0',
+      gamesPerMatchup: 10,
+      parallelTables: 1,
+      hardware: '1x L4',
+      startsAt: 1_760_100_000,
+    });
+    const h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
     try {
-      testDb.syncLadders(undefined, 1_760_000_000);
-      testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
-      testDb.upsertTournament({
-        id: '1',
-        name: 'Winter Cup',
-        format: 'gen9vgc2026regf',
-        version: '0.11.0',
-        gamesPerMatchup: 10,
-        parallelTables: 1,
-        hardware: '1x L4',
-        startsAt: 1_760_100_000,
-      });
-
-      const hbRes = await fetch(`${base}/api/arena/heartbeat`, {
+      const hbRes = await h.getRaw('/api/arena/heartbeat', {
         method: 'POST',
         headers: {
-          Authorization: 'Bearer test-render-secret',
+          Authorization: `Bearer ${ARENA_SECRET}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({idle: true, restarting: true}),
       });
       expect(hbRes.status).toBe(200);
-      expect(arenaHandle.getState().restarting).toBe(true);
+      expect(h.arenaHandle.getState().restarting).toBe(true);
 
       const bannerTag = '<div id="topbar" class="restarting">';
       const arenaRoutes = [
@@ -4384,58 +4372,110 @@ describe('JSON route parity & retired pool archives', () => {
         '/arena/tournaments/1/',
       ];
       for (const route of arenaRoutes) {
-        const html = await (await fetch(`${base}${route}`)).text();
-        expect(html).toContain(bannerTag);
+        expect(await h.getText(route)).toContain(bannerTag);
       }
 
-      const projectsHtml = await (await fetch(`${base}/projects/`)).text();
-      expect(projectsHtml).not.toContain(bannerTag);
+      expect(await h.getText('/projects/')).not.toContain(bannerTag);
 
-      const liveJson = await (await fetch(`${base}/api/live.json`)).json() as {
-        restarting?: boolean;
-      };
+      const liveJson = await h.getJson<{restarting?: boolean}>('/api/live.json');
       expect(liveJson.restarting).toBe(true);
     } finally {
-      arenaHandle.close();
-      srv.closeAllConnections();
-      await new Promise<void>(resolve => srv.close(() => resolve()));
+      await h.close();
       testDb.close();
     }
   });
 
-  test('clears restarting banner on normal heartbeat or stale state', async () => {
+  test('suppresses restarting banner when arena heartbeat is stale', async () => {
     const testDb = new Database(':memory:', {now: 1_760_000_000});
-    const app = polka();
-    const arenaHandle = arena.register(app, {db: testDb, arenaSecret: 'test-render-secret'});
-    render.register(app, {db: testDb, arena: arenaHandle, now: () => 1_760_000_050});
-    const srv = http.createServer((req, res) => app.handler(req as polka.Request, res));
-    await new Promise<void>(resolve => srv.listen(0, '127.0.0.1', resolve));
-    const base = `http://127.0.0.1:${(srv.address() as {port: number}).port}`;
+    testDb.syncLadders(undefined, 1_760_000_000);
+    const h = await startRenderHarness({
+      db: testDb,
+      publicDir: tmpPublic,
+      now: 1_760_000_050,
+      liveDoc: {
+        updatedAt: 1_760_000_050,
+        stale: true,
+        restarting: true,
+        recentMatches: [],
+      },
+    });
     try {
-      testDb.syncLadders(undefined, 1_760_000_000);
-      arenaHandle.setLiveState({restarting: true, stale: true, updatedAt: 1_760_000_050});
-      const staleHtml = await (await fetch(`${base}/arena/`)).text();
-      expect(staleHtml).not.toContain('class="restarting"');
+      expect(await h.getText('/arena/')).not.toContain('class="restarting"');
+      const liveJson = await h.getJson<{restarting?: boolean}>('/api/live.json');
+      expect(liveJson.restarting).toBeUndefined();
+    } finally {
+      await h.close();
+      testDb.close();
+    }
+  });
 
-      arenaHandle.setLiveState({restarting: true, stale: false, updatedAt: 1_760_000_050});
-      const activeHtml = await (await fetch(`${base}/arena/`)).text();
-      expect(activeHtml).toContain('class="restarting"');
+  test('clears restarting banner after a normal arena heartbeat', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    testDb.syncLadders(undefined, 1_760_000_000);
+    const h = await startRenderHarness({
+      db: testDb,
+      publicDir: tmpPublic,
+      now: 1_760_000_050,
+      liveDoc: {
+        updatedAt: 1_760_000_050,
+        stale: false,
+        restarting: true,
+        recentMatches: [],
+      },
+    });
+    try {
+      expect(await h.getText('/arena/')).toContain('class="restarting"');
 
-      await fetch(`${base}/api/arena/heartbeat`, {
+      const hbRes = await h.getRaw('/api/arena/heartbeat', {
         method: 'POST',
         headers: {
-          Authorization: 'Bearer test-render-secret',
+          Authorization: `Bearer ${ARENA_SECRET}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({idle: true}),
       });
-      expect(arenaHandle.getState().restarting).toBe(false);
-      const clearedHtml = await (await fetch(`${base}/arena/`)).text();
-      expect(clearedHtml).not.toContain('class="restarting"');
+      expect(hbRes.status).toBe(200);
+      expect(h.arenaHandle.getState().restarting).toBe(false);
+      expect(await h.getText('/arena/')).not.toContain('class="restarting"');
     } finally {
-      arenaHandle.close();
-      srv.closeAllConnections();
-      await new Promise<void>(resolve => srv.close(() => resolve()));
+      await h.close();
+      testDb.close();
+    }
+  });
+
+  test('prefers live tournament banner over restarting banner on /arena/* pages', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    testDb.syncLadders(undefined, 1_760_000_000);
+    testDb.upsertTournament({
+      id: '1',
+      name: 'Winter Cup',
+      format: 'gen9vgc2026regf',
+      version: '0.11.0',
+      gamesPerMatchup: 10,
+      parallelTables: 1,
+      hardware: '1x L4',
+      startsAt: 1_760_000_000,
+      status: 'running',
+    });
+    const h = await startRenderHarness({
+      db: testDb,
+      publicDir: tmpPublic,
+      now: 1_760_000_050,
+      liveDoc: {
+        updatedAt: 1_760_000_050,
+        stale: false,
+        restarting: true,
+        recentMatches: [],
+      },
+    });
+    try {
+      for (const route of ['/arena/', '/arena/battles/', '/arena/tournaments/1/']) {
+        const html = await h.getText(route);
+        expect(html).toContain('<span>\u25cf LIVE</span> Winter Cup');
+        expect(html).not.toContain('class="restarting"');
+      }
+    } finally {
+      await h.close();
       testDb.close();
     }
   });
