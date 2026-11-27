@@ -1771,12 +1771,10 @@ function buildBattlesScript(
 
     const liveKey = doc => {
       const tourId = (doc && doc.runningTournament && doc.runningTournament.id) || '';
-      const restarting = Boolean(doc && doc.restarting);
       if (doc && doc.live && !doc.stale) {
-        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' +
-          restarting + ':' + tourId;
+        return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' + tourId;
       }
-      return 'idle:' + Boolean(doc && doc.stale) + ':' + restarting + ':' + tourId;
+      return 'idle:' + Boolean(doc && doc.stale) + ':' + tourId;
     };
 
     const applySnapshot = next => {
