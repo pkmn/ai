@@ -275,8 +275,12 @@ cd /opt/arena/repo && ARENA_APFS_CONTAINER="${APFS_CONTAINER}" ./arena/scripts/s
 (`6G`); (2) hidden role accounts `p1`/`p2` (`UID 591`/`592`, `GID 590`, `/usr/bin/false`); (3) `0711`
 mount roots + `0700` `P{1,2}/scratch` with `p1`/`p2` & `pkmn` ACLs; (4) `100-arena-hardening.conf`
 (`ListenAddress 127.0.0.1:22`), `pf.anchor`, `sandbox.sb`, `sudoers.d/arena`; (5) compiled
-`/opt/arena/bin/limit`, `/opt/arena/bin/arena`, and `_baseline/run`; (6) `pmset` (`womp 1 powernap 0`),
-Spotlight disabled on scratch/staging, auto-updates off; (7) rootless `podman-machine-default`
+`/opt/arena/bin/limit`, `/opt/arena/bin/arena`, and `_baseline/run`; (6) `pmset` (`womp 1 powernap 0`), Spotlight disabled on scratch/staging, auto-updates off, and
+`BluetoothFeatures/SmartRoutingMacOS` disabled in
+`/Library/Preferences/FeatureFlags/Domain/BluetoothFeatures.plist` (prevents headless `audiomxd`
+from spin-looping on `TargetUserSession NULL` / `audioaccessoryd died` and hammering `configd` +
+`logd` at `loginwindow`; takes effect on reboot, and `SIGSTOP`s `audiomxd` immediately when
+`/dev/console` is `root`); (7) rootless `podman-machine-default`
 (`10` vCPUs, `30 GiB` RAM, `48 GB` disk, 0 swap, `arena-blacklist.conf` for `sctp`/`dccp`/`rds`/`tipc`)
 and `/Library/LaunchDaemons/ai.pkmn.{pf,podman,arena,maintenance}.plist`.
 
@@ -496,6 +500,7 @@ ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 | Pending RPC outbox | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, endpoint, created_at FROM outbox;"'` |
 | Emergency slot cleanup | `ssh arena 'for s in p1 p2; do for m in native container; do sudo -n /opt/arena/bin/arena cleanup $s $m; done; done'` |
 | Podman VM health | `ssh arena '/opt/homebrew/bin/podman machine list && /opt/homebrew/bin/podman ps -a'` |
+| Pause headless `audiomxd` spin | `ssh -t arena 'sudo killall -STOP audiomxd'` *(if spinning before next reboot)* |
 
 ### 8.4 Unattended Reboot Test
 
@@ -505,6 +510,7 @@ ssh arena 'sudo reboot'
 ssh arena '
 uptime; sudo pfctl -s info | head -n 1
 for s in tunnel arena maintenance; do sudo launchctl print system/ai.pkmn.$s | grep -E "state =|pid ="; done
+ps -Ao pid,user,%cpu,state,comm | grep -E "PID|audiomxd|configd"
 /opt/homebrew/bin/podman machine list
 '
 curl -fsS https://pkmn.ai/api/live.json | jq '{updatedAt, stale}'   # expect stale: false

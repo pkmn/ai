@@ -113,6 +113,31 @@ sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheck
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticDownload -bool false
 sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool false
 
+# Disable Bluetooth `SmartRoutingMacOS` so headless `audiomxd` does not spin-loop on
+# `TargetUserSession NULL` / `audioaccessoryd died` (hammering `configd` and `logd`) at
+# `loginwindow`. Takes effect on next boot (SIP-safe; leaves Bluetooth HID intact); if running
+# headless right now (`/dev/console` owned by `root`), `SIGSTOP` stops the loop immediately.
+sudo install -d -o root -g wheel -m 0755 /Library/Preferences/FeatureFlags/Domain
+sudo tee /Library/Preferences/FeatureFlags/Domain/BluetoothFeatures.plist >/dev/null <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SmartRoutingMacOS</key>
+	<dict>
+		<key>Enabled</key>
+		<false/>
+	</dict>
+</dict>
+</plist>
+EOF
+sudo chown root:wheel /Library/Preferences/FeatureFlags/Domain/BluetoothFeatures.plist
+sudo chmod 0644 /Library/Preferences/FeatureFlags/Domain/BluetoothFeatures.plist
+plutil -lint /Library/Preferences/FeatureFlags/Domain/BluetoothFeatures.plist >/dev/null
+if [[ "$(stat -f '%Su' /dev/console 2>/dev/null || true)" == "root" ]]; then
+  sudo killall -STOP audiomxd 2>/dev/null || true
+fi
+
 if [[ -x /opt/homebrew/bin/7zz && ! -e /opt/homebrew/bin/7z ]]; then
   ln -sf /opt/homebrew/bin/7zz /opt/homebrew/bin/7z
 fi
