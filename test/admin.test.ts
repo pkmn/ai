@@ -1614,9 +1614,8 @@ describe('/admin dashboard & API', () => {
     expect(snap.health.pendingSubmissions[0].submittedAt).toBe(now - 300);
   });
 
-  test('renders Init and Preview phases in smoke queue table', () => {
+  test('renders Init phase in smoke queue table', () => {
     const zero = db.getAgentBySlug('0-error')!;
-    const foulPlay = db.getAgentBySlug('foul-play')!;
     const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
     arenaHandle.setLiveDiagnostic({
       versionId: 901,
@@ -1636,6 +1635,14 @@ describe('/admin dashboard & API', () => {
       lines: [],
       startedAt: now - 5,
     });
+
+    const snap = admin.buildAdminSnapshot(db, 'scheibo', arenaHandle, now);
+    const html = admin.renderAdminPage({snapshot: snap, allLadders: db.getLadders()});
+    expect(html).toContain('>Init ·');
+  });
+
+  test('renders Preview phase in smoke queue table', () => {
+    const foulPlay = db.getAgentBySlug('foul-play')!;
     arenaHandle.setLiveDiagnostic({
       versionId: 902,
       agentId: foulPlay.id,
@@ -1657,26 +1664,10 @@ describe('/admin dashboard & API', () => {
 
     const snap = admin.buildAdminSnapshot(db, 'scheibo', arenaHandle, now);
     const html = admin.renderAdminPage({snapshot: snap, allLadders: db.getLadders()});
-    expect(html).toContain('>Init ·');
     expect(html).toContain('>Preview ·');
   });
 
-  test('streams live smoke-queue SSE updates across start, completion, and discard', async () => {
-    const adminCookie = cookieFor('scheibo');
-    const zero = db.getAgentBySlug('0-error')!;
-    const devZero = db.getDevelopersForAgent(zero.id)[0];
-    const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
-    const sub = db.createSubmission({
-      agentId: zero.id,
-      developerId: devZero.id,
-      version: '1.5.0',
-      package: 'bundle',
-      url: 'https://github.com/pkmn/0-ERROR/releases/download/v1.5.0/agent.tar.zst',
-      sha256: SHA_A,
-      ladderIds: [rby.id],
-      now: now - 20,
-    });
-
+  const openAdminStream = async (adminCookie: string) => {
     const ctrl = new AbortController();
     const streamRes = await fetch(`${baseUrl}/api/admin/stream`, {
       headers: {Cookie: adminCookie},
@@ -1707,81 +1698,154 @@ describe('/admin dashboard & API', () => {
         buf += decoder.decode(value, {stream: true});
       }
     };
+    return {readNextEvent, close: () => ctrl.abort()};
+  };
 
-    const initEv = await readNextEvent();
-    expect(initEv.event).toBe('system');
-    expect(String(initEv.data.smokeQueueHtml)).toContain('Smoke Queue (1)');
-    expect(String(initEv.data.smokeQueueHtml)).toContain('Queued');
-
-    // Arena begins diagnostic run -> immediate smoke-queue event shows Running.
-    const liveRes = await fetch(`${baseUrl}/api/arena/diagnostic-live`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${ARENA_SECRET}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        versionId: sub.id,
-        agentId: zero.id,
-        agentSlug: zero.slug,
-        agentName: zero.name,
-        version: sub.version,
-        format: rby.format,
-        targetName: rby.name,
-        phase: 'battle',
-        turn: 3,
-        turnStartedAt: now,
-        turnBudgetSeconds: 150,
-        incrementSeconds: 15,
-        p1: {name: '0 ERROR (P1)', version: '1.5.0', bankSeconds: 148, thinking: true},
-        p2: {name: '0 ERROR (P2)', version: '1.5.0', bankSeconds: 150, thinking: false},
-        lines: ['|turn|3'],
-      }),
+  const seedPendingZeroSubmission = () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    const devZero = db.getDevelopersForAgent(zero.id)[0];
+    const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
+    const sub = db.createSubmission({
+      agentId: zero.id,
+      developerId: devZero.id,
+      version: '1.5.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-ERROR/releases/download/v1.5.0/agent.tar.zst',
+      sha256: SHA_A,
+      ladderIds: [rby.id],
+      now: now - 20,
     });
-    expect(liveRes.status).toBe(200);
+    return {zero, rby, sub};
+  };
 
-    const startEv = await readNextEvent();
-    expect(startEv.event).toBe('smoke-queue');
-    expect(String(startEv.data.innerHtml)).toContain('Running');
-    expect(String(startEv.data.innerHtml)).toContain('Turn 3');
-    expect(String(startEv.data.queueLineHtml)).toContain('1 running');
+  test('includes initial smoke queue HTML in /api/admin/stream system snapshot', async () => {
+    seedPendingZeroSubmission();
+    const stream = await openAdminStream(cookieFor('scheibo'));
+    try {
+      const initEv = await stream.readNextEvent();
+      expect(initEv.event).toBe('system');
+      expect(String(initEv.data.smokeQueueHtml)).toContain('Smoke Queue (1)');
+      expect(String(initEv.data.smokeQueueHtml)).toContain('Queued');
+    } finally {
+      stream.close();
+    }
+  });
 
-    // Submission finishes without an explicit {done: true} frame -> clears live entry and queue.
-    const doneRes = await fetch(`${baseUrl}/api/arena/submission-status`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${ARENA_SECRET}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        versionId: sub.id,
-        smokeStatus: 'staged',
-        smokeDurationMillis: 4500,
-        smokeInitMillis: 120,
-        smokeTurnMillis: 30,
-        smokePeakRam: 400,
-      }),
+  test('streams immediate smoke-queue SSE update on diagnostic-live start', async () => {
+    const {zero, rby, sub} = seedPendingZeroSubmission();
+    const stream = await openAdminStream(cookieFor('scheibo'));
+    try {
+      await stream.readNextEvent();
+      const liveRes = await fetch(`${baseUrl}/api/arena/diagnostic-live`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          versionId: sub.id,
+          agentId: zero.id,
+          agentSlug: zero.slug,
+          agentName: zero.name,
+          version: sub.version,
+          format: rby.format,
+          targetName: rby.name,
+          phase: 'battle',
+          turn: 3,
+          turnStartedAt: now,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 15,
+          p1: {name: '0 ERROR (P1)', version: '1.5.0', bankSeconds: 148, thinking: true},
+          p2: {name: '0 ERROR (P2)', version: '1.5.0', bankSeconds: 150, thinking: false},
+          lines: ['|turn|3'],
+        }),
+      });
+      expect(liveRes.status).toBe(200);
+
+      const startEv = await stream.readNextEvent();
+      expect(startEv.event).toBe('smoke-queue');
+      expect(String(startEv.data.innerHtml)).toContain('Running');
+      expect(String(startEv.data.innerHtml)).toContain('Turn 3');
+      expect(String(startEv.data.queueLineHtml)).toContain('1 running');
+    } finally {
+      stream.close();
+    }
+  });
+
+  test('clears live diagnostic on submission-status SSE update', async () => {
+    const {zero, rby, sub} = seedPendingZeroSubmission();
+    arenaHandle.setLiveDiagnostic({
+      versionId: sub.id,
+      agentId: zero.id,
+      agentSlug: zero.slug,
+      agentName: zero.name,
+      version: sub.version,
+      format: rby.format,
+      targetName: rby.name,
+      phase: 'battle',
+      turn: 3,
+      turnStartedAt: now,
+      turnBudgetSeconds: 150,
+      incrementSeconds: 15,
+      p1: {name: '0 ERROR (P1)', version: '1.5.0', bankSeconds: 148, thinking: true},
+      p2: {name: '0 ERROR (P2)', version: '1.5.0', bankSeconds: 150, thinking: false},
+      lines: ['|turn|3'],
     });
-    expect(doneRes.status).toBe(200);
+    const stream = await openAdminStream(cookieFor('scheibo'));
+    try {
+      await stream.readNextEvent();
+      const doneRes = await fetch(`${baseUrl}/api/arena/submission-status`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          versionId: sub.id,
+          smokeStatus: 'staged',
+          smokeDurationMillis: 4500,
+          smokeInitMillis: 120,
+          smokeTurnMillis: 30,
+          smokePeakRam: 400,
+        }),
+      });
+      expect(doneRes.status).toBe(200);
 
-    const doneEv = await readNextEvent();
-    expect(doneEv.event).toBe('smoke-queue');
-    expect(String(doneEv.data.innerHtml)).toContain('Smoke Queue (0)');
-    expect(String(doneEv.data.innerHtml)).toContain('No smoke tests queued or running.');
-    expect(String(doneEv.data.queueLineHtml)).toContain('1 staged');
-    expect(arenaHandle.getLiveDiagnostics()).toEqual([]);
+      const doneEv = await stream.readNextEvent();
+      expect(doneEv.event).toBe('smoke-queue');
+      expect(String(doneEv.data.innerHtml)).toContain('Smoke Queue (0)');
+      expect(String(doneEv.data.innerHtml)).toContain('No smoke tests queued or running.');
+      expect(String(doneEv.data.queueLineHtml)).toContain('1 staged');
+      expect(arenaHandle.getLiveDiagnostics()).toEqual([]);
+    } finally {
+      stream.close();
+    }
+  });
 
-    // Discarding the staged version immediately emits smoke-queue SSE update clearing staged count.
-    const discardRes = await fetch(`${baseUrl}/api/admin/versions/${sub.id}/discard`, {
-      method: 'POST',
-      headers: {Cookie: adminCookie},
+  test('streams immediate smoke-queue SSE update on admin staged discard', async () => {
+    const {sub} = seedPendingZeroSubmission();
+    db.applySubmissionStatus({
+      versionId: sub.id,
+      smokeStatus: 'staged',
+      smokeDurationMillis: 4500,
+      now,
     });
-    expect(discardRes.status).toBe(200);
+    const adminCookie = cookieFor('scheibo');
+    const stream = await openAdminStream(adminCookie);
+    try {
+      await stream.readNextEvent();
+      const discardRes = await fetch(`${baseUrl}/api/admin/versions/${sub.id}/discard`, {
+        method: 'POST',
+        headers: {Cookie: adminCookie},
+      });
+      expect(discardRes.status).toBe(200);
 
-    const discardEv = await readNextEvent();
-    expect(discardEv.event).toBe('smoke-queue');
-    expect(String(discardEv.data.queueLineHtml)).not.toContain('staged');
-    ctrl.abort();
+      const discardEv = await stream.readNextEvent();
+      expect(discardEv.event).toBe('smoke-queue');
+      expect(String(discardEv.data.queueLineHtml)).not.toContain('staged');
+    } finally {
+      stream.close();
+    }
   });
 });
 
