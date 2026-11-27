@@ -3381,7 +3381,7 @@ describe('createServerApp production HTTP hardening', () => {
   test('nginx serves project logos statically inside ^~ /projects/ with immutable cache', () => {
     const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
     expect(conf).toContain('map $arg_v $logo_cache_control {');
-    expect(conf).toContain('~^[0-9a-f]{8}$ "public, max-age=31536000, immutable";');
+    expect(conf).toContain('"~^[0-9a-f]{8}$" "public, max-age=31536000, immutable";');
     const projectsIdx = conf.indexOf('location ^~ /projects/ {');
     const rasterIdx = conf.indexOf('location ~ ^/projects/[^/]+\\.(?:png|webp|gif|jpe?g)$ {');
     const svgIdx = conf.indexOf('location ~ ^/projects/[^/]+\\.svg$ {');
