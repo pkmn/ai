@@ -1,7 +1,8 @@
-import {execFileSync} from 'child_process';
+import {execFile, execFileSync} from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import {promisify} from 'util';
 
 import type {PRNGSeed} from '@pkmn/sim';
 
@@ -184,6 +185,7 @@ export interface Options {
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
   isRestarting?: () => boolean;
   diagnosticWallCapMillis?: number;
+  recyclePodmanVm?: () => Promise<void> | void;
 }
 
 interface LadderFaultCounter {
@@ -195,7 +197,69 @@ interface LadderFaultCounter {
 const {FAULT_REASONS, INFRA_VOID_REASONS} = engine;
 const BROKEN_AGENT_COOLDOWN_SECONDS = 300;
 const EXPLOIT_PROBABILITY = 0.45;
+const PODMAN_MACHINE_NAME = 'podman-machine-default';
+const PODMAN_READY_TIMEOUT_MILLIS = 30_000;
+const PODMAN_READY_POLL_MILLIS = 500;
+const execFileAsync = promisify(execFile);
 const randomInt = (max: number) => crypto.randomInt(0, max);
+
+export interface PodmanRecycleDeps {
+  exec?: (
+    file: string,
+    args: readonly string[],
+    options: {timeout: number}
+  ) => Promise<unknown>;
+  sleep?: (millis: number) => Promise<void>;
+  now?: () => number;
+  isDraining?: () => boolean;
+  readyTimeoutMillis?: number;
+  readyPollMillis?: number;
+}
+
+// `libkrun`/`krunkit` releases freed guest pages lazily via `MADV_FREE` on macOS, leaving an idle
+// Podman VM holding up to 26+ GiB of host RAM, compressed pages, and swap after an OCI match or
+// smoke test. Stopping and kickstarting `ai.pkmn.podman` immediately returns 100% of that memory
+// to macOS before the next native match (costing ~6s only after OCI runs).
+export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<void> {
+  const run = deps?.exec ?? (async (file, args, options) => {
+    await execFileAsync(file, [...args], options);
+  });
+  const sleep = deps?.sleep ??
+    (millis => new Promise<void>(resolve => setTimeout(resolve, millis)));
+  const now = deps?.now ?? Date.now;
+  const isDraining = deps?.isDraining ?? (() => false);
+  const readyTimeoutMillis = deps?.readyTimeoutMillis ?? PODMAN_READY_TIMEOUT_MILLIS;
+  const readyPollMillis = deps?.readyPollMillis ?? PODMAN_READY_POLL_MILLIS;
+
+  try {
+    await run('podman', ['machine', 'stop', PODMAN_MACHINE_NAME], {timeout: 30_000});
+  } catch (err) {
+    console.error('Failed to stop Podman VM for memory reclaim:', err);
+  }
+  if (isDraining()) return;
+  try {
+    await run(
+      'sudo',
+      ['-n', '/bin/launchctl', 'kickstart', '-k', 'system/ai.pkmn.podman'],
+      {timeout: 15_000}
+    );
+  } catch (err) {
+    console.error('Failed to restart Podman VM via launchctl:', err);
+    return;
+  }
+  const deadline = now() + readyTimeoutMillis;
+  while (!isDraining() && now() < deadline) {
+    try {
+      await run('podman', ['info', '--format', '{{.Host.Os}}'], {timeout: 5_000});
+      return;
+    } catch {
+      await sleep(readyPollMillis);
+    }
+  }
+  if (!isDraining()) {
+    console.error('Timed out waiting for Podman VM API socket after recycle');
+  }
+}
 
 function isPlayerFault(result: arbiter.ArenaGameResult, slot: 'p1' | 'p2'): boolean {
   if (!FAULT_REASONS.has(result.endReason)) return false;
@@ -248,6 +312,7 @@ export class Coordinator {
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
   private readonly isRestarting?: () => boolean;
   private readonly diagnosticWallCapMillis?: number;
+  private readonly recyclePodmanVmFn?: () => Promise<void> | void;
   private readonly versionByLadderId = new Map<string, string>();
   private readonly teamModeByLadderId = new Map<string, db.TeamMode>();
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
@@ -272,6 +337,17 @@ export class Coordinator {
     this.getSystemInfo = options.getSystemInfo;
     this.isRestarting = options.isRestarting;
     this.diagnosticWallCapMillis = options.diagnosticWallCapMillis;
+    this.recyclePodmanVmFn = options.recyclePodmanVm;
+  }
+
+  private async maybeRecyclePodmanVm(): Promise<void> {
+    if (this.draining) return;
+    if (this.recyclePodmanVmFn) {
+      await this.recyclePodmanVmFn();
+      return;
+    }
+    if (this.devMode || process.platform !== 'darwin') return;
+    await recyclePodmanVm({isDraining: () => this.draining});
   }
 
   private cleanupUnpackedAgent(mode: db.ExecutionMode, targetId: string) {
@@ -913,6 +989,9 @@ export class Coordinator {
             agentId: sub.agentId,
             versionId: sub.versionId,
           }).catch(() => undefined);
+        }
+        if (mode === 'container') {
+          await this.maybeRecyclePodmanVm();
         }
       }
 
@@ -1785,26 +1864,33 @@ export class Coordinator {
       },
     };
 
-    const {aborted} = await this.runGame2AndFinalize(match, {
-      outcome: g1.outcome,
-      turns: g1.turns,
-      endReason: g1.endReason,
-      p1: {
-        bankSeconds: g1.p1.bankSeconds,
-        peakRam: g1.p1.ram,
-        initMillis: g1.p1.initMillis,
-        teamPreviewMillis: g1.p1.teamPreviewMillis,
-        meanTurnMillis: g1.p1.turnMillis,
-      },
-      p2: {
-        bankSeconds: g1.p2.bankSeconds,
-        peakRam: g1.p2.ram,
-        initMillis: g1.p2.initMillis,
-        teamPreviewMillis: g1.p2.teamPreviewMillis,
-        meanTurnMillis: g1.p2.turnMillis,
-      },
-    });
-    return aborted ? 'aborted' : 'resumed';
+    const usedContainer = cp.p1.mode === 'container' || cp.p2.mode === 'container';
+    try {
+      const {aborted} = await this.runGame2AndFinalize(match, {
+        outcome: g1.outcome,
+        turns: g1.turns,
+        endReason: g1.endReason,
+        p1: {
+          bankSeconds: g1.p1.bankSeconds,
+          peakRam: g1.p1.ram,
+          initMillis: g1.p1.initMillis,
+          teamPreviewMillis: g1.p1.teamPreviewMillis,
+          meanTurnMillis: g1.p1.turnMillis,
+        },
+        p2: {
+          bankSeconds: g1.p2.bankSeconds,
+          peakRam: g1.p2.ram,
+          initMillis: g1.p2.initMillis,
+          teamPreviewMillis: g1.p2.teamPreviewMillis,
+          meanTurnMillis: g1.p2.turnMillis,
+        },
+      });
+      return aborted ? 'aborted' : 'resumed';
+    } finally {
+      if (usedContainer) {
+        await this.maybeRecyclePodmanVm();
+      }
+    }
   }
 
   async playNextScheduledMatch(
@@ -1993,6 +2079,7 @@ export class Coordinator {
     });
 
     let g1Checkpointed = false;
+    const usedContainer = a1.mode === 'container' || a2.mode === 'container';
 
     try {
       // Game 1: P1 in slot p1 with T1, P2 in slot p2 with T2
@@ -2161,6 +2248,10 @@ export class Coordinator {
         this.stateDb.markMatchCheckpointStatus(matchId, 'aborted');
       }
       throw err;
+    } finally {
+      if (usedContainer) {
+        await this.maybeRecyclePodmanVm();
+      }
     }
   }
 }

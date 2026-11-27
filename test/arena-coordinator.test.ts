@@ -47,7 +47,11 @@ describe('Coordinator', () => {
 
   function createMockCoordHarness(
     prefix: string,
-    opts?: {baselineSpec?: arbiter.AgentLaunchSpec; omitSmokeTeams?: boolean}
+    opts?: {
+      baselineSpec?: arbiter.AgentLaunchSpec;
+      omitSmokeTeams?: boolean;
+      recyclePodmanVm?: () => Promise<void> | void;
+    }
   ) {
     const reportedStatuses: serverArena.SubmissionStatusPayload[] = [];
     const completedMatches: serverArena.MatchCompletePayload[] = [];
@@ -131,6 +135,7 @@ describe('Coordinator', () => {
       rootDir,
       devMode: true,
       maxTurns: 1,
+      recyclePodmanVm: opts?.recyclePodmanVm,
     });
 
     const ladderSnap: coordinator.LadderSnapshot = {
@@ -1659,6 +1664,133 @@ describe('Coordinator', () => {
       }
     } finally {
       fs.rmSync(migTmp, {recursive: true, force: true});
+    }
+  });
+
+  test('recyclePodmanVm polls podman info until restarted VM socket is ready', async () => {
+    const calls: string[] = [];
+    let infoChecks = 0;
+    let sleeps = 0;
+    await coordinator.recyclePodmanVm({
+      exec: (file, args) => {
+        calls.push(`${file} ${args.join(' ')}`);
+        if (file === 'podman' && args[0] === 'info') {
+          infoChecks++;
+          if (infoChecks < 2) return Promise.reject(new Error('socket not ready'));
+        }
+        return Promise.resolve();
+      },
+      sleep: () => {
+        sleeps++;
+        return Promise.resolve();
+      },
+    });
+    expect(calls).toEqual([
+      'podman machine stop podman-machine-default',
+      'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
+      'podman info --format {{.Host.Os}}',
+      'podman info --format {{.Host.Os}}',
+    ]);
+    expect(sleeps).toBe(1);
+  });
+
+  test('recyclePodmanVm still restarts service when podman machine stop fails', async () => {
+    const calls: string[] = [];
+    const origError = console.error;
+    console.error = () => undefined;
+    try {
+      await coordinator.recyclePodmanVm({
+        exec: (file, args) => {
+          calls.push(`${file} ${args.join(' ')}`);
+          if (file === 'podman' && args[0] === 'machine') {
+            return Promise.reject(new Error('already stopped'));
+          }
+          return Promise.resolve();
+        },
+        sleep: () => Promise.resolve(),
+      });
+    } finally {
+      console.error = origError;
+    }
+    expect(calls).toEqual([
+      'podman machine stop podman-machine-default',
+      'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
+      'podman info --format {{.Host.Os}}',
+    ]);
+  });
+
+  test('playNextScheduledMatch recycles Podman VM after a container match', async () => {
+    let recycles = 0;
+    const h = createMockCoordHarness('recycle-container-match', {
+      recyclePodmanVm: () => {
+        recycles++;
+      },
+    });
+    const fakeResult: arbiter.ArenaGameResult = {
+      outcome: 'W',
+      winner: 'p1',
+      turns: 1,
+      endReason: 'win',
+      omniscientLog: '|turn|1\n|win|Agent A\n',
+      p1: {
+        bankSeconds: 120,
+        peakRam: 128,
+        initMillis: 50,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+      p2: {
+        bankSeconds: 120,
+        peakRam: 64,
+        initMillis: 40,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+    };
+    const origRunDesc = Object.getOwnPropertyDescriptor(
+      arbiter.TimeSlicedArenaGame.prototype,
+      'run'
+    )!;
+    Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', {
+      ...origRunDesc,
+      value: () => Promise.resolve(fakeResult),
+    });
+    try {
+      h.stateDb.upsertLocalAgent({
+        versionId: 30,
+        agentId: 1,
+        slug: 'foul-play',
+        version: '3.0.0',
+        mode: 'container',
+        target: 'foul-play-3.0.0-v30',
+        residency: 'hot',
+        unpackedBytes: 1024,
+      });
+      installLocalAgent(h, {versionId: 25, agentId: 2, slug: 'pokechamp', version: '1.0.0'});
+      const played = await h.coord.playNextScheduledMatch([h.ladderSnap]);
+      expect(played?.ladderId).toBe('gen9customgame');
+      expect(recycles).toBe(1);
+    } finally {
+      Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', origRunDesc);
+      h.stateDb.close();
+    }
+  });
+
+  test('playNextScheduledMatch skips Podman VM recycle after a native-only match', async () => {
+    let recycles = 0;
+    const h = createMockCoordHarness('skip-recycle-native-match', {
+      recyclePodmanVm: () => {
+        recycles++;
+      },
+    });
+    try {
+      installLocalAgent(h, {versionId: 30, agentId: 1, slug: 'foul-play', version: '3.0.0'});
+      installLocalAgent(h, {versionId: 25, agentId: 2, slug: 'pokechamp', version: '1.0.0'});
+      const played = await h.coord.playNextScheduledMatch([h.ladderSnap]);
+      expect(played?.ladderId).toBe('gen9customgame');
+      expect(recycles).toBe(0);
+    } finally {
+      h.stateDb.close();
     }
   });
 });
