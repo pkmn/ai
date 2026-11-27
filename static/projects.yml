@@ -883,9 +883,15 @@
       url: https://github.com/smogon/pokemon-showdown
 - name: AWRorus
   active: 2026 # October 18
+  engine: Custom
+  language: [Rust, Python]
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+  arena:
+    logo: {width: 336, height: 336}
+    owners:
+      SirPopiel: FillyGrifon.259963
 - name: awsome battler
   active: 2026 # October 18
   engine:
