@@ -984,7 +984,11 @@ export function getSubmissionAdminSummary(
   };
 }
 
-export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] {
+export function getPendingSubmissions(
+  db: DatabaseSync,
+  opts?: {includeTeams?: boolean}
+): PendingSubmissionRow[] {
+  const includeTeams = opts?.includeTeams ?? true;
   const rows = db.prepare(`
     SELECT av.*, a.slug AS agent_slug, a.name AS agent_name
     FROM agent_versions av
@@ -997,13 +1001,15 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
     const ladders = JSON.parse(row.ladders_json) as string[];
     const tournaments = JSON.parse(row.tournaments_json ?? '[]') as string[];
     const teamsByLadder: Record<string, string[]> = {};
-    for (const ladderId of ladders) {
-      const pendingTeams = teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'pending');
-      const ladderTeams = pendingTeams.length > 0
-        ? pendingTeams
-        : teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'active');
-      if (ladderTeams.length > 0) {
-        teamsByLadder[ladderId] = ladderTeams;
+    if (includeTeams) {
+      for (const ladderId of ladders) {
+        const pendingTeams = teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'pending');
+        const ladderTeams = pendingTeams.length > 0
+          ? pendingTeams
+          : teams.getTeamsForAgentLadder(db, ladderId, row.agent_id, 'active');
+        if (ladderTeams.length > 0) {
+          teamsByLadder[ladderId] = ladderTeams;
+        }
       }
     }
     return {

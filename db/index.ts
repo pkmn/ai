@@ -709,8 +709,8 @@ export class Database extends SqliteDatabase {
     return versions.getSubmissionAdminSummary(this.db, now);
   }
 
-  getPendingSubmissions(): versions.PendingSubmissionRow[] {
-    return versions.getPendingSubmissions(this.db);
+  getPendingSubmissions(opts?: {includeTeams?: boolean}): versions.PendingSubmissionRow[] {
+    return versions.getPendingSubmissions(this.db, opts);
   }
 
   getVersionOwnerDiscordIds(agentId: number, developerId?: number): string[] {

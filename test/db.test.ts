@@ -5749,6 +5749,34 @@ describe('discord watches', () => {
     }
   });
 
+  test('getPendingSubmissions omits teamsByLadder when includeTeams is false', () => {
+    const db = new database.Database(':memory:', {now: 1_700_000_000});
+    try {
+      db.syncLadders(undefined, 1_700_000_000);
+      db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
+      const alpha = db.getAgentBySlug('alpha')!;
+      const ladderId = 'gen9championsvgc2026regmc';
+      db.setAgentLadders(alpha.id, ['vgc'], 1_700_000_000);
+      const v1 = db.createSubmission({
+        agentId: alpha.id,
+        version: '1.0',
+        package: 'bundle',
+        url: 'https://example.com/alpha-1.0.tar.zst',
+        sha256: 'a'.repeat(64),
+        ladderIds: [ladderId],
+        teamsByLadder: {[ladderId]: ['t1', 't2']},
+        now: 1_700_000_000,
+      });
+
+      const lite = db.getPendingSubmissions({includeTeams: false}).find(p => p.versionId === v1.id);
+      expect(lite?.ladders).toEqual([ladderId]);
+      expect(lite?.submittedAt).toBe(1_700_000_000);
+      expect(lite?.teamsByLadder).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
   test('recordCompletedMatch rejects a wiped versionId with 409', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {

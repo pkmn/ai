@@ -1160,7 +1160,10 @@ function formatSmokeCadence(cadence: db.SmokeCadence): {
   };
 }
 
-function renderArenaQueueLine(extras: SystemCardExtras, outboxPending?: number): util.Html {
+function renderArenaQueueLine(
+  extras: Omit<SystemCardExtras, 'unsentDms'>,
+  outboxPending?: number
+): util.Html {
   const cadence = formatSmokeCadence(extras.smokeCadence);
   return (
     <span id='admin-queue-line' className='sys-line'>
@@ -1826,16 +1829,18 @@ function collectSmokeQueue(
   runningSmokeTests: AdminRunningSmoke[];
   queuedCount: number;
 } {
-  const pendingSubmissions: AdminPendingItem[] = database.getPendingSubmissions().map(p => ({
-    versionId: p.versionId,
-    agentSlug: p.agentSlug,
-    agentName: p.agentName,
-    version: p.version,
-    package: p.package,
-    ladders: p.ladders,
-    tournaments: p.tournaments,
-    submittedAt: p.submittedAt,
-  }));
+  const pendingSubmissions: AdminPendingItem[] = database
+    .getPendingSubmissions({includeTeams: false})
+    .map(p => ({
+      versionId: p.versionId,
+      agentSlug: p.agentSlug,
+      agentName: p.agentName,
+      version: p.version,
+      package: p.package,
+      ladders: p.ladders,
+      tournaments: p.tournaments,
+      submittedAt: p.submittedAt,
+    }));
   const pendingById = new Map(pendingSubmissions.map(p => [p.versionId, p]));
   const runningIds = new Set<number>();
   const runningSmokeTests: AdminRunningSmoke[] = (arenaHandle?.getLiveDiagnostics() ?? []).map(
@@ -3315,7 +3320,6 @@ export function register(app: polka.Polka, options: Options): Handle {
   const buildSmokeQueueEventPayload = (now: number) => {
     const {pendingSubmissions, runningSmokeTests, queuedCount} = collectSmokeQueue(db, arenaHandle);
     const stagedCount = db.countStagedVersions();
-    const unsentDms = db.getPendingVersionDms().length;
     const smokeCadence = db.getSmokeCadence();
     const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
     const tournamentNameById = new Map(db.getTournaments().map(t => [t.id, t.name]));
@@ -3336,7 +3340,6 @@ export function register(app: polka.Polka, options: Options): Handle {
         runningSmoke: runningSmokeTests.length,
         queuedSmoke: queuedCount,
         stagedCount,
-        unsentDms,
         smokeCadence,
       }, outboxPending).toString(),
     };
