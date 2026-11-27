@@ -619,7 +619,7 @@ export class TimeSlicedArenaGame {
         const elapsedMillis = Number(process.hrtime.bigint() - readyStartNs) / 1e6;
         remainingBudgetMillis = this.readyGraceMillis - elapsedMillis;
 
-        if (timedOut || remainingBudgetMillis <= 0) {
+        if (timedOut) {
           this.ended = true;
           this.winner = player.slot === 'p1' ? 'p2' : 'p1';
           this.endReason = 'timeout';
@@ -647,6 +647,12 @@ export class TimeSlicedArenaGame {
           this.pauseSlot(player);
           slotPaused = true;
           return !this.ended;
+        }
+        if (remainingBudgetMillis <= 0) {
+          this.ended = true;
+          this.winner = player.slot === 'p1' ? 'p2' : 'p1';
+          this.endReason = 'timeout';
+          return false;
         }
       }
       return false;

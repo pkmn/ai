@@ -236,15 +236,6 @@ describe('ConcurrentTournamentGame', () => {
   });
 
   test('times out BYOT entrant that never sends /utm within ready grace', async () => {
-    const readyOnlyScript = path.join(tmpDir, 'byot-ready-only-agent.js');
-    fs.writeFileSync(
-      readyOnlyScript,
-      '#!/usr/bin/env node\n' +
-      'process.stdout.write("/ready\\n");\n' +
-      'setInterval(() => {}, 1000);\n',
-      {mode: 0o755}
-    );
-
     const timeoutRes = await new tournament.ConcurrentGame({
       format: 'gen9ou',
       seed: '1,2,3,4',
@@ -255,7 +246,8 @@ describe('ConcurrentTournamentGame', () => {
           vmHost: 'localhost',
           controlSocket: '/tmp/unused',
           localCommand: relayBin,
-          localArgs: [process.execPath, readyOnlyScript],
+          // Without `--utm`, mock-agent prints `/ready` and waits on stdin indefinitely.
+          localArgs: [defaultAgentScript],
         },
       },
       p2: {
@@ -268,7 +260,7 @@ describe('ConcurrentTournamentGame', () => {
           localArgs: [defaultAgentScript, '--utm', OU_TEAM_ONE],
         },
       },
-      timers: {readyGraceSeconds: 0.1},
+      timers: {readyGraceSeconds: 0.5},
       maxTurns: 1,
     }).run();
     expect(timeoutRes.winner).toBe('p2');

@@ -703,7 +703,7 @@ export class ConcurrentGame {
       if (player.state.spotPreempted || player.state.sshDisconnected) {
         return {ok: false, reason: 'spot-preemption'};
       }
-      if (timedOut || remaining <= 0) {
+      if (timedOut) {
         return {ok: false, reason: 'timeout'};
       }
       if (line === undefined) {
@@ -716,6 +716,9 @@ export class ConcurrentGame {
       if (parseAgentStdoutLine(line)?.kind === 'ready') {
         player.telemetry.initMillis = Math.max(1, Math.ceil(elapsedMillis));
         return {ok: true};
+      }
+      if (remaining <= 0) {
+        return {ok: false, reason: 'timeout'};
       }
     }
   }
@@ -736,7 +739,7 @@ export class ConcurrentGame {
       if (player.state.spotPreempted || player.state.sshDisconnected) {
         return {ok: false, reason: 'spot-preemption'};
       }
-      if (timedOut || remaining <= 0) {
+      if (timedOut) {
         return {ok: false, reason: 'timeout'};
       }
       if (line === undefined) {
@@ -754,6 +757,9 @@ export class ConcurrentGame {
         }
         player.telemetry.initMillis = Math.max(1, Math.ceil(elapsedMillis));
         return {ok: true, team: valid};
+      }
+      if (remaining <= 0) {
+        return {ok: false, reason: 'timeout'};
       }
     }
   }
