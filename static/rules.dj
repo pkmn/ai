@@ -51,15 +51,16 @@ strong agent that works in any environment, you have likely strayed in the wrong
 ### Submission
 
 Registered competitors sign in to their [account](/account) via GitHub OAuth to view status, link a
-Discord ID (for notifications and [chat](/chat) roles), and --- once approved and eligible ---
-submit an agent with:
+Discord ID (for notifications and [chat](/chat) roles), generate a Submission API token, and ---
+once approved and eligible --- submit an agent with:
 
   - *`version`*: unique version string within your project once activated (reusable after a failed
     or discarded diagnostic test; max 12 characters, _e.g._, `1.0.0` or `v2`, regex
     `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`).
   - *`artifact_url`*: direct HTTPS URL to a `.tar.gz`/`.tar.xz`/`.tar.zst` bundle _or_ an OCI
     container image reference (_e.g._, `ghcr.io/...`, `docker.io/...`).
-  - *`sha256`*: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
+  - *`sha256`* (_optional_): 64-character hex SHA-256 checksum of the archive or OCI manifest
+    digest (computed and pinned on fetch if omitted).
   - *`auth_header`* (_optional_): read-only bearer token / header used to pull private artifacts
     (used once during ladder diagnostic fetch and scrubbed immediately afterward; for tournaments,
     both the OCI image and any auth token must remain valid until the tournament completes).

@@ -39,7 +39,16 @@ CREATE TABLE IF NOT EXISTS developers (
   -- (retained for future periodic Smogon re-verification scheduling & audit; do not delete).
   verified_at INTEGER,
   -- Unix timestamp (seconds) when this developer row was created.
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- SHA-256 hex hash of the developer's revocable Submission API Bearer token, or NULL.
+  api_token_hash TEXT,
+  -- Non-secret leading prefix of the active Submission API token for display on /account, or NULL.
+  api_token_prefix TEXT,
+  -- Unix timestamp (seconds) when the current Submission API token was generated, or NULL.
+  api_token_created_at INTEGER,
+  -- Unix timestamp (seconds) when the current Submission API token was last used, or NULL.
+  api_token_last_used_at INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_developers_agent ON developers(agent_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_developers_api_token_hash ON developers(api_token_hash);

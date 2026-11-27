@@ -1505,6 +1505,18 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       githubUser: 'pmariglia',
     },
     {
+      name: 'account-api-token',
+      section: 'account',
+      title: 'API Token Generated',
+      path: '/account/',
+      githubUser: 'pmariglia',
+      setup: fixture => withSavepoint(fixture, () => {}),
+      act: async page => {
+        await page.click('#api-token-gen-btn');
+        await page.waitForSelector('#api-token-banner:not(.hide)');
+      },
+    },
+    {
       name: 'account-ineligible-smoke-pending',
       section: 'account',
       title: 'Smoke Pending',
@@ -4496,7 +4508,7 @@ async function shootWithWorker(
 
   const {page} = worker;
   if (page.url().startsWith(fixture.origin)) {
-    await page.evaluate("try { localStorage.removeItem('theme'); } catch {}");
+    await page.evaluate('try { localStorage.clear(); sessionStorage.clear(); } catch {}');
   }
   worker.resetPendingRequests();
   const navRes = await page.goto(scenario.path);

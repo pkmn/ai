@@ -119,8 +119,31 @@ tr.secondary td {
 .form-row-inline {
   display: flex;
   flex-wrap: wrap;
-  gap: 1.25ch;
+  gap: 0.45rem 1.25ch;
   align-items: center;
+}
+
+.pkg-hint {
+  font-size: 0.86em;
+}
+
+.reuse-wrap {
+  white-space: nowrap;
+}
+
+.api-token-secret {
+  word-break: break-all;
+}
+
+.api-token-example {
+  margin: 0.55rem 0 0;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.82em;
+  line-height: 1.4;
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
 }
 
 .target-group {

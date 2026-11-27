@@ -113,6 +113,7 @@ export interface PendingSubmissionRow {
 export interface ApplySubmissionStatusInput {
   versionId: number;
   smokeStatus: Exclude<SmokeStatus, 'pending'>;
+  sha256?: string;
   unpackedBytes?: number;
   smokeDurationMillis?: number;
   smokeInitMillis?: number;
@@ -1210,10 +1211,14 @@ export function applySubmissionStatus(
     const retainTournamentAuth =
       isTournamentOnly && (input.smokeStatus === 'staged' || input.smokeStatus === 'passed');
     const scrubAuth = !retainTournamentAuth;
+    const resolvedSha = input.sha256 && /^[0-9a-fA-F]{64}$/.test(input.sha256.trim())
+      ? input.sha256.trim().toLowerCase()
+      : null;
     if (prev.smokeStatus === input.smokeStatus) {
       db.prepare(`
         UPDATE agent_versions
         SET auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
+            sha256 = CASE WHEN sha256 = '' AND ? IS NOT NULL THEN ? ELSE sha256 END,
             unpacked_bytes = COALESCE(?, unpacked_bytes),
             smoke_duration_millis = COALESCE(?, smoke_duration_millis),
             smoke_init_millis = COALESCE(?, smoke_init_millis),
@@ -1224,6 +1229,8 @@ export function applySubmissionStatus(
         WHERE id = ?
       `).run(
         scrubAuth ? 1 : 0,
+        resolvedSha,
+        resolvedSha,
         input.unpackedBytes ?? null,
         input.smokeDurationMillis ?? null,
         input.smokeInitMillis ?? null,
@@ -1259,6 +1266,7 @@ export function applySubmissionStatus(
     db.prepare(`
       UPDATE agent_versions
       SET auth_token_encoding = CASE WHEN ? = 1 THEN NULL ELSE auth_token_encoding END,
+          sha256 = CASE WHEN sha256 = '' AND ? IS NOT NULL THEN ? ELSE sha256 END,
           smoke_status = ?,
           unpacked_bytes = COALESCE(?, unpacked_bytes),
           smoke_duration_millis = COALESCE(?, smoke_duration_millis),
@@ -1272,6 +1280,8 @@ export function applySubmissionStatus(
       WHERE id = ?
     `).run(
       scrubAuth ? 1 : 0,
+      resolvedSha,
+      resolvedSha,
       input.smokeStatus,
       input.unpackedBytes ?? null,
       input.smokeDurationMillis ?? null,

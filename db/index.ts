@@ -564,6 +564,27 @@ export class Database extends SqliteDatabase {
     developers.unlinkDeveloperDiscord(this.db, githubLogin, now);
   }
 
+  getDeveloperByApiTokenHash(tokenHash: string): developers.DeveloperRow | undefined {
+    return developers.getDeveloperByApiTokenHash(this.db, tokenHash);
+  }
+
+  setDeveloperApiToken(
+    githubLogin: string,
+    tokenHash: string,
+    tokenPrefix: string,
+    now?: number
+  ) {
+    developers.setDeveloperApiToken(this.db, githubLogin, tokenHash, tokenPrefix, now);
+  }
+
+  revokeDeveloperApiToken(githubLogin: string) {
+    developers.revokeDeveloperApiToken(this.db, githubLogin);
+  }
+
+  touchDeveloperApiToken(developerId: number, now?: number) {
+    developers.touchDeveloperApiToken(this.db, developerId, now);
+  }
+
   syncDiscordMembers(members: Iterable<{id: string; username: string}>, now?: number) {
     discordMembers.syncDiscordMembers(this.db, this.txRunner, members, now);
   }

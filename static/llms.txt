@@ -51,23 +51,39 @@ providing:
   Pokémon Showdown staff without notifying authors; never shared with third parties or used for any
   other purpose).
 
-### Submitting via `/account`
-Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` with:
+### Submitting via `/account` or the Submission API
+Once approved, submit via GitHub OAuth at `https://pkmn.ai/account/` (the form pre-fills your last
+submitted URL/targets and reusable version labels, and auto-detects bundle vs. OCI format) or
+programmatically via the Submission API using a revocable per-developer token generated on
+`/account/` (`Authorization: Bearer pkmn_...`):
 - `version`: unique string within your project once activated, max 12 chars, regex
   `^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$`. **Reusable after a failed or discarded diagnostic test;
   permanently reserved once activated.**
-- `artifact_url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle (hosted on
-  GitHub, Hugging Face, Cloudflare R2, AWS S3, GCS, or Backblaze B2), OR an OCI container image
-  reference (`ghcr.io/...`, `docker.io/...`, Quay, GCR / Google Artifact Registry, or AWS ECR).
-- `sha256`: 64-character hex SHA-256 checksum of the archive or OCI manifest digest.
-- `auth_header` (optional): read-only bearer token / header used to pull private artifacts (e.g.,
+- `url`: direct HTTPS URL to a `.tar.gz` / `.tar.xz` / `.tar.zst` bundle (hosted on GitHub,
+  Hugging Face, Cloudflare R2, AWS S3, GCS, or Backblaze B2; standard private GitHub Release
+  download URLs are resolved via the Releases API automatically when `authToken` is supplied), OR
+  an OCI container image reference (`ghcr.io/...`, `docker.io/...`, Quay, GCR / Google Artifact
+  Registry, or AWS ECR). `package` (`"bundle"` / `"oci"`) is optional and auto-detected from `url`.
+- `sha256` (optional): 64-character hex SHA-256 checksum of the archive or OCI manifest digest
+  (accepts `sha256:` prefix or `@sha256:...` on OCI refs). Verified if supplied; if omitted,
+  computed and pinned during diagnostic fetch and displayed on the Staged review card before
+  activation.
+- `authToken` (optional): read-only bearer token / header used to pull private artifacts (e.g.,
   private GitHub release with single-repo `Contents: Read-only` PAT, private Hugging Face repo
   `hf_...` token, or private registry `read:packages` token; R2 / S3 / B2 / GCS buckets can also
   use a 24-hour presigned `GET` URL). For ladders, used once during diagnostic fetch and scrubbed
   immediately afterward; for tournaments, both the OCI image and any auth token must remain valid
   until the tournament completes.
-- `ladders` / `tournaments`: non-empty subset of ladders *or* tournaments to enter (submitted
-  separately, not combined).
+- `ladders` / `tournaments`: non-empty subset of ladders (accepts ladder ID, slot, or display name
+  such as `"RBY"`, `"SV"`, `"VGC"`) *or* tournament IDs to enter (submitted separately, not
+  combined).
+
+Headless API endpoints accepting `Authorization: Bearer <PKMN_AI_TOKEN>` (scoped strictly to
+account/submission operations; cannot edit wiki pages, unlink Discord, or rotate/revoke tokens):
+- `POST https://pkmn.ai/api/submissions` — JSON body `{version, url, sha256?, authToken?, ladders?, tournaments?, teams?}` → `201 {ok, versionId, version, smokeStatus}`
+- `GET https://pkmn.ai/account.json` — eligibility, ladders, tournaments, saved team counts, live diagnostic, and version history (including `sha256`, `smoke`, and diagnostic `logHref` / `stderrHref`)
+- `GET https://pkmn.ai/api/account/diagnostics/:id/{log,stderr}` — download diagnostic replay JSON/log or stderr text
+- `POST https://pkmn.ai/api/account/versions/:id/{activate,discard}` — activate or discard a `staged` version
 
 ### Hard Artifact Limits (Enforced by Arena Unpacker)
 - **Size cap:** **≤ 500 MiB compressed AND ≤ 500 MiB unpacked on disk** (sum of regular files and

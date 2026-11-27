@@ -398,14 +398,15 @@ describe('arena packages & static assets', () => {
     test('extracts valid native bundles with APFS CoW CAS deduplication', async () => {
       const dirs = packages.dirsForRoot(path.join(tmpDir, 'dedup'));
 
-      const bytes1 = await packages.downloadAndUnpackBundle({
+      const res1 = await packages.downloadAndUnpackBundle({
         url: `file://${validArchivePath}`,
         expectedSha256: validArchiveSha,
         agentTargetId: 'agent-v1',
         dirs,
         allowPrivateUrls: true,
       });
-      expect(bytes1).toBeGreaterThan(70_000);
+      expect(res1.unpackedBytes).toBeGreaterThan(70_000);
+      expect(res1.sha256).toBe(validArchiveSha);
       expect(fs.existsSync(path.join(dirs.agents, 'agent-v1', 'run'))).toBe(true);
 
       const bytes2 = unpack.bundle(
@@ -413,7 +414,19 @@ describe('arena packages & static assets', () => {
         path.join(dirs.agents, 'agent-v2'),
         dirs.cas
       );
-      expect(bytes2).toBe(bytes1);
+      expect(bytes2).toBe(res1.unpackedBytes);
+    });
+
+    test('computes and returns SHA-256 when expectedSha256 is omitted', async () => {
+      const dirs = packages.dirsForRoot(path.join(tmpDir, 'optional-sha'));
+      const res = await packages.downloadAndUnpackBundle({
+        url: `file://${validArchivePath}`,
+        agentTargetId: 'agent-nosha',
+        dirs,
+        allowPrivateUrls: true,
+      });
+      expect(res.unpackedBytes).toBeGreaterThan(70_000);
+      expect(res.sha256).toBe(validArchiveSha);
     });
 
     test('rejects bundles missing executable ./run without polluting CAS', () => {
@@ -859,7 +872,7 @@ describe('arena packages & static assets', () => {
         return Promise.resolve(new Response(archiveBytes, {status: 200}));
       };
 
-      const dlBytes = await packages.downloadAndUnpackBundle({
+      const {unpackedBytes: dlBytes, sha256: dlSha} = await packages.downloadAndUnpackBundle({
         url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz?token=1',
         expectedSha256: validArchiveSha,
         agentTargetId: 'agent-presigned',
@@ -867,6 +880,7 @@ describe('arena packages & static assets', () => {
         dirs: packages.dirsForRoot(path.join(tmpDir, 'redir')),
       });
       expect(dlBytes).toBeGreaterThan(70_000);
+      expect(dlSha).toBe(validArchiveSha);
       expect(seenHeaders).toEqual([
         {
           url: 'https://github.com/pkmn/0-error/releases/download/v1/agent.tar.gz?token=1',
@@ -930,7 +944,7 @@ describe('arena packages & static assets', () => {
         return Promise.resolve(new Response(zstBytes, {status: 200}));
       };
 
-      const dlBytes = await packages.downloadAndUnpackBundle({
+      const {unpackedBytes: dlBytes} = await packages.downloadAndUnpackBundle({
         url: 'https://huggingface.co/pkmn/0-error/resolve/main/agent.tar.zst',
         expectedSha256: zstSha,
         agentTargetId: 'agent-hf-xet',
@@ -993,7 +1007,7 @@ describe('arena packages & static assets', () => {
         return Promise.resolve(new Response(zstBytes, {status: 200}));
       };
 
-      const dlBytes = await packages.downloadAndUnpackBundle({
+      const {unpackedBytes: dlBytes} = await packages.downloadAndUnpackBundle({
         url: 'https://github.com/pkmn/0-error/releases/download/v1.0.0/agent.tar.zst',
         expectedSha256: zstSha,
         agentTargetId: 'agent-gh-private',
@@ -1333,7 +1347,7 @@ describe('arena packages & static assets', () => {
         return Promise.resolve(new Response(zstBytes, {status: 200}));
       };
 
-      const dlBytes = await packages.downloadAndUnpackBundle({
+      const {unpackedBytes: dlBytes} = await packages.downloadAndUnpackBundle({
         url: 'https://github.com/pkmn/0-error/blob/main/agent.tar.zst',
         expectedSha256: zstSha,
         agentTargetId: 'agent-gh-lfs',
@@ -1406,7 +1420,7 @@ describe('arena packages & static assets', () => {
         return Promise.resolve(new Response(zstBytes, {status: 200}));
       };
 
-      const dlBytes = await packages.downloadAndUnpackBundle({
+      const {unpackedBytes: dlBytes} = await packages.downloadAndUnpackBundle({
         url: 'https://api.github.com/repos/pkmn/0-error/releases/assets/99',
         expectedSha256: zstSha,
         agentTargetId: 'agent-gh-api-direct',

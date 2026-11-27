@@ -1782,10 +1782,10 @@ export function finalizeUnpackedOciRootfs(bundleDir: string): number {
 export function unpackOciRootfs(opts: {
   imageRef: string;
   targetId: string;
-  expectedSha256: string;
+  expectedSha256?: string;
   authToken?: string;
   rootDir?: string;
-}): number {
+}): packages.UnpackResult {
   if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(opts.targetId) || opts.targetId.includes('..')) {
     throw new Error(`Invalid tournament agent targetId: ${opts.targetId}`);
   }
@@ -1799,7 +1799,7 @@ export function unpackOciRootfs(opts: {
   const inspected = packages.inspectRemoteOciSize({
     imageRef: cleanRef,
     creds: opts.authToken,
-    expectedSha256: opts.expectedSha256,
+    expectedSha256: opts.expectedSha256?.trim() || undefined,
     platform: {os: 'linux', arch: 'amd64'},
     stagingDir,
   });
@@ -1839,7 +1839,10 @@ export function unpackOciRootfs(opts: {
     const destDir = path.join(agentsDir, opts.targetId);
     fs.rmSync(destDir, {recursive: true, force: true});
     fs.renameSync(rootfsDir, destDir);
-    return unpackedBytes;
+    return {
+      unpackedBytes,
+      sha256: inspected.indexSha256 ?? inspected.manifestSha256,
+    };
   } catch (err) {
     throw packages.scrubError(err, opts.authToken);
   } finally {
@@ -1887,7 +1890,7 @@ export interface Options {
   prepareSubmissionRootfs?: (
     sub: arena.PendingSubmission,
     targetId: string
-  ) => Promise<number> | number;
+  ) => Promise<number | packages.UnpackResult> | number | packages.UnpackResult;
   resolveEntrantSpec?: (
     entrant: EntrantInfo,
     vmHost: string,
@@ -1910,10 +1913,7 @@ export class Coordinator {
   private readonly maxTurns?: number;
   private readonly diagnosticWallCapMillis?: number;
   private readonly seedSecret: string;
-  private readonly prepareSubmissionRootfs?: (
-    sub: arena.PendingSubmission,
-    targetId: string
-  ) => Promise<number> | number;
+  private readonly prepareSubmissionRootfs?: Options['prepareSubmissionRootfs'];
   private readonly customResolveEntrantSpec?: Options['resolveEntrantSpec'];
 
   constructor(options: Options) {
@@ -1975,16 +1975,23 @@ export class Coordinator {
       const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
 
       let unpackedBytes: number;
+      let resolvedSha256: string | undefined;
       try {
-        unpackedBytes = this.prepareSubmissionRootfs
+        const prepared = this.prepareSubmissionRootfs
           ? await this.prepareSubmissionRootfs(sub, targetId)
           : unpackOciRootfs({
             imageRef: sub.url,
             targetId,
-            expectedSha256: sub.sha256,
+            expectedSha256: sub.sha256 || undefined,
             authToken: sub.authToken,
             rootDir: this.rootDir,
           });
+        if (typeof prepared === 'number') {
+          unpackedBytes = prepared;
+        } else {
+          unpackedBytes = prepared.unpackedBytes;
+          resolvedSha256 = prepared.sha256;
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await this.client.reportSubmissionStatus({
@@ -2188,6 +2195,7 @@ export class Coordinator {
         await this.reportSubmissionStatus({
           versionId: sub.versionId,
           smokeStatus: 'failed',
+          ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
           smokeError,
           ...(diagnostics.length ? {diagnostics} : {}),
         });
@@ -2197,6 +2205,7 @@ export class Coordinator {
       await this.reportSubmissionStatus({
         versionId: sub.versionId,
         smokeStatus: 'staged',
+        ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
         unpackedBytes,
         smokeDurationMillis,
         ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),

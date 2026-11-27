@@ -397,15 +397,20 @@ export function inspectRemoteOciSize(opts: InspectOciOptions): OciManifestInspec
   }
 }
 
+export interface UnpackResult {
+  unpackedBytes: number;
+  sha256: string;
+}
+
 export interface PullOciOptions {
   imageRef: string;
   agentTargetId: string;
-  expectedSha256: string;
+  expectedSha256?: string;
   creds?: string;
   dirs?: Dirs;
 }
 
-export function pullAndVerifyOciImage(opts: PullOciOptions): number {
+export function pullAndVerifyOciImage(opts: PullOciOptions): UnpackResult {
   const {
     imageRef,
     agentTargetId,
@@ -416,7 +421,8 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
   if (!TARGET_ID_RE.test(agentTargetId) || agentTargetId.includes('..')) {
     throw new Error(`Invalid OCI agent target ID: ${agentTargetId}`);
   }
-  if (!expectedSha256 || !/^(?:sha256:)?[0-9a-fA-F]{64}$/.test(expectedSha256.trim())) {
+  const cleanExpected = expectedSha256?.trim() || undefined;
+  if (cleanExpected && !/^(?:sha256:)?[0-9a-fA-F]{64}$/.test(cleanExpected)) {
     throw new Error('Expected 64-hex SHA-256 manifest digest for OCI pull');
   }
   const cleanRef = imageRef.replace(/^docker:\/\//, '').trim();
@@ -424,7 +430,7 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
   const inspected = inspectRemoteOciSize({
     imageRef: cleanRef,
     creds,
-    expectedSha256,
+    expectedSha256: cleanExpected,
     platform: {os: 'linux', arch: 'arm64'},
     stagingDir: dirs.staging,
   });
@@ -473,7 +479,10 @@ export function pullAndVerifyOciImage(opts: PullOciOptions): number {
       );
     }
 
-    return uncompressedBytes;
+    return {
+      unpackedBytes: uncompressedBytes,
+      sha256: inspected.indexSha256 ?? inspected.manifestSha256,
+    };
   } catch (err) {
     if (imageLoaded) {
       try {
@@ -821,16 +830,18 @@ async function resolveGitHubReleaseAssetUrl(
 
 export async function downloadAndUnpackBundle(opts: {
   url: string;
-  expectedSha256: string;
+  expectedSha256?: string;
   agentTargetId: string;
   authToken?: string;
   dirs?: Dirs;
   allowPrivateUrls?: boolean;
-}): Promise<number> {
+}): Promise<UnpackResult> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(opts.agentTargetId) ||
       opts.agentTargetId.includes('..')) {
     throw new Error(`Invalid bundle agent target ID: ${opts.agentTargetId}`);
   }
+  const cleanExpected = opts.expectedSha256?.trim().toLowerCase().replace(/^sha256:/, '') ||
+    undefined;
   const dirs = opts.dirs ?? PROD_DIRS;
 
   fs.mkdirSync(dirs.staging, {recursive: true});
@@ -1031,9 +1042,9 @@ export async function downloadAndUnpackBundle(opts: {
               `Compressed bundle (${pointer.size} B) exceeds 500 MiB cap (${MAX_IMAGE_BYTES} B)`
             );
           }
-          if (pointer.oid !== opts.expectedSha256.toLowerCase()) {
+          if (cleanExpected && pointer.oid !== cleanExpected) {
             throw new Error(
-              `SHA-256 mismatch: expected ${opts.expectedSha256}, got ${pointer.oid}`
+              `SHA-256 mismatch: expected ${cleanExpected}, got ${pointer.oid}`
             );
           }
           const lfsUrl = await resolveGitHubLfsDownloadUrl(githubRepo, pointer, authHeader, signal);
@@ -1044,13 +1055,16 @@ export async function downloadAndUnpackBundle(opts: {
     }
 
     // Verify streamed SHA-256 digest before invoking the unpacker
-    if (actualSha256 !== opts.expectedSha256.toLowerCase()) {
+    if (cleanExpected && actualSha256 !== cleanExpected) {
       throw new Error(
-        `SHA-256 mismatch: expected ${opts.expectedSha256}, got ${actualSha256}`
+        `SHA-256 mismatch: expected ${cleanExpected}, got ${actualSha256}`
       );
     }
 
-    return unpack.bundle(archivePath, destDir, dirs.cas);
+    return {
+      unpackedBytes: unpack.bundle(archivePath, destDir, dirs.cas),
+      sha256: actualSha256,
+    };
   } catch (err) {
     throw scrubError(err, opts.authToken);
   } finally {

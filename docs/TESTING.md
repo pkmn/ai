@@ -40,10 +40,10 @@ Run [`tools/shots.tsx`](../tools/shots.tsx) whenever editing TSX views, CSS, Djo
 scripts:
 
 ```sh
-npm run shots -- --list                          # list all 7 sections and 106 scenario names
+npm run shots -- --list                          # list all 7 sections and 107 scenario names
 npm run shots -- --baseline --only ladders,battles  # snapshot only affected states before edits
 npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
-npm run shots -- --baseline && npm run shots     # full 106-state capture (for shared layout/global CSS)
+npm run shots -- --baseline && npm run shots     # full 107-state capture (for shared layout/global CSS)
 open .shots/index.html                           # inspect Visual Atlas
 npm run clean && npm test                        # remove mock artifacts from public/ afterward
 ```
@@ -62,7 +62,7 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
   is strict `0`-pixel outside viewers (unless `--tolerance` is passed) and tolerates up to `25%`
   sprite/animation variance inside unchanged viewer frames.
 
-**7 Atlas Sections (106 states):**
+**7 Atlas Sections (107 states):**
 1. **`static`:** Home (normal, signed-out default profile icon, manual Light/Dark theme overrides,
    and `● LIVE` `#topbar`), Background (`Under Construction`), Concepts + 5 subpages (`baselines`,
    `complexity`, `engines`, `protocol`, `variants`), Glossary, Release, Research, Arena Rules,
@@ -86,7 +86,9 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
 6. **`account`:** Disabled (`403`), `Pending` (locked & Tournament `#3` open), `Qualified`
    pre-launch, `Eligible` new (`0` entries), `Eligible` partial (`RBY`/`ADV` enabled,
    `SV`/`RAND`/`VGC` disabled), VGC incremental validation (`0/20`, `<1.30`/`<4` moves
-   rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool, `Ineligible`
+   rejections, `10/20`, `20/20`), form error, `Eligible` settled w/ locked VGC pool & prefilled
+   artifact URL/targets, generated Submission API token banner (`rotate`/`revoke` + `curl` snippet),
+   `Ineligible`
    (`PENDING` smoke test, `Diagnostic Live` running self-play viewer + `/info`, `Staged Diagnostic`
    awaiting Activate/Discard w/ arrow-expanded replay + `/info` panel + `STDERR`/`log` links, 24h
    failed/discarded smoke-test limit reusing version labels, 14d cooldown w/ Tournament `#3` open

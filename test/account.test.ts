@@ -560,7 +560,7 @@ describe('account routes', () => {
       expect(preHtml).toContain(
         '<label for="sub-url">Artifact URL<span class="req">*</span></label>'
       );
-      expect(preHtml).toContain('<label for="sub-sha">SHA-256<span class="req">*</span></label>');
+      expect(preHtml).toContain('<label for="sub-sha">SHA-256</label>');
       expect(preHtml).toContain('<label for="sub-auth">Auth Header</label>');
       expect(preHtml).toContain(
         '<label for="sub-teams" class="pool-teams-field hide">' +
@@ -886,7 +886,7 @@ describe('account routes', () => {
       });
       expect(badSha.status).toBe(400);
       expect(await badSha.json()).toEqual({
-        error: 'Invalid SHA-256 (must be a 64-character hex digest).',
+        error: 'Invalid SHA-256 (must be a 64-character hex digest, or leave blank).',
       });
     });
 
@@ -2332,5 +2332,256 @@ describe('account routes', () => {
         await new Promise<void>(resolve => liveSrv.close(() => resolve()));
       }
     });
+  });
+
+  describe('streamlined submission form & Submission API tokens', () => {
+    test('normalizes SHA-256 inputs, extracts OCI digests, and strips presigned query params',
+      () => {
+        expect(account.normalizeSha256('')).toBe('');
+        expect(account.normalizeSha256(`sha256:${SHA_A.toUpperCase()}`)).toBe(SHA_A);
+        expect(account.normalizeSha256(`${SHA_A}  agent.tar.zst`)).toBe(SHA_A);
+        expect(account.normalizeSha256(`${SHA_A} *agent.tar.gz`)).toBe(SHA_A);
+        expect(account.normalizeSha256('not-a-digest')).toBeUndefined();
+
+        expect(account.extractOciSha256(`ghcr.io/pkmn/agent@sha256:${SHA_B.toUpperCase()}`)).toBe(
+          SHA_B
+        );
+        expect(account.extractOciSha256('ghcr.io/pkmn/agent:1.0.0')).toBeUndefined();
+
+        expect(
+          account.sanitizePrefillUrl(
+            'https://bucket.r2.cloudflarestorage.com/a.tar.zst?X-Amz-Signature=secret'
+          )
+        ).toBe('https://bucket.r2.cloudflarestorage.com/a.tar.zst');
+        expect(
+          account.sanitizePrefillUrl(
+            'https://api.github.com/repos/pkmn/a/contents/a.tar.zst?ref=main&token=1'
+          )
+        ).toBe('https://api.github.com/repos/pkmn/a/contents/a.tar.zst?ref=main');
+        expect(account.sanitizePrefillUrl('ghcr.io/pkmn/agent:1.0.0')).toBe(
+          'ghcr.io/pkmn/agent:1.0.0'
+        );
+      });
+
+    test('accepts omitted sha256, sha256: prefix, shasum output, and OCI @sha256 digest',
+      async () => {
+        openLadders(['gen1ou20261109', 'gen9ou20261109']);
+
+        // Omitted sha256 on native bundle
+        const resEmpty = await postSubmission('pmariglia', {
+          version: '1.0.0',
+          url: 'https://github.com/pkmn/fp.tar.zst',
+          ladders: ['RBY'],
+        });
+        expect(resEmpty.status).toBe(201);
+        const fp = db.getAgentBySlug('foul-play')!;
+        const v1 = db.getVersionsForAgent(fp.id)[0];
+        expect(v1.sha256).toBe('');
+
+        // Fail v1 so pmariglia can submit again without cooldown
+        db.applySubmissionStatus({
+          versionId: v1.id,
+          smokeStatus: 'failed',
+          smokeError: 'test retry',
+          now: currentNow + 5,
+        });
+
+        // sha256: prefix + shasum filename output
+        const resPrefixed = await postSubmission('pmariglia', {
+          version: '1.0.0',
+          url: 'https://github.com/pkmn/fp.tar.zst',
+          sha256: `sha256:${SHA_A.toUpperCase()}  fp.tar.zst`,
+          ladders: ['RBY'],
+        });
+        expect(resPrefixed.status).toBe(201);
+        const v2 = db.getVersionsForAgent(fp.id)[0];
+        expect(v2.sha256).toBe(SHA_A);
+
+        db.applySubmissionStatus({
+          versionId: v2.id,
+          smokeStatus: 'failed',
+          smokeError: 'test retry 2',
+          now: currentNow + 10,
+        });
+
+        // OCI ref with @sha256:... auto-extracts digest when sha256 is omitted
+        const resOci = await postSubmission('pmariglia', {
+          version: '1.0.0',
+          url: `ghcr.io/pkmn/fp@sha256:${SHA_B.toUpperCase()}`,
+          ladders: ['RBY'],
+        });
+        expect(resOci.status).toBe(201);
+        expect(db.getVersionsForAgent(fp.id)[0].sha256).toBe(SHA_B);
+      });
+
+    test('prefills last sanitized URL, targets, and reusable version after failed diagnostic',
+      async () => {
+        openLadders(['gen1ou20261109', 'gen9ou20261109']);
+        const fp = db.getAgentBySlug('foul-play')!;
+        const failed = db.createSubmission({
+          agentId: fp.id,
+          version: '2.1.0-rc1',
+          package: 'bundle',
+          url: 'https://objects.githubusercontent.com/pkmn/fp.tar.zst?X-Amz-Signature=secret',
+          sha256: '',
+          ladderIds: ['gen9ou20261109'],
+          now: currentNow - 30,
+        });
+        db.applySubmissionStatus({
+          versionId: failed.id,
+          smokeStatus: 'failed',
+          smokeError: 'crash',
+          now: currentNow - 10,
+        });
+
+        const html = await (await fetch(`${baseUrl}/account/`, {
+          headers: {Cookie: cookieFor('pmariglia')},
+        })).text();
+        expect(html).not.toContain('X-Amz-Signature=secret');
+        expect(html).toContain('value="2.1.0-rc1"');
+        expect(html).toContain('value="https://objects.githubusercontent.com/pkmn/fp.tar.zst"');
+        expect(html).toMatch(
+          /<input[^>]*name="ladders"[^>]*value="gen9ou20261109"[^>]*checked/
+        );
+        expect(html).not.toMatch(
+          /<input[^>]*name="ladders"[^>]*value="gen1ou20261109"[^>]*checked/
+        );
+        expect(html).toContain('class="link-btn reuse-btn"');
+        expect(html).not.toContain('id="sub-type"');
+      });
+
+    test('mints, authenticates, rotates, scopes, and revokes developer Submission API tokens',
+      async () => {
+        openLadders(['gen1ou20261109', 'gen9ou20261109']);
+
+        // Generate token via authenticated browser session
+        const genRes = await fetch(`${baseUrl}/api/account/token`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pmariglia'), Accept: 'application/json'},
+        });
+        expect(genRes.status).toBe(200);
+        const genBody = await genRes.json() as {
+          ok: boolean;
+          token: string;
+          prefix: string;
+          createdAt: number;
+        };
+        expect(genBody.ok).toBe(true);
+        expect(genBody.token.startsWith('pkmn_')).toBe(true);
+        expect(genBody.prefix).toBe(genBody.token.slice(0, 12));
+
+        // API token authenticates GET /account.json and returns metadata (never plaintext/hash)
+        const acctRes = await fetch(`${baseUrl}/account.json`, {
+          headers: {Authorization: `Bearer ${genBody.token}`},
+        });
+        expect(acctRes.status).toBe(200);
+        const acctBody = await acctRes.json() as {
+          developer: {github: string; apiToken?: {prefix: string; createdAt: number}};
+        };
+        expect(acctBody.developer.github).toBe('pmariglia');
+        expect(acctBody.developer.apiToken?.prefix).toBe(genBody.prefix);
+        expect(JSON.stringify(acctBody)).not.toContain(genBody.token);
+
+        // API token submits via POST /api/submissions without Accept header and receives JSON 201
+        const subRes = await fetch(`${baseUrl}/api/submissions`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${genBody.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            version: '3.0.0',
+            url: 'https://github.com/pkmn/fp-3.0.0.tar.zst',
+            ladders: ['RBY'],
+          }),
+        });
+        expect(subRes.status).toBe(201);
+        const subBody = await subRes.json() as {ok: boolean; versionId: number; version: string};
+        expect(subBody.ok).toBe(true);
+        expect(subBody.version).toBe('3.0.0');
+
+        // Stage with diagnostic so API token can fetch diagnostic log/stderr and activate
+        db.applySubmissionStatus({
+          versionId: subBody.versionId,
+          smokeStatus: 'staged',
+          sha256: SHA_A,
+          unpackedBytes: 2048,
+          diagnostics: [{
+            ladderId: 'gen1ou20261109',
+            format: 'gen1ou',
+            turns: 5,
+            endReason: 'win',
+            durationMillis: 500,
+            battleLog: '|turn|1\n|win|P1',
+            p1Stderr: 'boot ok',
+            infoStatus: 'full',
+          }],
+          now: currentNow + 5,
+        });
+        const diagId = db.getSmokeDiagnosticsForVersion(subBody.versionId)[0].id;
+
+        const stderrRes = await fetch(`${baseUrl}/api/account/diagnostics/${diagId}/stderr`, {
+          headers: {Authorization: `Bearer ${genBody.token}`},
+        });
+        expect(stderrRes.status).toBe(200);
+        expect(await stderrRes.text()).toContain('boot ok');
+
+        const actRes = await fetch(
+          `${baseUrl}/api/account/versions/${subBody.versionId}/activate`,
+          {
+            method: 'POST',
+            headers: {Authorization: `Bearer ${genBody.token}`},
+          }
+        );
+        expect(actRes.status).toBe(200);
+        expect(db.getVersionById(subBody.versionId)?.smokeStatus).toBe('passed');
+
+        // API token CANNOT mint/rotate/revoke tokens or render HTML /account
+        const selfRotate = await fetch(`${baseUrl}/api/account/token`, {
+          method: 'POST',
+          headers: {Authorization: `Bearer ${genBody.token}`},
+        });
+        expect(selfRotate.status).toBe(401);
+        const selfRevoke = await fetch(`${baseUrl}/api/account/token/revoke`, {
+          method: 'POST',
+          headers: {Authorization: `Bearer ${genBody.token}`},
+        });
+        expect(selfRevoke.status).toBe(401);
+        const htmlGet = await fetch(`${baseUrl}/account`, {
+          headers: {Authorization: `Bearer ${genBody.token}`, Accept: 'text/html'},
+          redirect: 'manual',
+        });
+        expect(htmlGet.status).toBe(302);
+
+        // Rotating invalidates the old token immediately
+        const rotRes = await fetch(`${baseUrl}/api/account/token`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pmariglia'), Accept: 'application/json'},
+        });
+        const rotBody = await rotRes.json() as {token: string};
+        expect(rotBody.token).not.toBe(genBody.token);
+        expect(
+          (await fetch(`${baseUrl}/account.json`, {
+            headers: {Authorization: `Bearer ${genBody.token}`},
+          })).status
+        ).toBe(401);
+        expect(
+          (await fetch(`${baseUrl}/account.json`, {
+            headers: {Authorization: `Bearer ${rotBody.token}`},
+          })).status
+        ).toBe(200);
+
+        // Revoking invalidates the rotated token immediately
+        const revRes = await fetch(`${baseUrl}/api/account/token/revoke`, {
+          method: 'POST',
+          headers: {Cookie: cookieFor('pmariglia'), Accept: 'application/json'},
+        });
+        expect(revRes.status).toBe(200);
+        expect(
+          (await fetch(`${baseUrl}/account.json`, {
+            headers: {Authorization: `Bearer ${rotBody.token}`},
+          })).status
+        ).toBe(401);
+      });
   });
 });

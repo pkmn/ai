@@ -388,7 +388,7 @@ export class Coordinator {
         artifact.versionId
       );
       try {
-        const unpackedBytes = mode === 'container'
+        const {unpackedBytes} = mode === 'container'
           ? packages.pullAndVerifyOciImage({
             imageRef: artifact.url,
             agentTargetId: targetId,
@@ -673,25 +673,26 @@ export class Coordinator {
       const target = targetId;
 
       let unpackedBytes: number;
+      let resolvedSha256: string | undefined;
       try {
-        if (mode === 'container') {
-          unpackedBytes = packages.pullAndVerifyOciImage({
+        const unpacked = mode === 'container'
+          ? packages.pullAndVerifyOciImage({
             imageRef: sub.url,
             agentTargetId: targetId,
-            expectedSha256: sub.sha256,
+            expectedSha256: sub.sha256 || undefined,
             creds: sub.authToken,
             dirs: this.dirs,
-          });
-        } else {
-          unpackedBytes = await packages.downloadAndUnpackBundle({
+          })
+          : await packages.downloadAndUnpackBundle({
             url: sub.url,
-            expectedSha256: sub.sha256,
+            expectedSha256: sub.sha256 || undefined,
             agentTargetId: targetId,
             authToken: sub.authToken,
             dirs: this.dirs,
             allowPrivateUrls: this.devMode,
           });
-        }
+        unpackedBytes = unpacked.unpackedBytes;
+        resolvedSha256 = unpacked.sha256;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         await this.reportSubmissionOrOutbox({
@@ -917,6 +918,7 @@ export class Coordinator {
         await this.reportSubmissionOrOutbox({
           versionId: sub.versionId,
           smokeStatus: 'failed',
+          ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
           smokeError,
           ...(diagnostics.length ? {diagnostics} : {}),
         });
@@ -937,6 +939,7 @@ export class Coordinator {
       await this.reportSubmissionOrOutbox({
         versionId: sub.versionId,
         smokeStatus: 'staged',
+        ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
         unpackedBytes,
         smokeDurationMillis,
         smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),

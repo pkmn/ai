@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS agent_versions (
   package TEXT NOT NULL CHECK (package IN ('bundle', 'oci')),
   -- HTTPS archive URL or OCI image reference pulled once by the Arena worker.
   url TEXT NOT NULL,
-  -- Expected 64-character lowercase hex SHA-256 archive checksum or OCI manifest digest.
+  -- Expected 64-character lowercase hex SHA-256 archive checksum or OCI manifest digest, or ''
+  -- while pending when omitted at submission time (populated on diagnostic fetch).
   sha256 TEXT NOT NULL,
   -- Optional AES-256-GCM ciphertext (`iv:tag:ciphertext` base64, keyed via HKDF-SHA256(ARENA_SECRET))
   -- for pulling private releases/registries. Scrubbed to NULL immediately when smoke testing finishes

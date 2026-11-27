@@ -88,7 +88,8 @@ export function decryptSecret(encoded: string, secret: string): string {
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 
-const SHA256_RE = /^[0-9a-fA-F]{64}$/;
+const SHA256_INPUT_RE = /^(?:sha256:)?([0-9a-fA-F]{64})(?:\s+\*?\S.*)?$/;
+const OCI_DIGEST_SUFFIX_RE = /@sha256:([0-9a-fA-F]{64})$/;
 const OCI_REF_RE = new RegExp(
   '^[A-Za-z0-9._-]+(?::\\d{1,5})?/[A-Za-z0-9._/-]+' +
   '(?::[A-Za-z0-9._-]+)?(?:@sha256:[0-9a-fA-F]{64})?$'
@@ -96,6 +97,62 @@ const OCI_REF_RE = new RegExp(
 const MAX_SUBMISSION_BYTES = 512 * 1024;
 const RATE_LIMIT_WINDOW_SECONDS = 60;
 const RATE_LIMIT_MAX_ATTEMPTS = 5;
+
+export const API_TOKEN_PREFIX = 'pkmn_';
+
+export function hashApiToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export function generateApiToken(): {token: string; hash: string; prefix: string} {
+  const token = `${API_TOKEN_PREFIX}${crypto.randomBytes(32).toString('base64url')}`;
+  return {
+    token,
+    hash: hashApiToken(token),
+    prefix: token.slice(0, 12),
+  };
+}
+
+export function extractDeveloperApiToken(req: http.IncomingMessage): string | undefined {
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader !== 'string') return undefined;
+  const m = /^Bearer\s+(\S+)$/i.exec(authHeader.trim());
+  if (!m?.[1].startsWith(API_TOKEN_PREFIX)) return undefined;
+  return m[1];
+}
+
+export function normalizeSha256(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  const m = SHA256_INPUT_RE.exec(trimmed);
+  return m ? m[1].toLowerCase() : undefined;
+}
+
+export function extractOciSha256(url: string): string | undefined {
+  const m = OCI_DIGEST_SUFFIX_RE.exec(url.trim());
+  return m ? m[1].toLowerCase() : undefined;
+}
+
+// Strips query parameters (which may contain presigned S3/R2/B2/GCS signatures) before echoing
+// a previous artifact URL back into HTML prefill or History reuse attributes.
+export function sanitizePrefillUrl(url: string): string {
+  const trimmed = url.trim();
+  const qIdx = trimmed.indexOf('?');
+  if (qIdx < 0) return trimmed;
+  try {
+    const parsed = new URL(trimmed);
+    if (
+      parsed.hostname.toLowerCase() === 'api.github.com' &&
+      parsed.pathname.includes('/contents/')
+    ) {
+      const ref = parsed.searchParams.get('ref');
+      return ref
+        ? `${parsed.origin}${parsed.pathname}?ref=${encodeURIComponent(ref)}`
+        : `${parsed.origin}${parsed.pathname}`;
+    }
+  } catch {}
+  return trimmed.slice(0, qIdx);
+}
 
 const STYLE =
   `${AI_PANEL_STYLE}\n${fs.readFileSync(util.root('static', 'style', 'account.css'), 'utf8')}`;
@@ -331,12 +388,154 @@ const ACCOUNT_SCRIPT = `
       });
     }
 
+    const tokenBanner = document.getElementById('api-token-banner');
+    const tokenView = document.getElementById('api-token-view');
+    const bindTokenButtons = () => {
+      const genBtn = document.getElementById('api-token-gen-btn');
+      const revokeBtn = document.getElementById('api-token-revoke-btn');
+      if (genBtn) {
+        genBtn.addEventListener('click', async () => {
+          const isRotate = genBtn.getAttribute('data-has-token') === 'true';
+          if (isRotate && !window.confirm(
+            'Rotate your Submission API token? The existing token will stop working immediately.'
+          )) {
+            return;
+          }
+          genBtn.disabled = true;
+          try {
+            const res = await fetch('/api/account/token', {
+              method: 'POST',
+              headers: {Accept: 'application/json'},
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.token) {
+              if (tokenBanner) {
+                tokenBanner.classList.remove('hide');
+                tokenBanner.textContent =
+                  data.error || ('Failed to generate token (' + res.status + ')');
+              }
+              genBtn.disabled = false;
+              return;
+            }
+            if (tokenView) {
+              tokenView.textContent = '';
+              const tt = document.createElement('tt');
+              tt.id = 'api-token-val';
+              tt.textContent = data.prefix + '…';
+              tokenView.appendChild(tt);
+              tokenView.appendChild(document.createTextNode(' '));
+              const wrap = document.createElement('span');
+              wrap.className = 'muted';
+              wrap.appendChild(document.createTextNode('('));
+              const newRotate = document.createElement('button');
+              newRotate.type = 'button';
+              newRotate.className = 'link-btn';
+              newRotate.id = 'api-token-gen-btn';
+              newRotate.setAttribute('data-has-token', 'true');
+              newRotate.textContent = 'rotate';
+              wrap.appendChild(newRotate);
+              wrap.appendChild(document.createTextNode(' / '));
+              const newRevoke = document.createElement('button');
+              newRevoke.type = 'button';
+              newRevoke.className = 'link-btn';
+              newRevoke.id = 'api-token-revoke-btn';
+              newRevoke.textContent = 'revoke';
+              wrap.appendChild(newRevoke);
+              wrap.appendChild(document.createTextNode(')'));
+              tokenView.appendChild(wrap);
+              bindTokenButtons();
+            }
+            if (tokenBanner) {
+              tokenBanner.classList.remove('hide');
+              tokenBanner.textContent = '';
+              const head = document.createElement('div');
+              head.className = 'staged-head';
+              const titleWrap = document.createElement('span');
+              const strong = document.createElement('strong');
+              strong.textContent = 'Submission API Token: ';
+              titleWrap.appendChild(strong);
+              const code = document.createElement('code');
+              code.id = 'api-token-secret';
+              code.className = 'api-token-secret';
+              code.textContent = data.token;
+              titleWrap.appendChild(code);
+              head.appendChild(titleWrap);
+              const actions = document.createElement('div');
+              actions.className = 'staged-actions';
+              const copyBtn = document.createElement('button');
+              copyBtn.type = 'button';
+              copyBtn.className = 'btn';
+              copyBtn.textContent = 'Copy';
+              copyBtn.addEventListener('click', async () => {
+                try {
+                  await navigator.clipboard.writeText(data.token);
+                  copyBtn.textContent = 'Copied';
+                  setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+                } catch {}
+              });
+              const dismissBtn = document.createElement('button');
+              dismissBtn.type = 'button';
+              dismissBtn.className = 'btn btn-secondary';
+              dismissBtn.textContent = 'Dismiss';
+              dismissBtn.addEventListener('click', () => {
+                tokenBanner.classList.add('hide');
+                tokenBanner.textContent = '';
+              });
+              actions.appendChild(copyBtn);
+              actions.appendChild(dismissBtn);
+              head.appendChild(actions);
+              tokenBanner.appendChild(head);
+              const meta = document.createElement('div');
+              meta.className = 'staged-meta muted';
+              meta.textContent =
+                'Shown once — save this token as a secret (e.g. PKMN_AI_TOKEN in CI). ' +
+                'Pass Authorization: Bearer <token> to POST /api/submissions, GET /account.json, ' +
+                'or POST /api/account/versions/:id/{activate,discard}.';
+              tokenBanner.appendChild(meta);
+              const example = document.createElement('pre');
+              example.className = 'api-token-example';
+              example.textContent = [
+                'curl -X POST https://pkmn.ai/api/submissions \\\\',
+                '  -H "Authorization: Bearer ' + data.token + '" \\\\',
+                '  -H "Content-Type: application/json" \\\\',
+                '  -d \\'{"version":"1.0.0","url":"https://.../agent.tar.zst","ladders":["RBY"]}\\'',
+              ].join('\\n');
+              tokenBanner.appendChild(example);
+            }
+          } catch {
+            genBtn.disabled = false;
+          }
+        });
+      }
+      if (revokeBtn) {
+        revokeBtn.addEventListener('click', async () => {
+          if (!window.confirm(
+            'Revoke your Submission API token? Any scripts or CI workflows using it will fail.'
+          )) {
+            return;
+          }
+          revokeBtn.disabled = true;
+          try {
+            const res = await fetch('/api/account/token/revoke', {
+              method: 'POST',
+              headers: {Accept: 'application/json'},
+            });
+            if (res.ok) window.location.reload();
+            else revokeBtn.disabled = false;
+          } catch {
+            revokeBtn.disabled = false;
+          }
+        });
+      }
+    };
+    bindTokenButtons();
+
     const verInput = document.getElementById('sub-ver');
     const urlInput = document.getElementById('sub-url');
     const shaInput = document.getElementById('sub-sha');
-    const typeSelect = document.getElementById('sub-type');
+    const authInput = document.getElementById('sub-auth');
+    const pkgHint = document.getElementById('sub-pkg-hint');
     const tourneyChecks = document.querySelectorAll('input[name="tournaments"]');
-    const bundleOpt = typeSelect ? typeSelect.querySelector('option[value="bundle"]') : null;
     const form = document.getElementById('submission-form');
     const fieldset = form ? form.querySelector('.form-fieldset') : null;
     const submitBtn = document.getElementById('sub-btn');
@@ -344,7 +543,39 @@ const ACCOUNT_SCRIPT = `
     const ladderChecks = document.querySelectorAll('input[name="ladders"]');
     const progressText = document.getElementById('pool-progress-text');
     const teamsArea = document.getElementById('sub-teams');
+    const agentSlug = form ? (form.dataset.agentSlug || '') : '';
+    const lastVersionId = form ? (form.dataset.lastVersionId || '') : '';
+    const draftKey = agentSlug ? ('pkmn-sub-draft:' + agentSlug) : '';
+    const authDraftKey = agentSlug ? ('pkmn-sub-auth:' + agentSlug) : '';
     let submitting = false;
+    let lastAutoSha = '';
+
+    const logoutForm = document.querySelector('form[action^="/auth/logout"]');
+    if (logoutForm && authDraftKey) {
+      logoutForm.addEventListener('submit', () => {
+        try { sessionStorage.removeItem(authDraftKey); } catch {}
+      });
+    }
+
+    const detectPkg = rawUrl => {
+      const trimmed = (rawUrl || '').trim();
+      if (!trimmed) return '';
+      const clean = trimmed.split(/[?#]/)[0].toLowerCase();
+      const ghAssetRe =
+        /^https:\\/\\/api\\.github\\.com\\/repos\\/[^/]+\\/[^/]+\\/releases\\/assets\\/\\d+$/;
+      if (/\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(clean) || ghAssetRe.test(clean)) {
+        return 'bundle';
+      }
+      if (!clean.startsWith('http://') && !clean.startsWith('https://') && clean.includes('/')) {
+        return 'oci';
+      }
+      return '';
+    };
+
+    const extractOciSha = rawUrl => {
+      const m = /@sha256:([0-9a-fA-F]{64})$/.exec((rawUrl || '').trim());
+      return m ? m[1].toLowerCase() : '';
+    };
 
     const getActivePoolCheckbox = () => {
       let found = null;
@@ -354,7 +585,104 @@ const ACCOUNT_SCRIPT = `
       return found;
     };
 
+    const hasCheckedTourney = () => {
+      let any = false;
+      tourneyChecks.forEach(cb => {
+        if (cb.checked && !cb.disabled) any = true;
+      });
+      return any;
+    };
+
+    const syncPkgHint = () => {
+      if (!pkgHint) return;
+      const pkg = detectPkg(urlInput ? urlInput.value : '');
+      const anyTourney = hasCheckedTourney();
+      pkgHint.classList.remove('no');
+      pkgHint.classList.add('muted');
+      if (!pkg) {
+        pkgHint.textContent = anyTourney
+          ? 'OCI image (linux/amd64) required'
+          : 'Auto-detected: native bundle (.tar.{gz,xz,zst}) or OCI image';
+      } else if (pkg === 'bundle') {
+        if (anyTourney) {
+          pkgHint.classList.remove('muted');
+          pkgHint.classList.add('no');
+          pkgHint.textContent = 'Tournaments require an OCI image (linux/amd64)';
+        } else {
+          pkgHint.textContent = 'Native bundle (darwin/arm64)';
+        }
+      } else {
+        pkgHint.textContent = anyTourney ? 'OCI image (linux/amd64)' : 'OCI image (linux/arm64)';
+      }
+    };
+
+    const saveDraft = () => {
+      if (!draftKey || !fieldset || fieldset.disabled) return;
+      try {
+        const ladders = [];
+        ladderChecks.forEach(cb => {
+          if (cb.checked && !cb.disabled) ladders.push(cb.value);
+        });
+        const tournaments = [];
+        tourneyChecks.forEach(cb => {
+          if (cb.checked && !cb.disabled) tournaments.push(cb.value);
+        });
+        localStorage.setItem(draftKey, JSON.stringify({
+          lastVersionId,
+          version: verInput ? verInput.value : '',
+          url: urlInput ? urlInput.value : '',
+          sha256: shaInput ? shaInput.value : '',
+          ladders,
+          tournaments,
+        }));
+      } catch {}
+    };
+
+    const saveAuthDraft = () => {
+      if (!authDraftKey || !authInput || !fieldset || fieldset.disabled) return;
+      try {
+        if (authInput.value) sessionStorage.setItem(authDraftKey, authInput.value);
+        else sessionStorage.removeItem(authDraftKey);
+      } catch {}
+    };
+
+    const restoreDraft = () => {
+      if (!fieldset || fieldset.disabled) return;
+      if (authDraftKey && authInput) {
+        try {
+          const savedAuth = sessionStorage.getItem(authDraftKey);
+          if (savedAuth && !authInput.value) authInput.value = savedAuth;
+        } catch {}
+      }
+      if (!draftKey) return;
+      try {
+        const raw = localStorage.getItem(draftKey);
+        if (!raw) return;
+        const draft = JSON.parse(raw);
+        if (!draft || draft.lastVersionId !== lastVersionId) {
+          localStorage.removeItem(draftKey);
+          return;
+        }
+        if (verInput && typeof draft.version === 'string') verInput.value = draft.version;
+        if (urlInput && typeof draft.url === 'string') urlInput.value = draft.url;
+        if (shaInput && typeof draft.sha256 === 'string') shaInput.value = draft.sha256;
+        if (Array.isArray(draft.ladders) || Array.isArray(draft.tournaments)) {
+          const lSet = new Set(Array.isArray(draft.ladders) ? draft.ladders : []);
+          const tSet = new Set(Array.isArray(draft.tournaments) ? draft.tournaments : []);
+          if (lSet.size > 0 || tSet.size > 0) {
+            ladderChecks.forEach(cb => {
+              if (!cb.disabled) cb.checked = lSet.has(cb.value);
+            });
+            tourneyChecks.forEach(cb => {
+              if (!cb.disabled) cb.checked = tSet.has(cb.value);
+            });
+          }
+        }
+      } catch {}
+    };
+
     const syncSubmitBtn = () => {
+      syncPkgHint();
       if (!submitBtn) return;
       if (!fieldset || fieldset.disabled || submitting) {
         submitBtn.disabled = true;
@@ -362,7 +690,6 @@ const ACCOUNT_SCRIPT = `
       }
       const hasVer = Boolean(verInput && verInput.value.trim());
       const hasUrl = Boolean(urlInput && urlInput.value.trim());
-      const hasSha = Boolean(shaInput && shaInput.value.trim());
       let hasTarget = false;
       ladderChecks.forEach(cb => {
         if (cb.checked && !cb.disabled) hasTarget = true;
@@ -370,6 +697,8 @@ const ACCOUNT_SCRIPT = `
       tourneyChecks.forEach(cb => {
         if (cb.checked && !cb.disabled) hasTarget = true;
       });
+      const tourneyBundleConflict = hasCheckedTourney() &&
+        detectPkg(urlInput ? urlInput.value : '') === 'bundle';
       const activeCb = getActivePoolCheckbox();
       let hasTeams = true;
       if (activeCb) {
@@ -378,19 +707,11 @@ const ACCOUNT_SCRIPT = `
         hasTeams = (required > 0 && saved >= required) ||
           Boolean(teamsArea && teamsArea.value.trim());
       }
-      submitBtn.disabled = !(hasVer && hasUrl && hasSha && hasTarget && hasTeams);
+      submitBtn.disabled = !(hasVer && hasUrl && hasTarget && hasTeams && !tourneyBundleConflict);
     };
 
-    const syncTourneyPackage = () => {
-      if (!typeSelect) return;
-      let anyTourney = false;
-      tourneyChecks.forEach(cb => {
-        if (cb.checked) anyTourney = true;
-      });
-      if (bundleOpt) bundleOpt.disabled = anyTourney;
-      if (anyTourney) typeSelect.value = 'oci';
-      syncSubmitBtn();
-    };
+    restoreDraft();
+
     tourneyChecks.forEach(cb => cb.addEventListener('change', () => {
       if (cb.checked) {
         ladderChecks.forEach(lcb => {
@@ -398,30 +719,79 @@ const ACCOUNT_SCRIPT = `
         });
         syncTeamsVisibility();
       }
-      syncTourneyPackage();
+      syncSubmitBtn();
+      saveDraft();
     }));
-    syncTourneyPackage();
 
-    if (urlInput && typeSelect) {
+    if (urlInput) {
       urlInput.addEventListener('input', () => {
-        const v = urlInput.value.trim().split(/[?#]/)[0].toLowerCase();
-        if (v) {
-          const ghAssetRe =
-            /^https:\\/\\/api\\.github\\.com\\/repos\\/[^/]+\\/[^/]+\\/releases\\/assets\\/\\d+$/;
-          const isArchive =
-            /\\.(tar\\.gz|tgz|tar\\.xz|txz|tar\\.zst|tzst)$/.test(v) || ghAssetRe.test(v);
-          if (isArchive && (!bundleOpt || !bundleOpt.disabled)) {
-            typeSelect.value = 'bundle';
-          } else if (!v.startsWith('http://') && !v.startsWith('https://') && v.includes('/')) {
-            typeSelect.value = 'oci';
-          }
+        const ociSha = extractOciSha(urlInput.value);
+        if (
+          shaInput && ociSha &&
+          (!shaInput.value.trim() || shaInput.value.trim() === lastAutoSha)
+        ) {
+          shaInput.value = ociSha;
+          lastAutoSha = ociSha;
         }
         syncSubmitBtn();
+        saveDraft();
       });
     }
-    if (verInput) verInput.addEventListener('input', syncSubmitBtn);
-    if (shaInput) shaInput.addEventListener('input', syncSubmitBtn);
+    if (verInput) {
+      verInput.addEventListener('input', () => {
+        syncSubmitBtn();
+        saveDraft();
+      });
+    }
+    if (shaInput) {
+      shaInput.addEventListener('input', () => {
+        if (shaInput.value.trim() !== lastAutoSha) lastAutoSha = '';
+        syncSubmitBtn();
+        saveDraft();
+      });
+    }
+    if (authInput) {
+      authInput.addEventListener('input', saveAuthDraft);
+    }
     if (teamsArea) teamsArea.addEventListener('input', syncSubmitBtn);
+
+    document.querySelectorAll('.reuse-btn').forEach(btn => {
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!fieldset || fieldset.disabled) return;
+        const url = btn.getAttribute('data-url') || '';
+        const ver = btn.getAttribute('data-version') || '';
+        const reusable = btn.getAttribute('data-reusable') === 'true';
+        const lRaw = btn.getAttribute('data-ladders') || '';
+        const tRaw = btn.getAttribute('data-tournaments') || '';
+        const lSet = new Set(lRaw ? lRaw.split(',') : []);
+        const tSet = new Set(tRaw ? tRaw.split(',') : []);
+        if (urlInput && url) urlInput.value = url;
+        if (verInput) verInput.value = reusable ? ver : '';
+        if (shaInput) {
+          const ociSha = extractOciSha(url);
+          shaInput.value = ociSha;
+          lastAutoSha = ociSha;
+        }
+        let anyLadder = false;
+        ladderChecks.forEach(cb => {
+          if (!cb.disabled) {
+            cb.checked = lSet.has(cb.value);
+            if (cb.checked) anyLadder = true;
+          }
+        });
+        tourneyChecks.forEach(cb => {
+          if (!cb.disabled) {
+            cb.checked = !anyLadder && tSet.has(cb.value);
+          }
+        });
+        syncTeamsVisibility();
+        syncSubmitBtn();
+        saveDraft();
+        if (form) form.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+        if (verInput) verInput.focus();
+      });
+    });
 
     const getFeedbackEl = () => {
       let el = document.getElementById('teams-feedback');
@@ -524,9 +894,9 @@ const ACCOUNT_SCRIPT = `
         tourneyChecks.forEach(tcb => {
           tcb.checked = false;
         });
-        syncTourneyPackage();
       }
       syncTeamsVisibility();
+      saveDraft();
     }));
     syncTeamsVisibility();
 
@@ -555,10 +925,9 @@ const ACCOUNT_SCRIPT = `
         });
         const payload = {
           version: verInput.value.trim(),
-          package: typeSelect.value,
           url: urlInput.value.trim(),
           sha256: shaInput.value.trim(),
-          authToken: document.getElementById('sub-auth').value.trim(),
+          authToken: authInput ? authInput.value.trim() : '',
           ladders,
           tournaments,
         };
@@ -607,6 +976,9 @@ const ACCOUNT_SCRIPT = `
             submitting = false;
             syncSubmitBtn();
             return;
+          }
+          if (draftKey) {
+            try { localStorage.removeItem(draftKey); } catch {}
           }
           window.location.reload();
         } catch {
@@ -1163,6 +1535,9 @@ function renderStagedSection(opts: {
             }
           }
         }
+        const shortSha = v.sha256
+          ? `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`
+          : undefined;
         return (
           <div className='staged-box' data-version-id={v.id}>
             <div className='staged-head'>
@@ -1170,7 +1545,18 @@ function renderStagedSection(opts: {
                 <strong><code>{v.version}</code></strong>
                 {util.renderInfoDot(v.smokeInfoStatus)} passed diagnostic testing on{' '}
                 <tt>{targets.join(', ')}</tt>
-                {statsText && <> <span className='muted'>({statsText})</span></>}
+                {(shortSha || statsText) && (
+                  <>
+                    {' '}
+                    <span className='muted'>
+                      (
+                      {shortSha && <tt title={v.sha256}>{shortSha}</tt>}
+                      {shortSha && statsText && ' · '}
+                      {statsText}
+                      )
+                    </span>
+                  </>
+                )}
               </span>
               <div className='staged-actions'>
                 <button
@@ -1214,7 +1600,8 @@ function renderStagedSection(opts: {
 
 function renderHistorySection(
   versions: db.VersionHistoryView[],
-  ladderNameById: Map<string, string>
+  ladderNameById: Map<string, string>,
+  opts: {canReuse?: boolean; claimedVersions?: ReadonlySet<string>} = {}
 ): util.Html {
   if (!versions.length) {
     return (
@@ -1224,6 +1611,9 @@ function renderHistorySection(
       </section>
     );
   }
+
+  const canReuse = Boolean(opts.canReuse);
+  const claimedVersions = opts.claimedVersions ?? new Set<string>();
 
   return (
     <section id='history'>
@@ -1256,10 +1646,15 @@ function renderHistorySection(
           const allLabels = [...ladderLabels, ...tourneyLabels];
           const laddersContent = allLabels.map((item, i) => (i === 0 ? item : [', ', item]));
 
-          const shortSha = `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`;
+          const shortSha = v.sha256
+            ? `sha256:${v.sha256.slice(0, 4)}…${v.sha256.slice(-4)}`
+            : undefined;
           const sizeMib = v.unpackedBytes !== undefined
             ? Math.max(1, Math.round(v.unpackedBytes / (1024 * 1024)))
             : undefined;
+          const versionReusable =
+            (v.smokeStatus === 'failed' || v.smokeStatus === 'discarded') &&
+            !claimedVersions.has(v.version);
 
           const isTournamentOnly =
             ladderLabels.length === 0 && (v.tournamentNames?.length ?? 0) > 0;
@@ -1373,9 +1768,31 @@ function renderHistorySection(
               </td>
               <td className='wrap'><tt>{laddersContent}</tt></td>
               <td className='wrap'>
-                <tt>{shortSha}</tt>
+                {shortSha
+                  ? <tt title={v.sha256}>{shortSha}</tt>
+                  : <span className='muted'>{v.smokeStatus === 'pending' ? 'pending' : '—'}</span>}
                 {sizeMib !== undefined && (
                   <> <span className='muted'>({sizeMib} MiB)</span></>
+                )}
+                {canReuse && v.url && (
+                  <>
+                    {' '}
+                    <span className='muted reuse-wrap'>
+                      (
+                      <button
+                        type='button'
+                        className='link-btn reuse-btn'
+                        data-url={sanitizePrefillUrl(v.url)}
+                        data-version={v.version}
+                        data-reusable={versionReusable ? 'true' : 'false'}
+                        data-ladders={v.ladders.join(',')}
+                        data-tournaments={v.tournaments.join(',')}
+                      >
+                        reuse
+                      </button>
+                      )
+                    </span>
+                  </>
                 )}
               </td>
               <td className='wrap'>{smokeCell}</td>
@@ -1444,12 +1861,130 @@ export function renderAccountPage(opts: {
     </span>
   );
 
+  const apiTokenTitleParts: util.LocalizedTitlePart[] = [];
+  if (developer.apiTokenCreatedAt !== undefined) {
+    apiTokenTitleParts.push({
+      prefix: 'Created ',
+      epoch: developer.apiTokenCreatedAt,
+      format: 'date',
+    });
+  }
+  if (developer.apiTokenLastUsedAt !== undefined) {
+    apiTokenTitleParts.push({
+      prefix: apiTokenTitleParts.length ? '; last used ' : 'Last used ',
+      epoch: developer.apiTokenLastUsedAt,
+      format: 'datetime',
+    });
+  }
+  const apiTokenTitleAttrs = apiTokenTitleParts.length
+    ? util.localizedTitle(apiTokenTitleParts)
+    : {};
+  const apiTokenView = developer.apiTokenPrefix ? (
+    <span id='api-token-view'>
+      <tt id='api-token-val' {...apiTokenTitleAttrs}>{developer.apiTokenPrefix}…</tt>{' '}
+      <span className='muted'>
+        (
+        <button
+          type='button'
+          className='link-btn'
+          id='api-token-gen-btn'
+          data-has-token='true'
+        >
+          rotate
+        </button>
+        {' / '}
+        <button type='button' className='link-btn' id='api-token-revoke-btn'>revoke</button>
+        )
+      </span>
+    </span>
+  ) : (
+    <span id='api-token-view'>
+      <span className='muted' id='api-token-val'>None</span>{' '}
+      <span className='muted'>
+        (
+        <button
+          type='button'
+          className='link-btn'
+          id='api-token-gen-btn'
+          data-has-token='false'
+        >
+          generate
+        </button>
+        )
+      </span>
+    </span>
+  );
+
   const projectHref = `/projects/${encodeURIComponent(agent.slug)}/`;
 
   // 'pending' projects cannot submit to continuous ladders (`status.canSubmit === false`), but are
   // intentionally allowed to enter scheduled tournaments (`canSubmitTourney === true`).
   const canSubmitTourney = tournamentStatuses.some(t => t.canSubmit);
   const canSubmitAny = status.canSubmit || canSubmitTourney;
+
+  const claimedVersions = new Set(
+    versions
+      .filter(v => v.smokeStatus !== 'failed' && v.smokeStatus !== 'discarded')
+      .map(v => v.version)
+  );
+  const lastVersion = versions[0];
+  const checkableLadderIds = new Set(
+    currentLadders
+      .filter(
+        l =>
+          (l.status === 'upcoming' || l.status === 'active') &&
+          qualifiedSlots.has(l.slot) &&
+          status.canSubmit
+      )
+      .map(l => l.id)
+  );
+  const checkableTourneyIds = new Set(
+    tournamentStatuses.filter(t => t.canSubmit).map(t => t.tournamentId)
+  );
+  const lastCheckableLadders = new Set(
+    (lastVersion?.ladders ?? []).filter(id => checkableLadderIds.has(id))
+  );
+  const lastCheckableTourneys = new Set(
+    (lastVersion?.tournaments ?? []).filter(id => checkableTourneyIds.has(id))
+  );
+  const prefillTourneyIds = lastCheckableLadders.size > 0
+    ? new Set<string>()
+    : lastCheckableTourneys.size > 0
+      ? lastCheckableTourneys
+      : !status.canSubmit && tournamentStatuses.length === 1 && tournamentStatuses[0].canSubmit
+        ? new Set([tournamentStatuses[0].tournamentId])
+        : new Set<string>();
+  const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
+  const prefillLadderIds = lastCheckableLadders.size > 0
+    ? lastCheckableLadders
+    : prefillTourneyIds.size > 0
+      ? new Set<string>()
+      : new Set([...activeLadderIdsWithAgent].filter(id => checkableLadderIds.has(id)));
+  const prefillSource = prefillTourneyIds.size > 0
+    ? versions.find(v => v.package === 'oci')
+    : prefillLadderIds.size > 0
+      ? (versions.find(v => v.ladders.length > 0) ?? lastVersion)
+      : lastVersion;
+  const canReusePrefillVersion = Boolean(
+    prefillSource &&
+    (prefillSource.smokeStatus === 'failed' || prefillSource.smokeStatus === 'discarded') &&
+    !claimedVersions.has(prefillSource.version)
+  );
+  const prefillVersion = canSubmitAny && canReusePrefillVersion && prefillSource
+    ? prefillSource.version
+    : undefined;
+  const prefillUrl = canSubmitAny && prefillSource
+    ? sanitizePrefillUrl(prefillSource.url)
+    : undefined;
+  const initialPkgHint = !prefillUrl
+    ? prefillTourneyIds.size > 0
+      ? 'OCI image (linux/amd64) required'
+      : 'Auto-detected: native bundle (.tar.{gz,xz,zst}) or OCI image'
+    : deducePackageFormat(prefillUrl) === 'bundle'
+      ? 'Native bundle (darwin/arm64)'
+      : prefillTourneyIds.size > 0
+        ? 'OCI image (linux/amd64)'
+        : 'OCI image (linux/arm64)';
 
   const statusClass = status.label === 'Eligible'
     ? 'yes'
@@ -1458,7 +1993,6 @@ export function renderAccountPage(opts: {
     status.reason ?? 'Submission status: Pending / Qualified / Eligible / Ineligible';
 
   const needsTeamsIds = new Set(needsTeamsLadders.map(l => l.id));
-  const activeLadderIdsWithAgent = new Set(activeEntries.map(e => e.ladderId));
 
   const firstPoolLadder = needsTeamsLadders[0];
   let poolTeamsRow: util.Child = undefined;
@@ -1551,6 +2085,8 @@ export function renderAccountPage(opts: {
         <span className='muted'>·</span>
         <span><span className='muted'>Discord:</span> {discordView}</span>
         <span className='muted'>·</span>
+        <span><span className='muted'>API Token:</span> {apiTokenView}</span>
+        <span className='muted'>·</span>
         <span>
           <span className='muted'>Project:</span>{' '}
           <a href={projectHref} className='subtle'><strong>{agent.name}</strong></a>
@@ -1567,6 +2103,8 @@ export function renderAccountPage(opts: {
           <button type='submit' className='link-btn'>Logout</button>
         </form>
       </div>
+
+      <div id='api-token-banner' className='staged-box hide' />
 
       {renderLiveDiagnosticSection(liveDiagnostic, hasPending)}
 
@@ -1590,6 +2128,8 @@ export function renderAccountPage(opts: {
           className={canSubmitAny ? 'form-box' : 'form-box form-disabled'}
           method='POST'
           action='/api/submissions'
+          data-agent-slug={agent.slug}
+          data-last-version-id={lastVersion ? String(lastVersion.id) : ''}
         >
           <fieldset className='form-fieldset' disabled={!canSubmitAny}>
             <div className='form-grid'>
@@ -1603,13 +2143,10 @@ export function renderAccountPage(opts: {
                   maxLength={12}
                   pattern='[A-Za-z0-9][A-Za-z0-9._\-]{0,11}'
                   placeholder='1.0.0'
+                  value={prefillVersion}
                   required={true}
                 />
-                <label htmlFor='sub-type'>Package</label>
-                <select id='sub-type' name='package' className='min-select'>
-                  <option value='bundle' selected={true}>darwin/arm64 (.tar.zst)</option>
-                  <option value='oci'>OCI image</option>
-                </select>
+                <span id='sub-pkg-hint' className='muted pkg-hint'>{initialPkgHint}</span>
               </div>
 
               <label htmlFor='sub-url'>Artifact URL<span className='req'>*</span></label>
@@ -1620,18 +2157,18 @@ export function renderAccountPage(opts: {
                 type='text'
                 spellcheck={false}
                 placeholder='https://.../agent-darwin-arm64.tar.zst or ghcr.io/org/agent:1.0.0'
+                value={prefillUrl}
                 required={true}
               />
 
-              <label htmlFor='sub-sha'>SHA-256<span className='req'>*</span></label>
+              <label htmlFor='sub-sha'>SHA-256</label>
               <input
                 id='sub-sha'
                 name='sha256'
                 className='input-text'
                 type='text'
                 spellcheck={false}
-                placeholder='64-character hex archive or OCI manifest digest'
-                required={true}
+                placeholder='Optional — verified if given, or computed on fetch'
               />
 
               <label htmlFor='sub-auth'>Auth Header</label>
@@ -1655,7 +2192,7 @@ export function renderAccountPage(opts: {
                   <div className='check-group'>
                     {tournamentStatuses.map(t => {
                       if (t.canSubmit) {
-                        const checked = !status.canSubmit && tournamentStatuses.length === 1;
+                        const checked = prefillTourneyIds.has(t.tournamentId);
                         const scheduleTitle = util.localizedTitle([
                           {
                             prefix: 'OCI image required (linux/amd64); starts ',
@@ -1722,7 +2259,7 @@ export function renderAccountPage(opts: {
                       const isOpen = l.status === 'upcoming' || l.status === 'active';
                       const isQualified = qualifiedSlots.has(l.slot);
                       const canCheck = isOpen && isQualified && status.canSubmit;
-                      const checked = canCheck && activeLadderIdsWithAgent.has(l.id);
+                      const checked = canCheck && prefillLadderIds.has(l.id);
                       const needsTeams = needsTeamsIds.has(l.id);
                       const savedCount = savedTeamsByLadder.get(l.id) ?? 0;
                       const requiredCount = l.teams ?? 0;
@@ -1797,7 +2334,7 @@ export function renderAccountPage(opts: {
         </form>
       </section>
 
-      {renderHistorySection(versions, ladderNameById)}
+      {renderHistorySection(versions, ladderNameById, {canReuse: canSubmitAny, claimedVersions})}
 
       <script>{ACCOUNT_SCRIPT}</script>
     </>
@@ -2020,37 +2557,80 @@ export function register(app: polka.Polka, options: Options) {
     return undefined;
   };
 
+  const resolveAccountAuth = (
+    req: http.IncomingMessage,
+    allowApiToken: boolean
+  ):
+    {kind: 'ok'; developer: db.DeveloperRow; agent: db.AgentRow; viaApiToken: boolean} |
+    {kind: 'unauthorized'; error: string} |
+    {kind: 'forbidden'; error: string; login?: string; unregistered?: boolean} => {
+    const rawApiToken = extractDeveloperApiToken(req);
+    if (rawApiToken) {
+      if (!allowApiToken) {
+        return {
+          kind: 'unauthorized',
+          error: 'Interactive GitHub OAuth session required for this endpoint.',
+        };
+      }
+      const developer = db.getDeveloperByApiTokenHash(hashApiToken(rawApiToken));
+      if (!developer) {
+        return {kind: 'unauthorized', error: 'Invalid API token.'};
+      }
+      const agent = db.getAgentById(developer.agentId);
+      if (!agent || agent.status === 'disabled') {
+        return {
+          kind: 'forbidden',
+          error: 'API token belongs to a disabled or unregistered Arena project.',
+        };
+      }
+      db.touchDeveloperApiToken(developer.id, getNow());
+      return {kind: 'ok', developer, agent, viaApiToken: true};
+    }
+
+    const login = auth.getGitHubUser(req);
+    if (!login) {
+      return {kind: 'unauthorized', error: 'GitHub authentication required.'};
+    }
+    const developer = db.getDeveloperByGitHub(login);
+    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
+    if (!developer || !agent || agent.status === 'disabled') {
+      return {
+        kind: 'forbidden',
+        error: `GitHub account "${login}" is not registered to an approved Arena project.`,
+        login,
+        unregistered: !developer || !agent,
+      };
+    }
+    return {kind: 'ok', developer, agent, viaApiToken: false};
+  };
+
   const handleGetAccount = (
     req: http.IncomingMessage,
     res: http.ServerResponse,
     forceJson: boolean
   ) => {
     const wantsJson = forceJson || Boolean(req.headers.accept?.includes('application/json'));
-    const login = auth.getGitHubUser(req);
-    if (!login) {
+    const authRes = resolveAccountAuth(req, wantsJson);
+    const liveTournament = db.getRunningTournament();
+    if (authRes.kind === 'unauthorized') {
       if (wantsJson) {
-        sendJson(res, 401, {error: 'GitHub authentication required.'});
+        sendJson(res, 401, {error: authRes.error});
       } else {
         redirect(res, '/auth/github?return_to=%2Faccount%2F');
       }
       return;
     }
-
-    const developer = db.getDeveloperByGitHub(login);
-    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
-    const liveTournament = db.getRunningTournament();
-    if (!developer || !agent || agent.status === 'disabled') {
+    if (authRes.kind === 'forbidden') {
       if (wantsJson) {
-        sendJson(res, 403, {
-          error: `GitHub account "${login}" is not registered to an approved Arena project.`,
-        });
-      } else if (!developer || !agent) {
-        redirect(res, isAdmin(login) ? '/admin/' : REGISTER_ISSUE_URL);
+        sendJson(res, 403, {error: authRes.error});
+      } else if (authRes.unregistered && authRes.login) {
+        redirect(res, isAdmin(authRes.login) ? '/admin/' : REGISTER_ISSUE_URL);
       } else {
         sendHtml(res, 403, renderErrorPage(403, liveTournament));
       }
       return;
     }
+    const {developer, agent} = authRes;
 
     const now = getNow();
     const status = db.computeAgentSubmissionStatus(agent.id, now);
@@ -2107,6 +2687,17 @@ export function register(app: polka.Polka, options: Options) {
           smogonId: developer.smogonId,
           discordId: developer.discordId,
           discordUsername: developer.discordUsername,
+          ...(developer.apiTokenPrefix
+            ? {
+              apiToken: {
+                prefix: developer.apiTokenPrefix,
+                createdAt: developer.apiTokenCreatedAt,
+                ...(developer.apiTokenLastUsedAt !== undefined
+                  ? {lastUsedAt: developer.apiTokenLastUsedAt}
+                  : {}),
+              },
+            }
+            : {}),
         },
         agent: {
           slug: agent.slug,
@@ -2220,21 +2811,49 @@ export function register(app: polka.Polka, options: Options) {
 
   const requireAccountSession = (
     req: http.IncomingMessage,
-    res: http.ServerResponse
-  ): {developer: db.DeveloperRow; agent: db.AgentRow} | undefined => {
-    const login = auth.getGitHubUser(req);
-    if (!login) {
-      sendJson(res, 401, {error: 'GitHub authentication required.'});
+    res: http.ServerResponse,
+    allowApiToken = true
+  ): {developer: db.DeveloperRow; agent: db.AgentRow; viaApiToken: boolean} | undefined => {
+    const authRes = resolveAccountAuth(req, allowApiToken);
+    if (authRes.kind === 'unauthorized') {
+      sendJson(res, 401, {error: authRes.error});
       return undefined;
     }
-    const developer = db.getDeveloperByGitHub(login);
-    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
-    if (!developer || !agent || agent.status === 'disabled') {
+    if (authRes.kind === 'forbidden') {
       sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
       return undefined;
     }
-    return {developer, agent};
+    return {developer: authRes.developer, agent: authRes.agent, viaApiToken: authRes.viaApiToken};
   };
+
+  app.post('/api/account/token', (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
+    const session = requireAccountSession(req, res, false);
+    if (!session) return;
+    const now = getNow();
+    const generated = generateApiToken();
+    db.setDeveloperApiToken(session.developer.githubLogin, generated.hash, generated.prefix, now);
+    sendJson(res, 200, {
+      ok: true,
+      token: generated.token,
+      prefix: generated.prefix,
+      createdAt: now,
+    });
+  });
+
+  app.post('/api/account/token/revoke', (req, res) => {
+    if (isCrossSiteRequest(req)) {
+      sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
+      return;
+    }
+    const session = requireAccountSession(req, res, false);
+    if (!session) return;
+    db.revokeDeveloperApiToken(session.developer.githubLogin);
+    sendJson(res, 200, {ok: true});
+  });
 
   const parsePositiveIntParam = (raw: string | string[] | undefined): number | undefined => {
     const val = Array.isArray(raw) ? raw[0] : raw;
@@ -2366,18 +2985,9 @@ export function register(app: polka.Polka, options: Options) {
       sendJson(res, 403, {error: 'Cross-site requests are not allowed.'});
       return;
     }
-    const login = auth.getGitHubUser(req);
-    if (!login) {
-      sendJson(res, 401, {error: 'GitHub authentication required.'});
-      return;
-    }
-
-    const developer = db.getDeveloperByGitHub(login);
-    const agent = developer ? db.getAgentById(developer.agentId) : undefined;
-    if (!developer || !agent || agent.status === 'disabled') {
-      sendJson(res, 403, {error: 'GitHub account is not registered to an Arena project.'});
-      return;
-    }
+    const session = requireAccountSession(req, res, true);
+    if (!session) return;
+    const {developer, agent, viaApiToken} = session;
 
     const now = getNow();
     const eligibility = db.computeAgentSubmissionStatus(agent.id, now);
@@ -2441,11 +3051,15 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    if (!SHA256_RE.test(payload.sha256)) {
-      sendJson(res, 400, {error: 'Invalid SHA-256 (must be a 64-character hex digest).'});
+    const normalizedSha = normalizeSha256(payload.sha256);
+    if (normalizedSha === undefined) {
+      sendJson(res, 400, {
+        error: 'Invalid SHA-256 (must be a 64-character hex digest, or leave blank).',
+      });
       return;
     }
-    const sha256 = payload.sha256.toLowerCase();
+    const sha256 = normalizedSha ||
+      (packageFormat === 'oci' ? extractOciSha256(payload.url) ?? '' : '');
 
     if (!payload.ladders.length && !payload.tournaments.length) {
       sendJson(res, 400, {error: 'Select at least one active ladder or scheduled tournament.'});
@@ -2656,7 +3270,11 @@ export function register(app: polka.Polka, options: Options) {
         now,
       });
 
-      if (req.headers.accept?.includes('application/json')) {
+      if (
+        viaApiToken ||
+        req.headers.accept?.includes('application/json') ||
+        req.headers['content-type']?.includes('application/json')
+      ) {
         sendJson(res, 201, {
           ok: true,
           versionId: created.id,

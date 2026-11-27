@@ -16,6 +16,10 @@ export interface DeveloperRow {
   discordUsername?: string;
   verifiedAt?: number;
   createdAt: number;
+  apiTokenHash?: string;
+  apiTokenPrefix?: string;
+  apiTokenCreatedAt?: number;
+  apiTokenLastUsedAt?: number;
 }
 
 export interface ResolvedProjectOwner {
@@ -37,6 +41,10 @@ interface RawDeveloperRow {
   discord_username: string | null;
   verified_at: number | null;
   created_at: number;
+  api_token_hash: string | null;
+  api_token_prefix: string | null;
+  api_token_created_at: number | null;
+  api_token_last_used_at: number | null;
 }
 
 function mapDeveloperRow(raw: RawDeveloperRow): DeveloperRow {
@@ -52,6 +60,10 @@ function mapDeveloperRow(raw: RawDeveloperRow): DeveloperRow {
     discordUsername: raw.discord_username ?? undefined,
     verifiedAt: raw.verified_at ?? undefined,
     createdAt: raw.created_at,
+    apiTokenHash: raw.api_token_hash ?? undefined,
+    apiTokenPrefix: raw.api_token_prefix ?? undefined,
+    apiTokenCreatedAt: raw.api_token_created_at ?? undefined,
+    apiTokenLastUsedAt: raw.api_token_last_used_at ?? undefined,
   };
 }
 
@@ -180,6 +192,56 @@ export function unlinkDeveloperDiscord(
   ).run(now, githubLogin.trim().toLowerCase());
 }
 
+export function getDeveloperByApiTokenHash(
+  db: DatabaseSync,
+  tokenHash: string
+): DeveloperRow | undefined {
+  const raw = db.prepare('SELECT * FROM developers WHERE api_token_hash = ?')
+    .get(tokenHash.trim().toLowerCase()) as unknown as RawDeveloperRow | undefined;
+  return raw ? mapDeveloperRow(raw) : undefined;
+}
+
+export function setDeveloperApiToken(
+  db: DatabaseSync,
+  githubLogin: string,
+  tokenHash: string,
+  tokenPrefix: string,
+  now = Math.floor(Date.now() / 1000)
+) {
+  db.prepare(
+    `UPDATE developers
+     SET api_token_hash = ?,
+         api_token_prefix = ?,
+         api_token_created_at = ?,
+         api_token_last_used_at = NULL
+     WHERE github_login = ?`
+  ).run(tokenHash.trim().toLowerCase(), tokenPrefix, now, githubLogin.trim().toLowerCase());
+}
+
+export function revokeDeveloperApiToken(db: DatabaseSync, githubLogin: string) {
+  db.prepare(
+    `UPDATE developers
+     SET api_token_hash = NULL,
+         api_token_prefix = NULL,
+         api_token_created_at = NULL,
+         api_token_last_used_at = NULL
+     WHERE github_login = ?`
+  ).run(githubLogin.trim().toLowerCase());
+}
+
+export function touchDeveloperApiToken(
+  db: DatabaseSync,
+  developerId: number,
+  now = Math.floor(Date.now() / 1000)
+) {
+  db.prepare(
+    `UPDATE developers
+     SET api_token_last_used_at = ?
+     WHERE id = ?
+       AND (api_token_last_used_at IS NULL OR api_token_last_used_at <= ?)`
+  ).run(now, developerId, now - 60);
+}
+
 export function getDeveloperBySmogonId(
   db: DatabaseSync,
   smogonId: number
@@ -218,7 +280,11 @@ export function upsertProjectDevelopers(
   const selectBySmogon = db.prepare('SELECT id FROM developers WHERE smogon_id = ?');
   const updateDev = db.prepare(`
     UPDATE developers
-    SET agent_id = ?,
+    SET api_token_hash = CASE WHEN agent_id = ? THEN api_token_hash ELSE NULL END,
+        api_token_prefix = CASE WHEN agent_id = ? THEN api_token_prefix ELSE NULL END,
+        api_token_created_at = CASE WHEN agent_id = ? THEN api_token_created_at ELSE NULL END,
+        api_token_last_used_at = CASE WHEN agent_id = ? THEN api_token_last_used_at ELSE NULL END,
+        agent_id = ?,
         github_id = CASE WHEN github_login = ? THEN github_id ELSE NULL END,
         github_login = ?,
         smogon_id = ?,
@@ -240,6 +306,10 @@ export function upsertProjectDevelopers(
       (selectBySmogon.get(owner.smogonId) as {id: number} | undefined);
     if (existing) {
       updateDev.run(
+        agentId,
+        agentId,
+        agentId,
+        agentId,
         agentId,
         cleanGithub,
         cleanGithub,

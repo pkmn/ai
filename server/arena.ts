@@ -1057,6 +1057,7 @@ export interface PendingSubmissionsResponse {
 export interface SubmissionStatusPayload {
   versionId: number;
   smokeStatus: Exclude<db.SmokeStatus, 'pending'>;
+  sha256?: string;
   unpackedBytes?: number;
   smokeDurationMillis?: number;
   smokeInitMillis?: number;

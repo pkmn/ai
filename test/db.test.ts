@@ -3064,6 +3064,18 @@ describe('per-ladder qualification & migrations', () => {
           .join('\n')
           .replace(/updated_at INTEGER NOT NULL,/, 'updated_at INTEGER NOT NULL');
       }
+      if (file === 'developers.sql') {
+        const tokenColRe =
+          /^\s*(api_token_hash|api_token_prefix|api_token_created_at|api_token_last_used_at)\b/;
+        sql = sql
+          .split('\n')
+          .filter(
+            line => !tokenColRe.test(line) &&
+              !/^CREATE UNIQUE INDEX IF NOT EXISTS idx_developers_api_token_hash\b/.test(line)
+          )
+          .join('\n')
+          .replace(/created_at INTEGER NOT NULL,/, 'created_at INTEGER NOT NULL');
+      }
       if (file === 'ladder-entries.sql') {
         const addedCols = new RegExp(
           '^\\s*(mean_cpu_cores|cpu_matches|invalid_choices|invalid_cant_move|' +
@@ -3187,6 +3199,7 @@ describe('per-ladder qualification & migrations', () => {
         '0008-discord-watches.sql',
         '0009-info-status.sql',
         '0010-unlimited-smoke-tests.sql',
+        '0011-developer-api-tokens.sql',
       ]);
       expect(migratedDb.getVersionBySlugAndLabel('magpie', '1.0.0')?.notified).toBe(true);
       expect(migratedDb.getPendingVersionDms()).toEqual([]);
@@ -4397,6 +4410,141 @@ describe('discord watches', () => {
       fs.rmSync(tmpDir, {recursive: true, force: true});
     }
   });
+
+  test('migration 0011-developer-api-tokens.sql is additive matching declarative schema', () => {
+    const sql = fs.readFileSync(
+      root('db', 'migration', '0011-developer-api-tokens.sql'),
+      'utf8'
+    );
+    expect(database.classifyMigrationSql(sql)).toBe('additive');
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-api-token-mig-'));
+    try {
+      const preSchemaDir = path.join(tmpDir, 'pre-schema');
+      const preMigrationDir = path.join(tmpDir, 'pre-migration');
+      fs.mkdirSync(preSchemaDir, {recursive: true});
+      fs.mkdirSync(preMigrationDir, {recursive: true});
+      for (const file of fs.readdirSync(database.SCHEMA_DIR)) {
+        if (!file.endsWith('.sql')) continue;
+        let schemaSql = fs.readFileSync(path.join(database.SCHEMA_DIR, file), 'utf8');
+        if (file === 'developers.sql') {
+          const tokenColRe =
+            /^\s*(api_token_hash|api_token_prefix|api_token_created_at|api_token_last_used_at)\b/;
+          schemaSql = schemaSql
+            .split('\n')
+            .filter(
+              line => !tokenColRe.test(line) &&
+                !/^CREATE UNIQUE INDEX IF NOT EXISTS idx_developers_api_token_hash\b/.test(line)
+            )
+            .join('\n')
+            .replace(/created_at INTEGER NOT NULL,/, 'created_at INTEGER NOT NULL');
+        }
+        fs.writeFileSync(path.join(preSchemaDir, file), schemaSql);
+      }
+      for (const file of fs.readdirSync(database.MIGRATION_DIR)) {
+        if (file === '0011-developer-api-tokens.sql') continue;
+        fs.copyFileSync(
+          path.join(database.MIGRATION_DIR, file),
+          path.join(preMigrationDir, file)
+        );
+      }
+
+      const dbFile = path.join(tmpDir, 'arena.sqlite');
+      const preDb = new database.Database(dbFile, {
+        schemaDir: preSchemaDir,
+        migrationDir: preMigrationDir,
+        now: 1000,
+      });
+      preDb.db.exec(
+        'INSERT INTO agents (slug, name, status, updated_at) ' +
+        "VALUES ('alpha', 'Alpha', 'qualified', 1000);" +
+        'INSERT INTO developers (agent_id, github_login, smogon_id, smogon_username, created_at) ' +
+        "VALUES (1, 'alice', 101, 'alice', 1000);"
+      );
+      preDb.close();
+
+      const migrated = new database.Database(dbFile, {now: 2000});
+      const fresh = new database.Database(':memory:', {now: 2000});
+      try {
+        expect(compareDatabaseSchemas(migrated.db, fresh.db)).toEqual([]);
+        const dev = migrated.getDeveloperByGitHub('alice');
+        expect(dev?.apiTokenHash).toBeUndefined();
+        expect(dev?.apiTokenPrefix).toBeUndefined();
+
+        migrated.setDeveloperApiToken('alice', 'a'.repeat(64), 'pkmn_1234567', 2100);
+        const byHash = migrated.getDeveloperByApiTokenHash('a'.repeat(64));
+        expect(byHash?.githubLogin).toBe('alice');
+        expect(byHash?.apiTokenPrefix).toBe('pkmn_1234567');
+        expect(byHash?.apiTokenCreatedAt).toBe(2100);
+        expect(byHash?.apiTokenLastUsedAt).toBeUndefined();
+
+        migrated.touchDeveloperApiToken(byHash!.id, 2200);
+        expect(migrated.getDeveloperByGitHub('alice')?.apiTokenLastUsedAt).toBe(2200);
+        // Throttled within 60 seconds
+        migrated.touchDeveloperApiToken(byHash!.id, 2230);
+        expect(migrated.getDeveloperByGitHub('alice')?.apiTokenLastUsedAt).toBe(2200);
+        migrated.touchDeveloperApiToken(byHash!.id, 2260);
+        expect(migrated.getDeveloperByGitHub('alice')?.apiTokenLastUsedAt).toBe(2260);
+
+        // Reassigning developer to a different project revokes the existing API token
+        migrated.syncProjectsFromYaml(
+          '- name: Beta\n  slug: beta\n  arena:\n    owner: {github: alice, smogon: alice.101}\n',
+          undefined,
+          2300
+        );
+        expect(migrated.getDeveloperByApiTokenHash('a'.repeat(64))).toBeUndefined();
+        expect(migrated.getDeveloperByGitHub('alice')?.apiTokenPrefix).toBeUndefined();
+      } finally {
+        migrated.close();
+        fresh.close();
+      }
+    } finally {
+      fs.rmSync(tmpDir, {recursive: true, force: true});
+    }
+  });
+
+  test('applySubmissionStatus backfills omitted sha256 without overwriting an explicit digest',
+    () => {
+      const db = new database.Database(':memory:', {now: 1_760_000_000});
+      try {
+        db.syncLadders(undefined, 1_760_000_000);
+        db.db.prepare("UPDATE ladders SET status = 'active'").run();
+        db.syncProjectsFromYaml(sampleProjects, undefined, 1_760_000_000);
+        const alpha = db.getAgentBySlug('alpha')!;
+        db.setAgentLadders('alpha', ['rby'], 1_760_000_000);
+
+        const vEmpty = db.createSubmission({
+          agentId: alpha.id,
+          version: '1.0.0',
+          package: 'bundle',
+          url: 'https://github.com/pkmn/alpha.tar.zst',
+          sha256: '',
+          ladderIds: ['gen1ou20261109'],
+          now: 1_760_000_010,
+        });
+        expect(vEmpty.sha256).toBe('');
+
+        const staged = db.applySubmissionStatus({
+          versionId: vEmpty.id,
+          smokeStatus: 'staged',
+          sha256: 'A'.repeat(64),
+          unpackedBytes: 1024,
+          now: 1_760_000_020,
+        });
+        expect(staged.version.sha256).toBe('a'.repeat(64));
+
+        // Subsequent status updates must not overwrite an already-populated digest
+        const same = db.applySubmissionStatus({
+          versionId: vEmpty.id,
+          smokeStatus: 'staged',
+          sha256: 'b'.repeat(64),
+          now: 1_760_000_030,
+        });
+        expect(same.version.sha256).toBe('a'.repeat(64));
+      } finally {
+        db.close();
+      }
+    });
 
   test('setUnlimitedSmokeTests bypasses 24h failed ladder smoke-test limit', () => {
     const db = new database.Database(':memory:', {now: 1_760_000_000});
