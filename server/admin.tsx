@@ -60,6 +60,7 @@ export interface Options {
 
 export interface Handle {
   notifyHeartbeat: () => void;
+  notifySmokeQueue: (immediate?: boolean) => void;
   getAdminStreamCount: () => number;
   close: () => void;
 }
@@ -112,9 +113,31 @@ export interface AdminPendingItem {
   agentSlug: string;
   agentName: string;
   version: string;
+  package: db.PackageFormat;
   ladders: string[];
   tournaments: string[];
   submittedAt: number;
+}
+
+export interface AdminRunningSmoke {
+  versionId: number;
+  agentSlug: string;
+  agentName: string;
+  version: string;
+  package?: db.PackageFormat;
+  ladders: string[];
+  tournaments: string[];
+  submittedAt?: number;
+  format: string;
+  targetName: string;
+  phase?: arena.LivePhase;
+  turn: number;
+  activeSlot?: 'p1' | 'p2';
+  p1BankSeconds: number;
+  p2BankSeconds: number;
+  peakRam?: number;
+  startedAt: number;
+  updatedAt: number;
 }
 
 export interface AdminSnapshot {
@@ -123,6 +146,7 @@ export interface AdminSnapshot {
   system: AdminSystemSnapshot;
   health: {
     runner: RunnerHealth;
+    runningSmokeTests: AdminRunningSmoke[];
     pendingSubmissions: AdminPendingItem[];
     stagedCount: number;
     unsentDmCount: number;
@@ -145,6 +169,7 @@ const MAX_ADMIN_BODY_BYTES = 16 * 1024;
 const MAX_SSE_BUFFER_BYTES = 4 * 1024 * 1024;
 const SSE_KEEPALIVE_MILLIS = 25_000;
 const HEARTBEAT_PUSH_THROTTLE_MILLIS = 3000;
+const SMOKE_QUEUE_PUSH_THROTTLE_MILLIS = 1000;
 const REGISTRATION_REPO = 'pkmn/ai';
 const REGISTRATION_LABEL = 'registration';
 // Conditional `If-None-Match` (`304 Not Modified`) does not consume GitHub's 60 req/hr
@@ -661,6 +686,7 @@ const ADMIN_SCRIPT = `
     };
 
     const sysCards = document.getElementById('system-cards');
+    const smokeSection = document.getElementById('smoke-queue');
     const regSection = document.getElementById('registrations');
     let lastHbAt = sysCards && sysCards.dataset.heartbeatAt
       ? Number(sysCards.dataset.heartbeatAt)
@@ -685,6 +711,14 @@ const ADMIN_SCRIPT = `
         const ageSec = Math.max(0, nowSec - lastRegAt);
         regEl.textContent = formatAge(ageSec) + ' ago';
       }
+      if (smokeSection) {
+        smokeSection.querySelectorAll('[data-age-epoch]').forEach(el => {
+          const epoch = Number(el.dataset.ageEpoch);
+          if (!Number.isFinite(epoch)) return;
+          const suffix = el.dataset.ageSuffix || '';
+          el.textContent = formatAge(Math.max(0, nowSec - epoch)) + suffix;
+        });
+      }
     };
 
     setInterval(tickAges, 1000);
@@ -693,6 +727,20 @@ const ADMIN_SCRIPT = `
       ${util.TABLE_PAGER_SCRIPT}
     };
     bindTablePagers();
+
+    const applySmokeQueue = (innerHtml, queueLineHtml) => {
+      if (smokeSection && typeof innerHtml === 'string') {
+        smokeSection.innerHTML = innerHtml;
+        pkmnTime.localize(smokeSection);
+        bindTablePagers();
+      }
+      if (typeof queueLineHtml === 'string') {
+        const queueLine = document.getElementById('admin-queue-line');
+        if (queueLine) {
+          queueLine.outerHTML = queueLineHtml;
+        }
+      }
+    };
 
     const applyRegistrations = (payload) => {
       if (!regSection) return;
@@ -729,6 +777,18 @@ const ADMIN_SCRIPT = `
             sysCards.innerHTML = payload.cardsHtml;
             pkmnTime.localize(sysCards);
           }
+          if (typeof payload.smokeQueueHtml === 'string') {
+            applySmokeQueue(payload.smokeQueueHtml);
+          }
+        } catch {}
+      });
+      es.addEventListener('smoke-queue', (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          if (typeof payload.generatedAt === 'number') {
+            clockOffsetSec = payload.generatedAt - Math.floor(Date.now() / 1000);
+          }
+          applySmokeQueue(payload.innerHtml, payload.queueLineHtml);
         } catch {}
       });
       es.addEventListener('registrations', (ev) => {
@@ -1062,7 +1122,8 @@ function renderLoadRow(load: system.LoadMetrics): util.Child {
 }
 
 interface SystemCardExtras {
-  pendingQueue: number;
+  runningSmoke: number;
+  queuedSmoke: number;
   stagedCount: number;
   unsentDms: number;
   smokeCadence: db.SmokeCadence;
@@ -1099,16 +1160,32 @@ function formatSmokeCadence(cadence: db.SmokeCadence): {
   };
 }
 
-function renderArenaQueueLine(extras: SystemCardExtras, outboxPending?: number): util.Child {
+function renderArenaQueueLine(extras: SystemCardExtras, outboxPending?: number): util.Html {
   const cadence = formatSmokeCadence(extras.smokeCadence);
   return (
-    <span className='sys-line'>
-      <span
-        className={extras.pendingQueue > 0 ? 'warn' : 'muted'}
-        title='Submitted versions waiting for Arena smoke testing'
+    <span id='admin-queue-line' className='sys-line'>
+      <a
+        href='#smoke-queue'
+        className='subtle'
+        title='View running and queued smoke tests below'
       >
-        Queue {extras.pendingQueue} pending
-      </span>
+        {extras.runningSmoke > 0 ? (
+          <>
+            <span className='muted'>Queue </span>
+            <span className='yes'>{extras.runningSmoke} running</span>
+            {extras.queuedSmoke > 0 && (
+              <>
+                <span className='muted'>, </span>
+                <span className='warn'>{extras.queuedSmoke} queued</span>
+              </>
+            )}
+          </>
+        ) : (
+          <span className={extras.queuedSmoke > 0 ? 'warn' : 'muted'}>
+            Queue {extras.queuedSmoke} queued
+          </span>
+        )}
+      </a>
       {extras.stagedCount > 0 && (
         <>
           {' · '}
@@ -1741,6 +1818,60 @@ export function buildAdminAgentsPage(
   return {agents, total};
 }
 
+function collectSmokeQueue(
+  database: db.Database,
+  arenaHandle?: arena.Handle
+): {
+  pendingSubmissions: AdminPendingItem[];
+  runningSmokeTests: AdminRunningSmoke[];
+  queuedCount: number;
+} {
+  const pendingSubmissions: AdminPendingItem[] = database.getPendingSubmissions().map(p => ({
+    versionId: p.versionId,
+    agentSlug: p.agentSlug,
+    agentName: p.agentName,
+    version: p.version,
+    package: p.package,
+    ladders: p.ladders,
+    tournaments: p.tournaments,
+    submittedAt: p.submittedAt,
+  }));
+  const pendingById = new Map(pendingSubmissions.map(p => [p.versionId, p]));
+  const runningIds = new Set<number>();
+  const runningSmokeTests: AdminRunningSmoke[] = (arenaHandle?.getLiveDiagnostics() ?? []).map(
+    d => {
+      runningIds.add(d.versionId);
+      const pending = pendingById.get(d.versionId);
+      const ver = pending ? undefined : database.getVersionById(d.versionId);
+      const pkg = pending?.package ?? ver?.package;
+      const submittedAt = pending?.submittedAt ?? ver?.submittedAt;
+      const maxRam = Math.max(d.p1.peakRam ?? 0, d.p2.peakRam ?? 0);
+      return {
+        versionId: d.versionId,
+        agentSlug: d.agentSlug,
+        agentName: d.agentName,
+        version: d.version,
+        ...(pkg ? {package: pkg} : {}),
+        ladders: pending?.ladders ?? ver?.ladders ?? [],
+        tournaments: pending?.tournaments ?? ver?.tournaments ?? [],
+        ...(submittedAt !== undefined ? {submittedAt} : {}),
+        format: d.format,
+        targetName: d.targetName,
+        ...(d.phase ? {phase: d.phase} : {}),
+        turn: d.turn,
+        ...(d.activeSlot ? {activeSlot: d.activeSlot} : {}),
+        p1BankSeconds: d.p1.bankSeconds,
+        p2BankSeconds: d.p2.bankSeconds,
+        ...(maxRam > 0 ? {peakRam: Math.round(maxRam)} : {}),
+        startedAt: d.startedAt,
+        updatedAt: d.updatedAt,
+      };
+    }
+  );
+  const queuedCount = pendingSubmissions.filter(p => !runningIds.has(p.versionId)).length;
+  return {pendingSubmissions, runningSmokeTests, queuedCount};
+}
+
 export function buildAdminSnapshot(
   database: db.Database,
   adminLogin: string,
@@ -1779,18 +1910,7 @@ export function buildAdminSnapshot(
     discordRoleMembersByAgent
   );
 
-  const pendingSubmissions: AdminPendingItem[] = database.getPendingSubmissions().map(p => {
-    const ver = database.getVersionById(p.versionId);
-    return {
-      versionId: p.versionId,
-      agentSlug: p.agentSlug,
-      agentName: p.agentName,
-      version: p.version,
-      ladders: p.ladders,
-      tournaments: p.tournaments,
-      submittedAt: ver?.submittedAt ?? now,
-    };
-  });
+  const {pendingSubmissions, runningSmokeTests} = collectSmokeQueue(database, arenaHandle);
 
   const fallbackMonitor = systemSnapshot
     ? undefined
@@ -1823,6 +1943,7 @@ export function buildAdminSnapshot(
     system: sys,
     health: {
       runner: computeRunnerHealth(arenaHandle, now),
+      runningSmokeTests,
       pendingSubmissions,
       stagedCount: submissions.stagedCount,
       unsentDmCount: database.getPendingVersionDms().length,
@@ -2879,16 +3000,182 @@ function renderProjectsMeta(sub: db.SubmissionAdminSummary): util.Child {
   );
 }
 
+function formatSmokePhase(r: AdminRunningSmoke): string {
+  if (r.phase === 'init') return 'Init';
+  if (r.phase === 'preview') return 'Preview';
+  return `Turn ${r.turn}`;
+}
+
+function renderSmokeQueueInner(opts: {
+  runningSmokeTests: AdminRunningSmoke[];
+  pendingSubmissions: AdminPendingItem[];
+  now: number;
+  ladderNameById: ReadonlyMap<string, string>;
+  tournamentNameById: ReadonlyMap<string, string>;
+}): util.Html {
+  const {
+    runningSmokeTests,
+    pendingSubmissions,
+    now,
+    ladderNameById,
+    tournamentNameById,
+  } = opts;
+  const runningIds = new Set(runningSmokeTests.map(r => r.versionId));
+  const queued = pendingSubmissions.filter(p => !runningIds.has(p.versionId));
+  const total = runningSmokeTests.length + queued.length;
+
+  const formatTargets = (ladders: readonly string[], tournaments: readonly string[]): string[] => [
+    ...ladders.map(id => ladderNameById.get(id) ?? id),
+    ...tournaments.map(id => formatTournamentName(tournamentNameById.get(id) ?? `#${id}`)),
+  ];
+
+  const rows: util.Child[] = [];
+  for (const r of runningSmokeTests) {
+    const idx = rows.length;
+    const targets = formatTargets(r.ladders, r.tournaments);
+    const activeTarget = formatTournamentName(r.targetName);
+    const targetText = targets.length > 0 ? targets.join(', ') : activeTarget;
+    const showActiveTarget =
+      targets.length > 1 || (targets.length === 1 && targets[0] !== activeTarget);
+    const tipAttrs = util.localizedTitle([
+      {prefix: 'Started ', epoch: r.startedAt},
+      `P1 ${Math.max(0, Math.round(r.p1BankSeconds))}s · ` +
+        `P2 ${Math.max(0, Math.round(r.p2BankSeconds))}s`,
+      ...(r.peakRam !== undefined ? [`${r.peakRam.toLocaleString('en-US')} MiB peak`] : []),
+      {prefix: 'Updated ', epoch: r.updatedAt},
+    ]);
+    rows.push(
+      <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+        <td className='wrap' {...tipAttrs}>
+          <span className='yes'>Running</span>{' '}
+          <span className='muted'>
+            {showActiveTarget ? `${activeTarget} · ` : ''}
+            {formatSmokePhase(r)} ·{' '}
+            <span data-age-epoch={String(r.startedAt)}>{formatAge(now - r.startedAt)}</span>
+          </span>
+        </td>
+        <td>
+          <a href={`/projects/${encodeURIComponent(r.agentSlug)}/`} className='subtle'>
+            <strong>{r.agentName}</strong>
+          </a>
+        </td>
+        <td>
+          <code>{r.version}</code>
+          {r.package && <> <span className='muted'>{r.package}</span></>}
+        </td>
+        <td className='wrap'><tt>{targetText || '—'}</tt></td>
+        <td className='num muted'>
+          {r.submittedAt !== undefined ? (
+            <span
+              data-age-epoch={String(r.submittedAt)}
+              data-age-suffix=' ago'
+              {...util.localizedTitle([{prefix: 'Submitted ', epoch: r.submittedAt}])}
+            >
+              {formatAge(now - r.submittedAt)} ago
+            </span>
+          ) : '—'}
+        </td>
+      </tr>
+    );
+  }
+  queued.forEach((item, pos) => {
+    const idx = rows.length;
+    const targets = formatTargets(item.ladders, item.tournaments);
+    rows.push(
+      <tr className={idx >= util.TABLE_PAGE_SIZE ? 'hide' : undefined}>
+        <td>
+          Queued <span className='muted'>#{pos + 1}</span>
+        </td>
+        <td>
+          <a href={`/projects/${encodeURIComponent(item.agentSlug)}/`} className='subtle'>
+            <strong>{item.agentName}</strong>
+          </a>
+        </td>
+        <td>
+          <code>{item.version}</code>{' '}
+          <span className='muted'>{item.package}</span>
+        </td>
+        <td className='wrap'><tt>{targets.join(', ') || '—'}</tt></td>
+        <td className='num muted'>
+          <span
+            data-age-epoch={String(item.submittedAt)}
+            data-age-suffix=' ago'
+            {...util.localizedTitle([{prefix: 'Submitted ', epoch: item.submittedAt}])}
+          >
+            {formatAge(now - item.submittedAt)} ago
+          </span>
+        </td>
+      </tr>
+    );
+  });
+
+  return (
+    <>
+      <h3>
+        <a href='#smoke-queue' className='subtle'>Smoke Queue ({total})</a>
+      </h3>
+      {total === 0 ? (
+        <p className='muted'>No smoke tests queued or running.</p>
+      ) : (
+        <util.PaginatedTable
+          head={(
+            <tr>
+              <th>Status</th>
+              <th>Project</th>
+              <th>Version</th>
+              <th>Targets</th>
+              <th className='num'>Queued</th>
+            </tr>
+          )}
+          pager={{
+            id: 'smoke-queue-pager',
+            label: 'Smoke queue pagination',
+            total,
+            singular: 'submission',
+            plural: 'submissions',
+          }}
+        >
+          {rows}
+        </util.PaginatedTable>
+      )}
+    </>
+  );
+}
+
+function renderSmokeQueueSection(opts: {
+  runningSmokeTests: AdminRunningSmoke[];
+  pendingSubmissions: AdminPendingItem[];
+  now: number;
+  ladderNameById: ReadonlyMap<string, string>;
+  tournamentNameById: ReadonlyMap<string, string>;
+}): util.Child {
+  return (
+    <section id='smoke-queue'>
+      {renderSmokeQueueInner(opts)}
+    </section>
+  );
+}
+
 export function renderAdminPage(opts: {
   snapshot: AdminSnapshot;
   allLadders: db.LadderRow[];
+  allTournaments?: db.TournamentRow[];
   liveTournament?: {id: string; name: string};
   authorProjects?: ReadonlyMap<string, AuthorProject>;
 }): string {
   const {snapshot, allLadders, liveTournament} = opts;
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
+  const tournamentNameById = new Map((opts.allTournaments ?? []).map(t => [t.id, t.name]));
   const wipeableVersionIds = new Set(snapshot.wipeableVersionIds);
-  const {pendingSubmissions, stagedCount, unsentDmCount, smokeCadence} = snapshot.health;
+  const {
+    runningSmokeTests,
+    pendingSubmissions,
+    stagedCount,
+    unsentDmCount,
+    smokeCadence,
+  } = snapshot.health;
+  const runningIds = new Set(runningSmokeTests.map(r => r.versionId));
+  const queuedSmoke = pendingSubmissions.filter(p => !runningIds.has(p.versionId)).length;
   const authorProjects = opts.authorProjects ?? buildAuthorProjectsFromAgents(snapshot.agents);
 
   const content = (
@@ -2896,13 +3183,21 @@ export function renderAdminPage(opts: {
       <div id='admin-feedback' className='admin-feedback hide' role='status' />
 
       {renderSystemSection(snapshot.system, snapshot.generatedAt, {
-        pendingQueue: pendingSubmissions.length,
+        runningSmoke: runningSmokeTests.length,
+        queuedSmoke,
         stagedCount,
         unsentDms: unsentDmCount,
         smokeCadence,
       })}
       {renderLaddersSection(snapshot.ladders, snapshot.matches24h, snapshot.totalMatches)}
       {renderRegistrationsSection(snapshot.registrations, snapshot.generatedAt, authorProjects)}
+      {renderSmokeQueueSection({
+        runningSmokeTests,
+        pendingSubmissions,
+        now: snapshot.generatedAt,
+        ladderNameById,
+        tournamentNameById,
+      })}
 
       <section id='projects'>
         <div className='section-head'>
@@ -2970,6 +3265,8 @@ export function register(app: polka.Polka, options: Options): Handle {
   const adminStreamClients = new Set<http.ServerResponse>();
   let lastBroadcastMs = 0;
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSmokeQueueBroadcastMs = 0;
+  let pendingSmokeQueueTimer: ReturnType<typeof setTimeout> | undefined;
 
   const evictIfStalled = (client: http.ServerResponse): boolean => {
     if (client.writableEnded || client.destroyed) {
@@ -3015,25 +3312,67 @@ export function register(app: polka.Polka, options: Options): Handle {
     };
   };
 
-  const buildSystemEventPayload = (now: number) => {
-    const sys = collectSystemSnapshot(now);
-    const runner = computeRunnerHealth(arenaHandle, now);
-    const pendingQueue = db.getPendingSubmissions().length;
+  const buildSmokeQueueEventPayload = (now: number) => {
+    const {pendingSubmissions, runningSmokeTests, queuedCount} = collectSmokeQueue(db, arenaHandle);
     const stagedCount = db.countStagedVersions();
     const unsentDms = db.getPendingVersionDms().length;
     const smokeCadence = db.getSmokeCadence();
+    const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
+    const tournamentNameById = new Map(db.getTournaments().map(t => [t.id, t.name]));
+    const outboxPending = arenaHandle?.getState().arenaSystem?.outboxPending;
+    return {
+      generatedAt: now,
+      runningSmokeTests,
+      pendingSubmissions,
+      smokeCadence,
+      innerHtml: renderSmokeQueueInner({
+        runningSmokeTests,
+        pendingSubmissions,
+        now,
+        ladderNameById,
+        tournamentNameById,
+      }).toString(),
+      queueLineHtml: renderArenaQueueLine({
+        runningSmoke: runningSmokeTests.length,
+        queuedSmoke: queuedCount,
+        stagedCount,
+        unsentDms,
+        smokeCadence,
+      }, outboxPending).toString(),
+    };
+  };
+
+  const buildSystemEventPayload = (now: number) => {
+    const sys = collectSystemSnapshot(now);
+    const runner = computeRunnerHealth(arenaHandle, now);
+    const {pendingSubmissions, runningSmokeTests, queuedCount} = collectSmokeQueue(db, arenaHandle);
+    const stagedCount = db.countStagedVersions();
+    const unsentDms = db.getPendingVersionDms().length;
+    const smokeCadence = db.getSmokeCadence();
+    const ladderNameById = new Map(db.getLadders().map(l => [l.id, l.name]));
+    const tournamentNameById = new Map(db.getTournaments().map(t => [t.id, t.name]));
     return {
       generatedAt: now,
       ...(sys.lastHeartbeatAt !== undefined ? {lastHeartbeatAt: sys.lastHeartbeatAt} : {}),
       runner,
       smokeCadence,
+      runningSmokeTests,
+      pendingSubmissions,
       vps: sys.vps,
       ...(sys.arena ? {arena: sys.arena} : {}),
       cardsHtml: renderSystemCards(sys, now, {
-        pendingQueue,
+        runningSmoke: runningSmokeTests.length,
+        queuedSmoke: queuedCount,
         stagedCount,
         unsentDms,
         smokeCadence,
+      }).toString(),
+      smokeQueueHtml: renderSmokeQueueInner({
+        runningSmokeTests,
+        pendingSubmissions,
+        now,
+        ladderNameById,
+        tournamentNameById,
       }).toString(),
     };
   };
@@ -3052,6 +3391,42 @@ export function register(app: polka.Polka, options: Options): Handle {
       if (!evictIfStalled(client)) {
         client.write(frame);
       }
+    }
+  };
+
+  const pushSmokeQueueEventNow = () => {
+    if (adminStreamClients.size === 0) return;
+    lastSmokeQueueBroadcastMs = Date.now();
+    let frame: string;
+    try {
+      const payload = buildSmokeQueueEventPayload(getNow());
+      frame = `event: smoke-queue\ndata: ${JSON.stringify(payload)}\n\n`;
+    } catch (err) {
+      console.error('Failed building /api/admin/stream smoke-queue payload:', err);
+      return;
+    }
+    for (const client of adminStreamClients) {
+      if (!evictIfStalled(client)) {
+        client.write(frame);
+      }
+    }
+  };
+
+  const notifySmokeQueue = (immediate = false) => {
+    if (adminStreamClients.size === 0) return;
+    const elapsed = Date.now() - lastSmokeQueueBroadcastMs;
+    if (immediate || elapsed >= SMOKE_QUEUE_PUSH_THROTTLE_MILLIS) {
+      if (pendingSmokeQueueTimer) {
+        clearTimeout(pendingSmokeQueueTimer);
+        pendingSmokeQueueTimer = undefined;
+      }
+      pushSmokeQueueEventNow();
+    } else if (!pendingSmokeQueueTimer) {
+      pendingSmokeQueueTimer = setTimeout(() => {
+        pendingSmokeQueueTimer = undefined;
+        pushSmokeQueueEventNow();
+      }, SMOKE_QUEUE_PUSH_THROTTLE_MILLIS - elapsed);
+      pendingSmokeQueueTimer.unref?.();
     }
   };
 
@@ -3231,6 +3606,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const html = renderAdminPage({
       snapshot,
       allLadders: db.getLadders(),
+      allTournaments: db.getTournaments(),
       liveTournament: db.getRunningTournament(),
       authorProjects: buildAuthorProjectsFromDb(db),
     });
@@ -3456,6 +3832,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
     try {
       const updated = db.discardStagedVersion({versionId, agentId: ver.agentId});
+      notifySmokeQueue(true);
       const safe = {...updated};
       delete safe.authTokenEncoding;
       sendJson(res, 200, {ok: true, version: safe});
@@ -3488,6 +3865,7 @@ export function register(app: polka.Polka, options: Options): Handle {
     const now = getNow();
     try {
       const result = db.wipeVersion(versionId, now);
+      notifySmokeQueue(true);
       const safe = {...result.version};
       delete safe.authTokenEncoding;
       sendJson(res, 200, {ok: true, version: safe});
@@ -3581,6 +3959,7 @@ export function register(app: polka.Polka, options: Options): Handle {
 
   return {
     notifyHeartbeat,
+    notifySmokeQueue,
     getAdminStreamCount: () => adminStreamClients.size,
     close: () => {
       unsubscribeRegistrations?.();
@@ -3589,6 +3968,10 @@ export function register(app: polka.Polka, options: Options): Handle {
       if (pendingBroadcastTimer) {
         clearTimeout(pendingBroadcastTimer);
         pendingBroadcastTimer = undefined;
+      }
+      if (pendingSmokeQueueTimer) {
+        clearTimeout(pendingSmokeQueueTimer);
+        pendingSmokeQueueTimer = undefined;
       }
       for (const client of adminStreamClients) {
         if (!client.writableEnded && !client.destroyed) client.end();

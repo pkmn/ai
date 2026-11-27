@@ -931,6 +931,7 @@ export interface Options {
   onStaffAlert?: (alert: StaffAlertPayload) => void | Promise<void>;
   onLiveMatch?: (match: LiveMatch) => void | Promise<void>;
   onLiveTournamentGame?: (game: LiveTournamentGame) => void | Promise<void>;
+  onDiagnosticLive?: (payload: DiagnosticLivePayload, transition: boolean) => void;
   onHeartbeat?: (info: {
     at: number;
     system?: system.ArenaSystemInfo;
@@ -975,11 +976,13 @@ export interface LiveDiagnostic {
   p1Lines?: string[];
   p2Lines?: string[];
   winHistory?: WinHistoryPoint[];
+  startedAt: number;
   updatedAt: number;
 }
 
 export type DiagnosticLivePayload =
-  Omit<LiveDiagnostic, 'updatedAt'> | {done: true; agentId: number; versionId: number};
+  (Omit<LiveDiagnostic, 'startedAt' | 'updatedAt'> & {startedAt?: number}) |
+  {done: true; agentId: number; versionId: number};
 
 export interface Handle {
   close: () => void;
@@ -995,6 +998,7 @@ export interface Handle {
   getActiveTournamentGames: () => LiveTournamentGame[];
   setTournamentBroadcast: (broadcast?: LiveBroadcast, tournamentId?: string) => void;
   getLiveDiagnostic: (agentId: number) => LiveDiagnostic | undefined;
+  getLiveDiagnostics: () => LiveDiagnostic[];
   setLiveDiagnostic: (payload: DiagnosticLivePayload) => void;
   subscribeDiagnostic: (
     agentId: number,
@@ -1978,6 +1982,20 @@ export function register(app: polka.Polka, options: Options): Handle {
     return snap;
   };
 
+  const getLiveDiagnostics = (): LiveDiagnostic[] => {
+    const nowSec = getNowSec();
+    const out: LiveDiagnostic[] = [];
+    for (const [agentId, snap] of liveDiagnosticsByAgent) {
+      if (nowSec - snap.updatedAt > DIAGNOSTIC_STALE_SECONDS) {
+        liveDiagnosticsByAgent.delete(agentId);
+        continue;
+      }
+      out.push(snap);
+    }
+    out.sort((a, b) => a.startedAt - b.startedAt || a.versionId - b.versionId);
+    return out;
+  };
+
   const pushDiagnosticEvent = (agentId: number, event: string, data: unknown) => {
     const clients = diagnosticStreamClients.get(agentId);
     if (!clients) return;
@@ -1992,8 +2010,17 @@ export function register(app: polka.Polka, options: Options): Handle {
         liveDiagnosticsByAgent.delete(payload.agentId);
       }
       pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
+      options.onDiagnosticLive?.(payload, true);
       return;
     }
+    const nowSec = getNowSec();
+    const existing = liveDiagnosticsByAgent.get(payload.agentId);
+    const transition =
+      existing?.versionId !== payload.versionId ||
+      existing.format !== payload.format ||
+      existing.phase !== payload.phase;
+    const startedAt = payload.startedAt ??
+      (existing?.versionId === payload.versionId ? existing.startedAt : nowSec);
     const persp = payload.p1Lines && payload.p2Lines
       ? {p1Lines: payload.p1Lines.slice(), p2Lines: payload.p2Lines.slice()}
       : extractPerspectiveLogs(payload.lines);
@@ -2001,10 +2028,12 @@ export function register(app: polka.Polka, options: Options): Handle {
       ...payload,
       p1Lines: persp.p1Lines,
       p2Lines: persp.p2Lines,
-      updatedAt: getNowSec(),
+      startedAt,
+      updatedAt: nowSec,
     };
     liveDiagnosticsByAgent.set(snap.agentId, snap);
     pushDiagnosticEvent(snap.agentId, 'diagnostic', snap);
+    options.onDiagnosticLive?.(payload, transition);
   };
 
   const subscribeDiagnostic = (
@@ -2401,6 +2430,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         smokeError: body.smokeError?.slice(0, 16_384),
         now: getNowSec(),
       });
+      for (const [agentId, snap] of liveDiagnosticsByAgent) {
+        if (snap.versionId === result.version.id) {
+          liveDiagnosticsByAgent.delete(agentId);
+          pushDiagnosticEvent(agentId, 'done', {versionId: result.version.id});
+        }
+      }
 
       Promise.resolve(options.onSubmissionStatus?.(result)).catch(err => {
         console.error('Error in onSubmissionStatus callback:', err);
@@ -3526,6 +3561,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       pushTournamentEvent(id, 'broadcast', normalized);
     },
     getLiveDiagnostic,
+    getLiveDiagnostics,
     setLiveDiagnostic,
     subscribeDiagnostic,
     getState: () => {

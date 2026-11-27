@@ -1866,6 +1866,145 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       },
     },
     {
+      name: 'admin-smoke-queue',
+      section: 'account',
+      title: 'Admin (Smoke Queue)',
+      path: '/admin/',
+      githubUser: 'scheibo',
+      setup: fixture => {
+        const zero = fixture.db.getAgentBySlug('0-error')!;
+        const foulPlay = fixture.db.getAgentBySlug('foul-play')!;
+        const awrorus = fixture.db.getAgentBySlug('awrorus')!;
+        const scheduledTourney = fixture.db.getTournaments().find(t => t.status === 'scheduled');
+        const tourneyId = scheduledTourney?.id;
+        let zeroVersionId = 0;
+        let foulPlayVersionId = 0;
+        const undoDb = withSavepoint(fixture, raw => {
+          const insertPending = raw.prepare(
+            `INSERT INTO agent_versions (
+              agent_id, version, package, url, sha256, ladders_json, tournaments_json,
+              smoke_status, submitted_at, notified
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0)`
+          );
+          zeroVersionId = Number(insertPending.run(
+            zero.id,
+            '1.3.0',
+            'bundle',
+            'https://github.com/pkmn/0-ERROR/releases/download/v1.3.0/agent.tar.zst',
+            'a'.repeat(64),
+            JSON.stringify([RBY_LADDER_ID, SV_LADDER_ID]),
+            '[]',
+            NOW_SECONDS - 180
+          ).lastInsertRowid);
+          foulPlayVersionId = Number(insertPending.run(
+            foulPlay.id,
+            '2.1.0',
+            'oci',
+            'ghcr.io/pmariglia/foul-play:2.1.0',
+            'b'.repeat(64),
+            '[]',
+            JSON.stringify(tourneyId ? [tourneyId] : []),
+            NOW_SECONDS - 120
+          ).lastInsertRowid);
+          insertPending.run(
+            awrorus.id,
+            '2.0.0',
+            'oci',
+            'ghcr.io/awrorus/agent:2.0.0',
+            'c'.repeat(64),
+            JSON.stringify([VGC_LADDER_ID]),
+            '[]',
+            NOW_SECONDS - 480
+          );
+          insertPending.run(
+            fixture.cynthiaiId,
+            '1.2.0',
+            'bundle',
+            'https://github.com/sisyphus25/cynthiai/releases/download/v1.2.0/agent.tar.zst',
+            'd'.repeat(64),
+            JSON.stringify([SV_LADDER_ID]),
+            JSON.stringify(tourneyId ? [tourneyId] : []),
+            NOW_SECONDS - 60
+          );
+        });
+        fixture.arenaHandle.setLiveDiagnostic({
+          versionId: zeroVersionId,
+          agentId: zero.id,
+          agentSlug: zero.slug,
+          agentName: zero.name,
+          version: '1.3.0',
+          format: 'gen9ou',
+          targetName: 'SV',
+          phase: 'battle',
+          turn: 12,
+          activeSlot: 'p1',
+          turnStartedAt: NOW_SECONDS - 3,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 15,
+          p1: {
+            name: '0 ERROR (P1)',
+            version: '1.3.0',
+            bankSeconds: 141,
+            thinking: true,
+            peakRam: 612,
+          },
+          p2: {
+            name: '0 ERROR (P2)',
+            version: '1.3.0',
+            bankSeconds: 144,
+            thinking: false,
+            peakRam: 598,
+          },
+          lines: ['|turn|12'],
+          startedAt: NOW_SECONDS - 45,
+        });
+        fixture.arenaHandle.setLiveDiagnostic({
+          versionId: foulPlayVersionId,
+          agentId: foulPlay.id,
+          agentSlug: foulPlay.slug,
+          agentName: foulPlay.name,
+          version: '2.1.0',
+          format: scheduledTourney?.format ?? 'gen9ou',
+          targetName: scheduledTourney?.name ?? 'Tournament #3',
+          phase: 'preview',
+          turn: 0,
+          activeSlot: 'p1',
+          turnStartedAt: NOW_SECONDS - 2,
+          turnBudgetSeconds: 90,
+          incrementSeconds: 15,
+          p1: {
+            name: 'Foul Play (P1)',
+            version: '2.1.0',
+            bankSeconds: 90,
+            thinking: true,
+            peakRam: 420,
+          },
+          p2: {
+            name: 'Foul Play (P2)',
+            version: '2.1.0',
+            bankSeconds: 90,
+            thinking: false,
+            peakRam: 410,
+          },
+          lines: ['|teampreview'],
+          startedAt: NOW_SECONDS - 12,
+        });
+        return () => {
+          fixture.arenaHandle.setLiveDiagnostic({
+            done: true,
+            agentId: zero.id,
+            versionId: zeroVersionId,
+          });
+          fixture.arenaHandle.setLiveDiagnostic({
+            done: true,
+            agentId: foulPlay.id,
+            versionId: foulPlayVersionId,
+          });
+          undoDb();
+        };
+      },
+    },
+    {
       name: 'admin-expanded',
       section: 'account',
       title: 'Admin (Expanded)',

@@ -351,6 +351,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       getLiveTournamentGames: () => getLiveTournamentGames(),
     });
   let notifyAdminHeartbeat = () => {};
+  let notifyAdminSmokeQueue: (immediate?: boolean) => void = () => {};
   const arenaHandle = arena.register(app, {
     db,
     auth: wikiInstance.auth,
@@ -358,6 +359,9 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
     armWatchdogOnStart: options.armWatchdogOnStart,
     onHeartbeat: () => {
       notifyAdminHeartbeat();
+    },
+    onDiagnosticLive: (_payload, transition) => {
+      notifyAdminSmokeQueue(transition);
     },
     onLiveMatch: discordHandle
       ? async match => {
@@ -390,9 +394,15 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       : undefined,
     onUpdate: reason => {
       if (reason === 'tournament-status') syncBannerFor(db, publicDir);
+      if (reason === 'submission-status') notifyAdminSmokeQueue(true);
     },
   });
-  account.register(app, {db, auth: wikiInstance.auth, arena: arenaHandle});
+  account.register(app, {
+    db,
+    auth: wikiInstance.auth,
+    arena: arenaHandle,
+    onSubmissionCreated: () => notifyAdminSmokeQueue(true),
+  });
   getArenaLastContactAt = () => arenaHandle.getState().lastContactAt;
   getLiveMatch = () => {
     const state = arenaHandle.getState();
@@ -412,6 +422,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
       : undefined,
   });
   notifyAdminHeartbeat = () => adminHandle.notifyHeartbeat();
+  notifyAdminSmokeQueue = immediate => adminHandle.notifySmokeQueue(immediate);
 
   if (isMock) {
     const mockStateFile = util.root('.mock', 'state.json');

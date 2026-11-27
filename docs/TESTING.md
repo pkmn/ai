@@ -96,7 +96,8 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
    unsettled provisional w/ `○` non-`/info` dot, `QUARANTINED (DM sent)`, Smogon-banned
    `smogon_standing = 'bad'`), and `/admin/` dashboard (`403` non-admin, overview w/ 24h match &
    diagnostic run totals, configured smoke cadence, open `registration` issues, and manually-linked
-   vs. role-inferred Discord handles, expanded project detail panel w/ 3/24h smoke-limit toggle &
+   vs. role-inferred Discord handles, live smoke queue table w/ running & FIFO queued ladder/tournament
+   submissions, expanded project detail panel w/ 3/24h smoke-limit toggle &
    throttled smoke cadence, upcoming saved-pool wipe button, staged diagnostic replay + discard
    view, and paginated Projects/Wiki page 2).
 7. **`wiki`:** Index, `/wiki/pages`, `/wiki/projects`, `developers`/`discord` project pages, public & project editors

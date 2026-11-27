@@ -1177,6 +1177,7 @@ export interface Options {
   poolsByLadder?: Map<string, string[]>;
   rateLimitMaxAttempts?: number;
   now?: () => number;
+  onSubmissionCreated?: () => void;
 }
 
 function sendHtml(res: http.ServerResponse, status: number, html: string) {
@@ -3269,6 +3270,7 @@ export function register(app: polka.Polka, options: Options) {
         teamsByLadder: Object.keys(teamsByLadder).length ? teamsByLadder : undefined,
         now,
       });
+      options.onSubmissionCreated?.();
 
       if (
         viaApiToken ||

@@ -80,12 +80,17 @@ describe('/admin dashboard & API', () => {
     app.use(traffic.middleware());
     authHandler.register(app);
     let notifyHb = () => {};
+    let notifyQueue: (immediate?: boolean) => void = () => {};
     arenaHandle = arena.register(app, {
       db,
       auth: authHandler,
       arenaSecret: ARENA_SECRET,
       now: () => now,
       onHeartbeat: () => notifyHb(),
+      onDiagnosticLive: (_payload, transition) => notifyQueue(transition),
+      onUpdate: reason => {
+        if (reason === 'submission-status') notifyQueue(true);
+      },
     });
     const vpsMonitor = new system.VpsHostMonitor({
       dbPath: db.dbPath,
@@ -102,6 +107,7 @@ describe('/admin dashboard & API', () => {
       now: () => now,
     });
     notifyHb = () => adminHandle.notifyHeartbeat();
+    notifyQueue = immediate => adminHandle.notifySmokeQueue(immediate);
 
     server = http.createServer((req, res) => app.handler(req as polka.Request, res));
     server.keepAliveTimeout = 65_000;
@@ -1451,6 +1457,329 @@ describe('/admin dashboard & API', () => {
       "feedback.className = isError ? 'admin-feedback no' : 'admin-feedback';"
     );
     expect(html).not.toContain("'admin-feedback ' + (isError ? 'no' : 'yes')");
+  });
+
+  test('renders empty smoke queue section with link from Arena system card', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    expect(html).toContain('id="smoke-queue"');
+    expect(html).toContain('Smoke Queue (0)');
+    expect(html).toContain('No smoke tests queued or running.');
+    expect(html).toContain('href="#smoke-queue"');
+    expect(html).toContain('Queue 0 queued');
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: adminCookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snap.health.runningSmokeTests).toEqual([]);
+    expect(snap.health.pendingSubmissions).toEqual([]);
+  });
+
+  test('renders running smoke tests before FIFO queued submissions', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const foulPlay = db.getAgentBySlug('foul-play')!;
+    const newcomer = db.getAgentBySlug('newcomer')!;
+    const devZero = db.getDevelopersForAgent(zero.id)[0];
+    const devFoul = db.getDevelopersForAgent(foulPlay.id)[0];
+    const devNew = db.getDevelopersForAgent(newcomer.id)[0];
+    const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
+    const adv = db.getCurrentLadders().find(l => l.slot === 'adv')!;
+    db.upsertTournament({
+      id: '3',
+      name: 'Tournament #3: Gen 9 OU BO3',
+      format: 'gen9ou',
+      version: '0.11.0',
+      gamesPerMatchup: 1,
+      batchSize: 1,
+      parallelTables: 1,
+      hardware: '4 vCPU',
+      status: 'scheduled',
+      startsAt: now + 86400,
+    });
+
+    const vQueuedFirst = db.createSubmission({
+      agentId: foulPlay.id,
+      developerId: devFoul.id,
+      version: '2.0.0',
+      package: 'oci',
+      url: 'ghcr.io/pmariglia/foul-play:2.0.0',
+      sha256: SHA_A,
+      ladderIds: [adv.id],
+      now: now - 300,
+    });
+    const vRunning = db.createSubmission({
+      agentId: zero.id,
+      developerId: devZero.id,
+      version: '1.3.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-ERROR/releases/download/v1.3.0/agent.tar.zst',
+      sha256: SHA_B,
+      ladderIds: [rby.id, adv.id],
+      now: now - 180,
+    });
+    const vQueuedSecond = db.createSubmission({
+      agentId: newcomer.id,
+      developerId: devNew.id,
+      version: '0.1.0',
+      package: 'oci',
+      url: 'ghcr.io/rookie/newcomer:0.1.0',
+      sha256: SHA_A,
+      ladderIds: [],
+      tournamentIds: ['3'],
+      now: now - 60,
+    });
+
+    arenaHandle.setLiveDiagnostic({
+      versionId: vRunning.id,
+      agentId: zero.id,
+      agentSlug: zero.slug,
+      agentName: zero.name,
+      version: vRunning.version,
+      format: rby.format,
+      targetName: rby.name,
+      phase: 'battle',
+      turn: 14,
+      activeSlot: 'p1',
+      turnStartedAt: now - 2,
+      turnBudgetSeconds: 150,
+      incrementSeconds: 15,
+      p1: {name: '0 ERROR (P1)', version: '1.3.0', bankSeconds: 141, thinking: true, peakRam: 612},
+      p2: {name: '0 ERROR (P2)', version: '1.3.0', bankSeconds: 144, thinking: false, peakRam: 598},
+      lines: ['|turn|14'],
+      startedAt: now - 45,
+    });
+
+    const html = await (await fetch(`${baseUrl}/admin/`, {
+      headers: {Cookie: adminCookie},
+    })).text();
+    const regIdx = html.indexOf('<section id="registrations"');
+    const smokeIdx = html.indexOf('<section id="smoke-queue"');
+    const projIdx = html.indexOf('<section id="projects"');
+    expect(regIdx).toBeGreaterThan(-1);
+    expect(smokeIdx).toBeGreaterThan(regIdx);
+    expect(projIdx).toBeGreaterThan(smokeIdx);
+    const smokeSection = html.slice(smokeIdx, projIdx);
+    expect(smokeSection).toContain('Smoke Queue (3)');
+    expect(smokeSection).not.toContain('section-meta');
+    expect(smokeSection).not.toContain('class="warn">Queued');
+    expect(smokeSection).toContain('<td>Queued <span class="muted">#1</span></td>');
+    expect(smokeSection).toContain(`${rby.name} · Turn 14 ·`);
+    expect(smokeSection).toContain('45s');
+    expect(smokeSection).toContain('612 MiB peak');
+    expect(smokeSection).toContain('P1 141s · P2 144s');
+    expect(smokeSection).toContain('Gen 9 OU (Bo3)');
+    expect(smokeSection).toContain('#1');
+    expect(smokeSection).toContain('#2');
+    expect(smokeSection).not.toContain('#3');
+
+    // Running row precedes queued #1 (Foul Play), which precedes queued #2 (Newcomer).
+    const idxZero = smokeSection.indexOf('0 ERROR');
+    const idxFoul = smokeSection.indexOf('Foul Play');
+    const idxNew = smokeSection.indexOf('Newcomer');
+    expect(idxZero).toBeGreaterThan(-1);
+    expect(idxFoul).toBeGreaterThan(idxZero);
+    expect(idxNew).toBeGreaterThan(idxFoul);
+
+    // Arena system card reflects running + queued split.
+    expect(html).toContain(
+      '1 running</span><span class="muted">, </span><span class="warn">2 queued'
+    );
+
+    const snap = await (await fetch(`${baseUrl}/admin.json`, {
+      headers: {Cookie: adminCookie},
+    })).json() as admin.AdminSnapshot;
+    expect(snap.health.runningSmokeTests).toHaveLength(1);
+    expect(snap.health.runningSmokeTests[0]).toMatchObject({
+      versionId: vRunning.id,
+      agentSlug: '0-error',
+      version: '1.3.0',
+      package: 'bundle',
+      targetName: rby.name,
+      phase: 'battle',
+      turn: 14,
+      peakRam: 612,
+      startedAt: now - 45,
+    });
+    expect(snap.health.pendingSubmissions.map(p => p.versionId)).toEqual([
+      vQueuedFirst.id,
+      vRunning.id,
+      vQueuedSecond.id,
+    ]);
+    expect(snap.health.pendingSubmissions[0].package).toBe('oci');
+    expect(snap.health.pendingSubmissions[0].submittedAt).toBe(now - 300);
+  });
+
+  test('renders Init and Preview phases in smoke queue table', () => {
+    const zero = db.getAgentBySlug('0-error')!;
+    const foulPlay = db.getAgentBySlug('foul-play')!;
+    const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
+    arenaHandle.setLiveDiagnostic({
+      versionId: 901,
+      agentId: zero.id,
+      agentSlug: zero.slug,
+      agentName: zero.name,
+      version: '1.4.0',
+      format: rby.format,
+      targetName: rby.name,
+      phase: 'init',
+      turn: 0,
+      turnStartedAt: now - 5,
+      turnBudgetSeconds: 60,
+      incrementSeconds: 0,
+      p1: {name: '0 ERROR (P1)', version: '1.4.0', bankSeconds: 150, thinking: true},
+      p2: {name: '0 ERROR (P2)', version: '1.4.0', bankSeconds: 150, thinking: false},
+      lines: [],
+      startedAt: now - 5,
+    });
+    arenaHandle.setLiveDiagnostic({
+      versionId: 902,
+      agentId: foulPlay.id,
+      agentSlug: foulPlay.slug,
+      agentName: foulPlay.name,
+      version: '2.2.0',
+      format: 'gen9ou',
+      targetName: 'SV',
+      phase: 'preview',
+      turn: 0,
+      turnStartedAt: now - 2,
+      turnBudgetSeconds: 90,
+      incrementSeconds: 15,
+      p1: {name: 'Foul Play (P1)', version: '2.2.0', bankSeconds: 90, thinking: true},
+      p2: {name: 'Foul Play (P2)', version: '2.2.0', bankSeconds: 90, thinking: false},
+      lines: ['|teampreview'],
+      startedAt: now - 10,
+    });
+
+    const snap = admin.buildAdminSnapshot(db, 'scheibo', arenaHandle, now);
+    const html = admin.renderAdminPage({snapshot: snap, allLadders: db.getLadders()});
+    expect(html).toContain('>Init ·');
+    expect(html).toContain('>Preview ·');
+  });
+
+  test('streams live smoke-queue SSE updates across start, completion, and discard', async () => {
+    const adminCookie = cookieFor('scheibo');
+    const zero = db.getAgentBySlug('0-error')!;
+    const devZero = db.getDevelopersForAgent(zero.id)[0];
+    const rby = db.getCurrentLadders().find(l => l.slot === 'rby')!;
+    const sub = db.createSubmission({
+      agentId: zero.id,
+      developerId: devZero.id,
+      version: '1.5.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-ERROR/releases/download/v1.5.0/agent.tar.zst',
+      sha256: SHA_A,
+      ladderIds: [rby.id],
+      now: now - 20,
+    });
+
+    const ctrl = new AbortController();
+    const streamRes = await fetch(`${baseUrl}/api/admin/stream`, {
+      headers: {Cookie: adminCookie},
+      signal: ctrl.signal,
+    });
+    expect(streamRes.status).toBe(200);
+    const reader = streamRes.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    const readNextEvent = async (): Promise<{event: string; data: Record<string, unknown>}> => {
+      for (;;) {
+        const idx = buf.indexOf('\n\n');
+        if (idx !== -1) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const lines = chunk.split('\n');
+          const eventLine = lines.find(l => l.startsWith('event: '));
+          const dataLine = lines.find(l => l.startsWith('data: '));
+          if (eventLine && dataLine) {
+            return {
+              event: eventLine.slice(7),
+              data: JSON.parse(dataLine.slice(6)) as Record<string, unknown>,
+            };
+          }
+        }
+        const {value, done} = await reader.read();
+        if (done) throw new Error('SSE stream ended unexpectedly');
+        buf += decoder.decode(value, {stream: true});
+      }
+    };
+
+    const initEv = await readNextEvent();
+    expect(initEv.event).toBe('system');
+    expect(String(initEv.data.smokeQueueHtml)).toContain('Smoke Queue (1)');
+    expect(String(initEv.data.smokeQueueHtml)).toContain('Queued');
+
+    // Arena begins diagnostic run -> immediate smoke-queue event shows Running.
+    const liveRes = await fetch(`${baseUrl}/api/arena/diagnostic-live`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ARENA_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        versionId: sub.id,
+        agentId: zero.id,
+        agentSlug: zero.slug,
+        agentName: zero.name,
+        version: sub.version,
+        format: rby.format,
+        targetName: rby.name,
+        phase: 'battle',
+        turn: 3,
+        turnStartedAt: now,
+        turnBudgetSeconds: 150,
+        incrementSeconds: 15,
+        p1: {name: '0 ERROR (P1)', version: '1.5.0', bankSeconds: 148, thinking: true},
+        p2: {name: '0 ERROR (P2)', version: '1.5.0', bankSeconds: 150, thinking: false},
+        lines: ['|turn|3'],
+      }),
+    });
+    expect(liveRes.status).toBe(200);
+
+    const startEv = await readNextEvent();
+    expect(startEv.event).toBe('smoke-queue');
+    expect(String(startEv.data.innerHtml)).toContain('Running');
+    expect(String(startEv.data.innerHtml)).toContain('Turn 3');
+    expect(String(startEv.data.queueLineHtml)).toContain('1 running');
+
+    // Submission finishes without an explicit {done: true} frame -> clears live entry and queue.
+    const doneRes = await fetch(`${baseUrl}/api/arena/submission-status`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${ARENA_SECRET}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        versionId: sub.id,
+        smokeStatus: 'staged',
+        smokeDurationMillis: 4500,
+        smokeInitMillis: 120,
+        smokeTurnMillis: 30,
+        smokePeakRam: 400,
+      }),
+    });
+    expect(doneRes.status).toBe(200);
+
+    const doneEv = await readNextEvent();
+    expect(doneEv.event).toBe('smoke-queue');
+    expect(String(doneEv.data.innerHtml)).toContain('Smoke Queue (0)');
+    expect(String(doneEv.data.innerHtml)).toContain('No smoke tests queued or running.');
+    expect(String(doneEv.data.queueLineHtml)).toContain('1 staged');
+    expect(arenaHandle.getLiveDiagnostics()).toEqual([]);
+
+    // Discarding the staged version immediately emits smoke-queue SSE update clearing staged count.
+    const discardRes = await fetch(`${baseUrl}/api/admin/versions/${sub.id}/discard`, {
+      method: 'POST',
+      headers: {Cookie: adminCookie},
+    });
+    expect(discardRes.status).toBe(200);
+
+    const discardEv = await readNextEvent();
+    expect(discardEv.event).toBe('smoke-queue');
+    expect(String(discardEv.data.queueLineHtml)).not.toContain('staged');
+    ctrl.abort();
   });
 });
 

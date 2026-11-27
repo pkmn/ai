@@ -108,6 +108,7 @@ export interface PendingSubmissionRow {
   ladders: string[];
   tournaments: string[];
   teamsByLadder: Record<string, string[]>;
+  submittedAt: number;
 }
 
 export interface ApplySubmissionStatusInput {
@@ -1018,6 +1019,7 @@ export function getPendingSubmissions(db: DatabaseSync): PendingSubmissionRow[] 
       ladders,
       tournaments,
       teamsByLadder,
+      submittedAt: row.submitted_at,
     };
   });
 }
