@@ -734,6 +734,19 @@
   platform:
     - name: Pokémon Showdown!
       url: https://github.com/smogon/pokemon-showdown
+- name: Diagenesis
+  active: 2026 # October 3
+  engine:
+    - Custom
+    - name: pokemon-showdown
+      url: https://github.com/smogon/pokemon-showdown
+  language: [JavaScript, Rust]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      Ostro2: Ostro.765899
 - name: Xatu Zero
   active: 2026 # October 6
   engine: Custom
