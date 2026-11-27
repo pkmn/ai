@@ -752,6 +752,16 @@
     logo: {width: 180, height: 168}
     owners:
       Ostro2: Ostro.765899
+- name: False Wipe
+  active: 2026 # October 4
+  engine: Custom
+  language: [Rust, Python, JavaScript]
+  platform:
+    - name: Pokémon Showdown!
+      url: https://github.com/smogon/pokemon-showdown
+  arena:
+    owners:
+      tinywaterfall: tinywater.767396
 - name: Xatu Zero
   active: 2026 # October 6
   engine: Custom
