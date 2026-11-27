@@ -333,8 +333,6 @@ const ADMIN_SCRIPT = `
                 : 'Disable the 3-per-24h failed/discarded diagnostic rate limit';
               const row = actionBtn.closest('tr');
               if (row) {
-                const noteEl = row.querySelector('.smoke-limit-note');
-                if (noteEl) noteEl.classList.toggle('hide', !unlimited);
                 updateRowStatus(row, slug, data.submissionStatus);
               }
               showFeedback(
@@ -2616,17 +2614,6 @@ function renderProjectRows(
                   >
                     {util.renderLocalizedText(conciseReason)}
                   </span>
-                  {!isDisabled && (
-                    <span
-                      className={
-                        agent.unlimitedSmokeTests
-                          ? 'warn status-note smoke-limit-note'
-                          : 'warn status-note smoke-limit-note hide'
-                      }
-                    >
-                      3/24h limit disabled.
-                    </span>
-                  )}
                   {item.pools.map(p => (
                     <span className='muted status-note'>
                       {formatPoolProgress(p)}

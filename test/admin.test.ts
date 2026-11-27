@@ -400,7 +400,7 @@ describe('/admin dashboard & API', () => {
     expect(html).toContain('data-action="smoke-limit"');
     expect(html).toContain('>Limited</button>');
     expect(html).toContain('>Unlimited</button>');
-    expect(html).toContain('3/24h limit disabled.');
+    expect(html).not.toContain('3/24h limit disabled.');
 
     const snap = await (await fetch(`${baseUrl}/admin.json`, {
       headers: {Cookie: cookieFor('scheibo')},
