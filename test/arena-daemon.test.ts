@@ -707,18 +707,21 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
         rootDir: path.join(tmpDir, 'deploy-hb-root'),
         pollIntervalMillis: 60_000,
       });
-      const deadline = Date.now() + 3000;
-      let restarting = false;
-      while (!restarting && Date.now() < deadline) {
-        const live = await (await fetch(`${serverUrl}/api/live.json`)).json() as {
-          restarting?: boolean;
-        };
-        restarting = Boolean(live.restarting);
-        if (!restarting) await new Promise(resolve => setTimeout(resolve, 15));
+      try {
+        const deadline = Date.now() + 3000;
+        let restarting = false;
+        while (!restarting && Date.now() < deadline) {
+          const live = await (await fetch(`${serverUrl}/api/live.json`)).json() as {
+            restarting?: boolean;
+          };
+          restarting = Boolean(live.restarting);
+          if (!restarting) await new Promise(resolve => setTimeout(resolve, 15));
+        }
+        expect(restarting).toBe(true);
+      } finally {
+        process.emit('SIGUSR1');
+        await daemonPromise;
       }
-      expect(restarting).toBe(true);
-      process.emit('SIGUSR1');
-      await daemonPromise;
     });
   });
 
