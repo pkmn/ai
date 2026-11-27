@@ -143,7 +143,7 @@ if [ "$NEEDS_SETUP" -ne 0 ]; then
     echo "ERROR: Privileged Arena helpers/configs changed or differ from installed copies." >&2
     echo "Refusing to restart ai.pkmn.arena against stale host binaries." >&2
     echo "Re-run ./arena/scripts/setup-arena.sh, then restart ai.pkmn.arena:" >&2
-    echo "  ./arena/scripts/setup-arena.sh && sudo launchctl kickstart -k system/ai.pkmn.arena" >&2
+    echo "  ./arena/scripts/setup-arena.sh && sudo launchctl kill SIGUSR1 system/ai.pkmn.arena" >&2
     exit 1
 fi
 

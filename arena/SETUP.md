@@ -427,7 +427,7 @@ gcloud config set project ${GCP_PROJECT} && gcloud config set billing/quota_proj
 for kv in ARENA_GCS_SYNC=1 CLOUDSDK_CONFIG=/Users/pkmn/.config/gcloud CLOUDSDK_CORE_PROJECT=${GCP_PROJECT} CLOUDSDK_BILLING_QUOTA_PROJECT=${GCP_PROJECT}; do
   grep -q \"^\${kv%%=*}=\" /opt/arena/repo/.env || printf '%s\n' \"\$kv\" >> /opt/arena/repo/.env
 done
-sudo -n /bin/launchctl kickstart -k system/ai.pkmn.arena
+sudo -n /bin/launchctl kill SIGUSR1 system/ai.pkmn.arena
 sudo launchctl bootout system/ai.pkmn.maintenance 2>/dev/null || true
 sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pkmn.maintenance.plist
 "
@@ -460,9 +460,9 @@ Runs [`arena/scripts/deploy.sh`](scripts/deploy.sh) on `arena`: verifies `--ff-o
 `origin/main`, acquires `/opt/arena/state/deploy.lock` and waits for any in-flight `match.lock` to
 clear before mutating the checkout/`node_modules`/`build/`, installs deps if `package.json` changed,
 compiles, smoke-tests `build/arena` (auto-rollback on failure), and sends `SIGUSR1` to flush
-`outbox` and exit before `launchd` respawns (`KeepAlive = true`, `ExitTimeOut = 900`). Mid-match
-crashes or reboots resume via `coord.recoverIncompleteMatches()` using persisted `seed` and packed
-teams.
+`outbox` and exit before `launchd` respawns (`KeepAlive = true`; `SIGUSR1` drains with no kill
+timer, whereas `SIGTERM` / `kickstart -k` enforces `ExitTimeOut = 900`). Mid-match crashes or
+reboots resume via `coord.recoverIncompleteMatches()` using persisted `seed` and packed teams.
 
 If a commit touches native/system files (`limit.c`, `bin/{arena,baseline}`, `config/*`,
 `setup-arena.sh`), `deploy.sh` refuses to restart until you re-run idempotent `setup-arena.sh`:
@@ -489,7 +489,8 @@ ssh arena 'sudo chmod -R a+rX,go-w /opt/arena/stats'
 | :--- | :--- |
 | Tail coordinator logs | `ssh arena 'tail -f /opt/arena/logs/arena.log /opt/arena/logs/arena.err'` |
 | Tail tunnel logs | `ssh arena 'tail -f /opt/arena/logs/tunnel.log /opt/arena/logs/tunnel.err'` |
-| Restart coordinator / tunnel | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.{arena\|tunnel}'` |
+| Graceful restart coordinator | `ssh arena 'sudo launchctl kill SIGUSR1 system/ai.pkmn.arena'` |
+| Force-restart coordinator / tunnel | `ssh arena 'sudo launchctl kickstart -k system/ai.pkmn.{arena\|tunnel}'` |
 | Local agent cache | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT version_id, slug, version, mode, residency, total_games, total_faults, consecutive_faults FROM local_agents;"'` |
 | Recent matches | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, ladder_id, p1_slug, p2_slug, status, g1_outcome, started_at, completed_at FROM local_matches ORDER BY started_at DESC LIMIT 10;"'` |
 | Pending RPC outbox | `ssh arena 'sqlite3 -header -column /opt/arena/state/arena.sqlite "SELECT id, endpoint, created_at FROM outbox;"'` |

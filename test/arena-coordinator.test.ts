@@ -1412,6 +1412,14 @@ describe('Coordinator', () => {
     expect(script).not.toContain('ARENA_STATE_DIR');
   });
 
+  test('deploy.sh recommends SIGUSR1 rather than kickstart -k after setup-arena.sh', () => {
+    const script = fs.readFileSync(root('arena', 'scripts', 'deploy.sh'), 'utf8');
+    expect(script).toContain(
+      './arena/scripts/setup-arena.sh && sudo launchctl kill SIGUSR1 system/ai.pkmn.arena'
+    );
+    expect(script).not.toContain('kickstart -k system/ai.pkmn.arena');
+  });
+
   test('syncActivatedAgents prunes discarded staged builds while keeping outbox-pending ones',
     async () => {
       const h = createMockCoordHarness('prune-staged');
