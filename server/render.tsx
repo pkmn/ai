@@ -4736,17 +4736,23 @@ export function register(app: polka.Polka, options: Options) {
       return;
     }
 
-    // Serve agent logo assets (`/projects/<slug>.<ext>`) directly from `avatarsDir`.
+    // Fallback for agent logo assets (`/projects/<slug>.<ext>`) when running without Nginx
+    // (local dev / tests); production Nginx serves built files from `public/projects/` directly.
     const dot = rawParam.lastIndexOf('.');
     if (dot > 0) {
       const logoAgent = db.getAgentBySlug(rawParam.slice(0, dot));
       if (logoAgent && logoAgent.status !== 'disabled') {
         const logo = profile.resolveAgentLogo(logoAgent, avatarsDir);
         if (logo?.fileName === rawParam) {
+          const query = (req.url ?? '').split('?', 2)[1];
+          const v = query ? new URLSearchParams(query).get('v') : undefined;
+          const cacheControl = v === logo.hash
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=604800';
           sendWithEtag(req, res, {
-            body: fs.readFileSync(logo.filePath),
+            body: logo.body,
             contentType: logo.contentType,
-            cacheControl: 'public, max-age=86400',
+            cacheControl,
           });
           return;
         }

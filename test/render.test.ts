@@ -10,6 +10,7 @@ import polka from 'polka';
 import {ALL_SLOTS, Database} from '../db';
 import type * as db from '../db';
 import * as arena from '../server/arena';
+import * as profile from '../server/profile';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
@@ -781,17 +782,35 @@ describe('populated Arena leaderboard views', () => {
     expect(posAbra).toBeLessThan(posAthena);
   });
 
-  test('serves PNG project avatars on /projects/:slug.png', async () => {
+  test('serves PNG project avatars on /projects/:slug.png with cache headers', async () => {
     const logoRes = await h.getRaw('/projects/metamon.png');
     expect(logoRes.status).toBe(200);
     expect(logoRes.headers.get('content-type')).toBe('image/png');
+    expect(logoRes.headers.get('cache-control')).toBe('public, max-age=604800');
     expect(Buffer.from(await logoRes.arrayBuffer())).toEqual(png1x1);
+
+    const hash = crypto.createHash('sha256').update(png1x1).digest('hex').slice(0, 8);
+    const versionedRes = await h.getRaw(`/projects/metamon.png?v=${hash}`);
+    expect(versionedRes.status).toBe(200);
+    expect(versionedRes.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+
+    const staleRes = await h.getRaw('/projects/metamon.png?v=deadbeef');
+    expect(staleRes.status).toBe(200);
+    expect(staleRes.headers.get('cache-control')).toBe('public, max-age=604800');
   });
 
   test('renders /projects/:slug statistical profile with version selector', async () => {
     const metaProfileHtml = await h.getText('/projects/metamon/');
+    const hash = crypto.createHash('sha256').update(png1x1).digest('hex').slice(0, 8);
+    const expectedLogoHref = `/projects/metamon.png?v=${hash}`;
     expect(metaProfileHtml).toContain('id="agent-profile"');
-    expect(metaProfileHtml).toContain('src="/projects/metamon.png"');
+    expect(metaProfileHtml).toContain(
+      `<link rel="preload" as="image" href="${expectedLogoHref}" fetchpriority="high">`
+    );
+    expect(metaProfileHtml).toContain(
+      `<img class="project-logo" src="${expectedLogoHref}" alt="Metamon" ` +
+      'width="1" height="1" fetchpriority="high" decoding="async">'
+    );
     expect(metaProfileHtml).toContain('UT-Austin-RPL/metamon');
     expect(metaProfileHtml).toContain('id="ver-picker" class="ver-picker"');
     expect(metaProfileHtml).toContain('id="ver-select"');
@@ -808,6 +827,28 @@ describe('populated Arena leaderboard views', () => {
     const athenaProfileHtml = await h.getText('/projects/athena/');
     expect(athenaProfileHtml).toContain('class="table-wrap reign hide"');
     expect(athenaProfileHtml).toContain('id="ver-picker" class="ver-picker hide"');
+  });
+
+  test('parses intrinsic dimensions for all repository project logos', () => {
+    const avatarsDir = root('static', 'avatars');
+    const files = fs.readdirSync(avatarsDir).filter(f => !f.startsWith('.'));
+    expect(files.length).toBeGreaterThan(0);
+    for (const file of files) {
+      const ext = path.extname(file).toLowerCase();
+      const dims = profile.parseImageDimensions(fs.readFileSync(path.join(avatarsDir, file)), ext);
+      expect(dims).toBeDefined();
+      expect(dims!.width).toBeGreaterThan(0);
+      expect(dims!.height).toBeGreaterThan(0);
+    }
+    expect(
+      profile.parseImageDimensions(
+        fs.readFileSync(path.join(avatarsDir, 'mewstruck.webp')),
+        '.webp'
+      )
+    ).toEqual({width: 336, height: 336});
+    expect(
+      profile.parseImageDimensions(fs.readFileSync(path.join(avatarsDir, 'magpie.svg')), '.svg')
+    ).toEqual({width: 168, height: 168});
   });
 
   test('gates profile Best Matchup or Nemesis callouts on at least 10 matches', async () => {

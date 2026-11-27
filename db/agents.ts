@@ -188,8 +188,13 @@ export function parseArenaProjects(
     let logo: string | undefined;
     if (entry.arena.logo?.trim()) {
       logo = entry.arena.logo.trim();
-    } else if (avatarsDir && fs.existsSync(path.join(avatarsDir, `${slug}.png`))) {
-      logo = `${slug}.png`;
+    } else if (avatarsDir) {
+      for (const ext of ['.webp', '.png']) {
+        if (fs.existsSync(path.join(avatarsDir, `${slug}${ext}`))) {
+          logo = `${slug}${ext}`;
+          break;
+        }
+      }
     }
 
     parsed.push({

@@ -11,7 +11,7 @@ import * as path from 'path';
 import favicons from 'favicons';
 import * as site from 'site';
 
-import {DB_PATH, Database} from '../db';
+import {DB_PATH, Database, parseArenaProjects} from '../db';
 import {renderBattleViewerPage} from '../server/tournaments';
 
 import * as glossary from './glossary';
@@ -336,6 +336,7 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   header?: Html | string;
   content: Html | string;
   preconnect?: readonly string[];
+  preloadImages?: readonly string[];
   topControls?: boolean;
 }
 
@@ -410,13 +411,18 @@ export class Renderer extends site.page.Renderer {
     const preconnectTags = (page.preconnect ?? [])
       .map(origin => `<link rel="preconnect" href="${escapeHtml(origin)}">`)
       .join('');
+    const preloadTags = (page.preloadImages ?? [])
+      .map(
+        href => `<link rel="preload" as="image" href="${escapeHtml(href)}" fetchpriority="high">`
+      )
+      .join('');
 
     if (this.minify) {
       const transform = (s: string) => {
         const cleaned = IS_PRODUCTION ? s : s.replace(GTAG_RE, '');
         const withHead = cleaned.replace(
           '</head>',
-          `${preconnectTags}<script>${EARLY_THEME_SCRIPT}</script></head>`
+          `${preconnectTags}${preloadTags}<script>${EARLY_THEME_SCRIPT}</script></head>`
         );
         return replace ? replace(withHead) : withHead;
       };
@@ -450,6 +456,7 @@ export class Renderer extends site.page.Renderer {
       '<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">',
       `<link rel="canonical" href="${this.siteConfig.url}${page.path}">`,
       preconnectTags,
+      preloadTags,
       analytics,
       `<link rel="stylesheet" href="${stylesheetHref}">`,
       styleTag,
@@ -583,6 +590,20 @@ const build = async (rebuild?: boolean) => {
       const file = path.join(PUBLIC, placeholder, 'index.html');
       fs.mkdir(path.dirname(file));
       fs.write(file, '');
+    }
+    // Copy resolved Arena project logos into `public/projects/<slug><ext>` so Nginx serves them
+    // directly from disk (with immutable 1-year caching on `?v=<hash>`) without hitting Node.
+    const avatarsDir = path.join(STATIC, 'avatars');
+    const projectsYmlPath = path.join(STATIC, 'projects.yml');
+    if (nodeFs.existsSync(avatarsDir) && nodeFs.existsSync(projectsYmlPath)) {
+      const projectsYaml = nodeFs.readFileSync(projectsYmlPath, 'utf8');
+      for (const proj of parseArenaProjects(projectsYaml, avatarsDir)) {
+        if (!proj.logo) continue;
+        const src = path.join(avatarsDir, proj.logo);
+        if (!nodeFs.existsSync(src)) continue;
+        const ext = (path.extname(proj.logo) || '.png').toLowerCase();
+        fs.copy(src, path.join(projectsDir, `${proj.slug}${ext}`));
+      }
     }
     const runningTournament = getRunning();
     if (runningTournament) {

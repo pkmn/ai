@@ -3378,6 +3378,28 @@ describe('createServerApp production HTTP hardening', () => {
     expect(hashedBlock).toContain('Cache-Control "public, max-age=31536000, immutable"');
   });
 
+  test('nginx serves project logos statically inside ^~ /projects/ with immutable cache', () => {
+    const conf = fs.readFileSync(root('config', 'nginx.conf'), 'utf8');
+    expect(conf).toContain('map $arg_v $logo_cache_control {');
+    expect(conf).toContain('~^[0-9a-f]{8}$ "public, max-age=31536000, immutable";');
+    const projectsIdx = conf.indexOf('location ^~ /projects/ {');
+    const rasterIdx = conf.indexOf('location ~ ^/projects/[^/]+\\.(?:png|webp|gif|jpe?g)$ {');
+    const svgIdx = conf.indexOf('location ~ ^/projects/[^/]+\\.svg$ {');
+    expect(projectsIdx).toBeGreaterThan(0);
+    expect(rasterIdx).toBeGreaterThan(projectsIdx);
+    expect(svgIdx).toBeGreaterThan(rasterIdx);
+    const rasterBlock = conf.slice(rasterIdx, conf.indexOf('}', rasterIdx) + 1);
+    const svgBlock = conf.slice(svgIdx, conf.indexOf('}', svgIdx) + 1);
+    expect(rasterBlock).toContain('add_header Cache-Control $logo_cache_control always;');
+    expect(rasterBlock).toContain('try_files $uri =404;');
+    expect(svgBlock).toContain('add_header Cache-Control $logo_cache_control always;');
+    expect(svgBlock).toContain(
+      'add_header Content-Security-Policy ' +
+      '"default-src \'none\'; style-src \'unsafe-inline\'; sandbox" always;'
+    );
+    expect(svgBlock).toContain('try_files $uri =404;');
+  });
+
   test('retains locked seasonal rosters on settling pools ladders', async () => {
     const vgcId = 'gen9championsvgc2026regmc';
     const slugs = ['0-error', 'foul-play', 'pokechamp', 'metamon'];

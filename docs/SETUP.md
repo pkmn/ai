@@ -14,8 +14,8 @@ set **SSL/TLS** to **Full (strict)** (see [certbot renewal troubleshooting](http
 | --- | --- | --- | --- | --- |
 | `A` | `*` / `pkmn.ai` / `www` | *`123.45.67.89`* | `Proxied` | `Auto` |
 
-Cloudflare doesn't proxy SSH, so map `pkmn.ai` directly in `/etc/hosts` (`123.45.67.89 pkmn.ai`) or
-`~/.ssh/config`:
+Cloudflare doesn't proxy SSH, so configure the origin IP in `~/.ssh/config` (avoid mapping `pkmn.ai`
+in `/etc/hosts`, which bypasses Cloudflare's CDN for HTTP/HTTPS traffic too):
 
 ```ssh-config
 Host pkmn.ai

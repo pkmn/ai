@@ -1342,6 +1342,30 @@ describe('project ownership sync', () => {
     }
   });
 
+  test('auto-detects .webp project logos before .png fallback', () => {
+    const avatarsDir = path.join(tmpDir, 'avatars-webp');
+    fs.mkdirSync(avatarsDir, {recursive: true});
+    fs.writeFileSync(path.join(avatarsDir, 'mewstruck.webp'), 'WEBP');
+    fs.writeFileSync(path.join(avatarsDir, 'mewstruck.png'), 'PNG');
+    fs.writeFileSync(path.join(avatarsDir, 'mikumiku.png'), 'PNG');
+
+    const parsed = database.parseArenaProjects(`
+- name: mewstruck
+  active: 2025
+  arena:
+    owners:
+      dev1: dev1.1001
+- name: mikumiku
+  active: 2025
+  arena:
+    owners:
+      dev2: dev2.1002
+`, avatarsDir);
+
+    expect(parsed.find(p => p.slug === 'mewstruck')?.logo).toBe('mewstruck.webp');
+    expect(parsed.find(p => p.slug === 'mikumiku')?.logo).toBe('mikumiku.png');
+  });
+
   test('preserves linked GitHub or Discord OAuth IDs across YAML re-syncs', () => {
     const db = new database.Database(':memory:');
     try {

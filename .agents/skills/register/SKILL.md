@@ -142,8 +142,8 @@ Download the image to `<scratch>/register-<N>/logo.raw` and run `file` + `ls -lh
 - **SVG:**
   - Security-scan for `<script`, `on[a-z]+=`, `javascript:`, `<foreignObject`, `<image`,
     or external `http://`/`https://` links. Reject/flag if anything suspicious appears.
-  - Remember **non-`.png` logos MUST set `arena.logo: <slug>.svg`** in `projects.yml`
-    (auto-detection only checks `<slug>.png`).
+  - Remember **non-`.webp`/`.png` logos MUST set `arena.logo: <slug>.svg`** in `projects.yml`
+    (auto-detection only checks `<slug>.webp` then `<slug>.png`).
 - **Raster (PNG / WebP / JPEG / GIF):**
   - Inspect the raw image with `read_file`.
   - Check **alpha channel & dark-mode look**: logos render up to `168px` tall (wide
@@ -152,8 +152,10 @@ Download the image to `<scratch>/register-<N>/logo.raw` and run `file` + `ls -lh
     in dark mode. Offer to trim/mask outer corners transparent and downscale oversized
     `> 500 KB` square rasters to `336×336` (2× retina) while keeping any light inner badge
     intact if needed for contrast.
-  - Convert WebP/JPEG to PNG (`<slug>.png`); non-`.png` extensions (`.gif`, `.svg`)
-    require `arena.logo: <slug>.<ext>`.
+  - Prefer high-quality WebP (`cwebp -q 90 -m 6 -sharp_yuv`) as `<slug>.webp` for large
+    photographic/illustrative rasters, or palette-optimized PNG (`pngquant` / `optipng`)
+    as `<slug>.png` for tiny pixel-art or flat-color graphics where PNG is smaller;
+    non-`.webp`/`.png` extensions (`.gif`, `.svg`) require `arena.logo: <slug>.<ext>`.
 
 ---
 
