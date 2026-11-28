@@ -340,7 +340,7 @@ export function computeDavidsonRatings(
     activePairs.push({i: p.i, j: p.j, n, y: p.ww + 0.5 * p.wt - 0.5 * p.tl - p.ll});
   }
 
-  const {covariance} = solvePairwiseLaplace({
+  const {covariance, hasPlayed} = solvePairwiseLaplace({
     count: M,
     priorPrecision,
     theta,
@@ -374,7 +374,9 @@ export function computeDavidsonRatings(
   const gxe = new Float64Array(M);
 
   for (let i = 0; i < M; i++) {
-    const centeredTheta = theta[i] - anchorOffset;
+    // Keep 0-match entrants at the N(1500, 350^2) prior instead of shifting them by the
+    // played-field anchor offset.
+    const centeredTheta = hasPlayed[i] ? theta[i] - anchorOffset : 0;
     theta[i] = centeredTheta;
     elo[i] = anchorElo + ELO_SCALE * centeredTheta;
     eloStd[i] = ELO_SCALE * Math.sqrt(Math.max(0, covariance[i * M + i]));

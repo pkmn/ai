@@ -242,6 +242,25 @@ describe('Generalized Davidson MAP rating solver', () => {
     }
   });
 
+  test('keeps zero-match newcomers at 1500 Elo on anchored ladders', () => {
+    const pairs: ratings.PairMatchCounts[] = [
+      {i: 0, j: 1, ww: 5, wt: 0, split: 10, tl: 0, ll: 25},
+    ];
+    for (const anchorIndex of [0, 1]) {
+      const res = ratings.computeDavidsonRatings(4, pairs, {anchorIndex});
+      expect(res.elo[anchorIndex]).toBeCloseTo(1500, 8);
+      for (const newcomer of [2, 3]) {
+        expect(res.theta[newcomer]).toBeCloseTo(0, 10);
+        expect(res.elo[newcomer]).toBeCloseTo(1500, 10);
+        expect(res.eloStd[newcomer]).toBeCloseTo(350, 5);
+        expect(res.eloLcb[newcomer]).toBeCloseTo(1500 - 1.96 * 350, 5);
+        expect(res.gxe[newcomer]).toBeCloseTo(50, 8);
+        expect(ratings.computeLOS(res.theta, res.covariance, 4, newcomer, anchorIndex))
+          .toBeCloseTo(0.5, 10);
+      }
+    }
+  });
+
   test('recovers ground-truth skills with calibrated 95% CIs in a 10-agent league', () => {
     const rng = mulberry32(0x5eed1234);
     const M = 10;
