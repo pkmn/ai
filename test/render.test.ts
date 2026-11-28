@@ -260,6 +260,7 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
       live: opts.liveDoc.live,
       stale: opts.liveDoc.stale,
       restarting: opts.liveDoc.restarting,
+      smokeTesting: opts.liveDoc.smokeTesting,
       updatedAt: opts.liveDoc.updatedAt,
     });
   }
@@ -4561,6 +4562,141 @@ describe('JSON route parity & retired pool archives', () => {
         expect(html).toContain('<span>\u25cf LIVE</span> Winter Cup');
         expect(html).not.toContain('class="restarting"');
       }
+    } finally {
+      await h.close();
+      testDb.close();
+    }
+  });
+
+  test('renders smoke-testing agent on /arena/battles/ without leaking version', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    testDb.syncLadders(undefined, 1_760_000_000);
+    const h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
+    try {
+      const hbRes = await h.getRaw('/api/arena/heartbeat', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          idle: true,
+          smokeTesting: {slug: '0-error', name: '0 ERROR'},
+        }),
+      });
+      expect(hbRes.status).toBe(200);
+      expect(h.arenaHandle.getState().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+
+      const extractLivePanel = (html: string) =>
+        /<div id="live-panel">([\s\S]*?)<\/div>\s*<div class="battle-viewer-wrap/.exec(html)?.[1] ??
+        '';
+
+      const panelHtml = extractLivePanel(await h.getText('/arena/battles/'));
+      expect(panelHtml).toContain('Testing a submission for');
+      expect(panelHtml).toContain('<strong>0 ERROR</strong>');
+      expect(panelHtml).toContain('ladder battles will resume shortly.');
+      expect(panelHtml).not.toContain('No battle currently running — Arena is idle.');
+      const liveJson = await h.getJson<{smokeTesting?: arena.LiveSmokeTest}>('/api/live.json');
+      expect(liveJson.smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+
+      // Normal idle heartbeat clears smoke-testing status.
+      const idleRes = await h.getRaw('/api/arena/heartbeat', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({idle: true}),
+      });
+      expect(idleRes.status).toBe(200);
+      expect(h.arenaHandle.getState().smokeTesting).toBeUndefined();
+      expect(extractLivePanel(await h.getText('/arena/battles/'))).toContain(
+        'No battle currently running — Arena is idle.'
+      );
+      expect((await h.getJson<{smokeTesting?: arena.LiveSmokeTest}>('/api/live.json')).smokeTesting)
+        .toBeUndefined();
+
+      // Diagnostic live frames surface the agent name while keeping the version string private.
+      const diagRes = await h.getRaw('/api/arena/diagnostic-live', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          versionId: 99,
+          agentId: 7,
+          agentSlug: 'secret-agent',
+          agentName: 'Secret Agent',
+          version: '9.9.9-private',
+          format: 'gen9ou',
+          targetName: 'Gen 9 OU',
+          phase: 'battle',
+          turn: 1,
+          turnStartedAt: 1_760_000_050,
+          turnBudgetSeconds: 150,
+          incrementSeconds: 15,
+          p1: {
+            name: 'Secret Agent (P1)',
+            version: '9.9.9-private',
+            bankSeconds: 150,
+            thinking: true,
+          },
+          p2: {
+            name: 'Secret Agent (P2)',
+            version: '9.9.9-private',
+            bankSeconds: 150,
+            thinking: false,
+          },
+          lines: ['|turn|1'],
+        }),
+      });
+      expect(diagRes.status).toBe(200);
+      const diagHtml = await h.getText('/arena/battles/');
+      const diagPanel = extractLivePanel(diagHtml);
+      expect(diagPanel).toContain('Testing a submission for');
+      expect(diagPanel).toContain('<strong>Secret Agent</strong>');
+      expect(diagHtml).not.toContain('9.9.9-private');
+
+      const doneRes = await h.getRaw('/api/arena/diagnostic-live', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ARENA_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({done: true, agentId: 7, versionId: 99}),
+      });
+      expect(doneRes.status).toBe(200);
+      expect(h.arenaHandle.getState().smokeTesting).toBeUndefined();
+    } finally {
+      await h.close();
+      testDb.close();
+    }
+  });
+
+  test('suppresses smoke-testing status when arena heartbeat is stale', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    testDb.syncLadders(undefined, 1_760_000_000);
+    const h = await startRenderHarness({
+      db: testDb,
+      publicDir: tmpPublic,
+      now: 1_760_000_050,
+      liveDoc: {
+        updatedAt: 1_760_000_050,
+        stale: true,
+        smokeTesting: {slug: '0-error', name: '0 ERROR'},
+        recentMatches: [],
+      },
+    });
+    try {
+      const html = await h.getText('/arena/battles/');
+      const panelHtml =
+        /<div id="live-panel">([\s\S]*?)<\/div>\s*<div class="battle-viewer-wrap/.exec(html)?.[1] ??
+        '';
+      expect(panelHtml).toContain('No active heartbeat — Arena is offline or idle.');
+      expect(panelHtml).not.toContain('Testing a submission');
+      const liveJson = await h.getJson<{smokeTesting?: arena.LiveSmokeTest}>('/api/live.json');
+      expect(liveJson.smokeTesting).toBeUndefined();
     } finally {
       await h.close();
       testDb.close();

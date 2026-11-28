@@ -207,7 +207,10 @@ describe('Coordinator', () => {
       );
       expect(processed).toBe(1);
       expect(h.getLadderTeamsCalls()).toBe(0);
-      expect(h.heartbeats).toContainEqual({idle: true});
+      expect(h.heartbeats).toContainEqual({
+        idle: true,
+        smokeTesting: {slug: 'foul-play', name: 'Foul Play'},
+      });
       expect(h.reportedStatuses).toHaveLength(1);
       expect(h.reportedStatuses[0].smokeStatus).toBe('staged');
       expect(h.reportedStatuses[0].diagnostics).toHaveLength(1);
@@ -268,6 +271,10 @@ describe('Coordinator', () => {
         )
       ).rejects.toThrow(/missing sample team pool/);
       expect(h.getLadderTeamsCalls()).toBe(0);
+      expect(h.heartbeats).toEqual([
+        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play'}},
+        {idle: true},
+      ]);
       expect(h.reportedStatuses).toHaveLength(0);
       expect(h.alerts).toHaveLength(1);
       expect(h.alerts[0].key).toBe('smoke-infra');

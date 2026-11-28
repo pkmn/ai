@@ -342,6 +342,14 @@ export async function runDaemon(opts: {
             smokeCadence.recordCycle(ingested, Boolean(played));
           }
         } finally {
+          if (ingested > 0 && !played && !coord.isDraining()) {
+            const sysInfo = await hostMonitor?.takePendingSnapshot();
+            await client.sendHeartbeat({
+              idle: true,
+              ...(stateDir && isDeployLockActive(stateDir) ? {restarting: true} : {}),
+              ...(sysInfo ? {system: sysInfo} : {}),
+            }).catch(() => undefined);
+          }
           if (stateDir) releaseMatchLock(stateDir);
         }
         consecutiveCycleErrors = 0;

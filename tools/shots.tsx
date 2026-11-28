@@ -1207,6 +1207,23 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       },
     },
     {
+      name: 'arena-battles-smoke-testing',
+      section: 'battles',
+      title: 'Smoke Testing',
+      path: '/arena/battles/',
+      setup: fixture => {
+        fixture.arenaHandle.setLiveState({
+          live: undefined,
+          stale: false,
+          smokeTesting: {slug: '0-error', name: '0 ERROR'},
+          updatedAt: NOW_SECONDS,
+        });
+        return () => {
+          fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
+        };
+      },
+    },
+    {
       name: 'arena-battles-stale',
       section: 'battles',
       title: 'Stale',

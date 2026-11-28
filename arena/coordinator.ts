@@ -774,6 +774,7 @@ export class Coordinator {
       const sysInfo = await this.getSystemInfo?.();
       await this.client.sendHeartbeat({
         idle: true,
+        smokeTesting: {slug: sub.agentSlug, name: sub.agentName},
         ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
         ...(sysInfo ? {system: sysInfo} : {}),
       }).catch(() => undefined);
@@ -1028,6 +1029,12 @@ export class Coordinator {
         }
         if (threw && mode === 'container') {
           await this.maybeRecyclePodmanVm();
+        }
+        if (threw) {
+          await this.client.sendHeartbeat({
+            idle: true,
+            ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
+          }).catch(() => undefined);
         }
       }
 

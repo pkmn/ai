@@ -214,10 +214,16 @@ export interface BattleHistoryEntry extends Omit<db.RecentMatchView, 'games'> {
   games: [BattleHistoryGameEntry, BattleHistoryGameEntry];
 }
 
+export interface LiveSmokeTest {
+  slug: string;
+  name: string;
+}
+
 export interface LiveDocument {
   updatedAt: number;
   stale: boolean;
   restarting?: boolean;
+  smokeTesting?: LiveSmokeTest;
   live?: LiveMatch;
   runningTournament?: {id: string; name: string; href: string};
   pageSize?: number;
@@ -991,6 +997,7 @@ export interface Handle {
     live?: LiveMatchInput;
     stale?: boolean;
     restarting?: boolean;
+    smokeTesting?: LiveSmokeTest;
     updatedAt?: number;
   }) => void;
   setArenaSystem: (info?: system.ArenaSystemInfo, at?: number) => void;
@@ -1014,6 +1021,7 @@ export interface Handle {
     watchdogTriggered: boolean;
     stale: boolean;
     restarting: boolean;
+    smokeTesting?: LiveSmokeTest;
     live?: LiveMatch;
   };
 }
@@ -1088,7 +1096,7 @@ export interface SubmissionStatusResponse {
 
 export type HeartbeatPayload = (
   (LiveMatchInput & {system?: system.ArenaSystemInfo; restarting?: boolean}) |
-  {idle: true; system?: system.ArenaSystemInfo; restarting?: boolean}
+  {idle: true; system?: system.ArenaSystemInfo; restarting?: boolean; smokeTesting?: LiveSmokeTest}
 );
 
 export interface HeartbeatResponse {
@@ -1937,6 +1945,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   let liveUpdatedAt: number | undefined;
   let liveStale = false;
   let liveRestarting = false;
+  let liveSmokeTesting: LiveSmokeTest | undefined;
   let lastSeenAt: number | undefined;
   let lastContactAt: number | undefined;
   let lastHeartbeatAt: number | undefined;
@@ -1996,6 +2005,49 @@ export function register(app: polka.Polka, options: Options): Handle {
     return out;
   };
 
+  const pushBattleEvent = (event: string, data: unknown) => {
+    broadcastSseFrame(battleStreamClients, event, data);
+  };
+
+  const pushTournamentEvent = (tournamentId: string, event: string, data: unknown) => {
+    const clients = tournamentStreamClients.get(tournamentId);
+    if (!clients) return;
+    broadcastSseFrame(clients, event, data);
+    if (clients.size === 0) tournamentStreamClients.delete(tournamentId);
+  };
+
+  const getRunningTournamentInfo = () => {
+    const running = db.getRunningTournament();
+    if (!running) return undefined;
+    return {
+      id: running.id,
+      name: running.name,
+      href: `/arena/tournaments/${encodeURIComponent(running.id)}/`,
+    };
+  };
+
+  const getActiveSmokeTesting = (): LiveSmokeTest | undefined => {
+    if (liveStale || currentLive) return undefined;
+    if (liveSmokeTesting) return liveSmokeTesting;
+    const diag = getLiveDiagnostics()[0];
+    return diag ? {slug: diag.agentSlug, name: diag.agentName} : undefined;
+  };
+
+  const sameSmokeTest = (a?: LiveSmokeTest, b?: LiveSmokeTest): boolean =>
+    a?.slug === b?.slug && a?.name === b?.name;
+
+  const buildLiveEventPayload = (updatedAt: number) => {
+    const smokeTesting = getActiveSmokeTesting();
+    return {
+      updatedAt,
+      stale: liveStale,
+      ...(liveRestarting && !liveStale ? {restarting: true} : {}),
+      ...(smokeTesting ? {smokeTesting} : {}),
+      live: liveStale ? undefined : currentLive,
+      runningTournament: getRunningTournamentInfo(),
+    };
+  };
+
   const pushDiagnosticEvent = (agentId: number, event: string, data: unknown) => {
     const clients = diagnosticStreamClients.get(agentId);
     if (!clients) return;
@@ -2004,12 +2056,17 @@ export function register(app: polka.Polka, options: Options): Handle {
   };
 
   const setLiveDiagnostic = (payload: DiagnosticLivePayload) => {
+    const prevSmoke = getActiveSmokeTesting();
     if ('done' in payload) {
       const existing = liveDiagnosticsByAgent.get(payload.agentId);
       if (!existing || existing.versionId === payload.versionId) {
         liveDiagnosticsByAgent.delete(payload.agentId);
       }
       pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
+      if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
+        liveUpdatedAt = getNowSec();
+        pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
+      }
       options.onDiagnosticLive?.(payload, true);
       return;
     }
@@ -2034,6 +2091,10 @@ export function register(app: polka.Polka, options: Options): Handle {
     };
     liveDiagnosticsByAgent.set(snap.agentId, snap);
     pushDiagnosticEvent(snap.agentId, 'diagnostic', snap);
+    if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
+      liveUpdatedAt = nowSec;
+      pushBattleEvent('live', buildLiveEventPayload(nowSec));
+    }
     options.onDiagnosticLive?.(payload, transition);
   };
 
@@ -2069,27 +2130,6 @@ export function register(app: polka.Polka, options: Options): Handle {
     }
   };
 
-  const pushBattleEvent = (event: string, data: unknown) => {
-    broadcastSseFrame(battleStreamClients, event, data);
-  };
-
-  const pushTournamentEvent = (tournamentId: string, event: string, data: unknown) => {
-    const clients = tournamentStreamClients.get(tournamentId);
-    if (!clients) return;
-    broadcastSseFrame(clients, event, data);
-    if (clients.size === 0) tournamentStreamClients.delete(tournamentId);
-  };
-
-  const getRunningTournamentInfo = () => {
-    const running = db.getRunningTournament();
-    if (!running) return undefined;
-    return {
-      id: running.id,
-      name: running.name,
-      href: `/arena/tournaments/${encodeURIComponent(running.id)}/`,
-    };
-  };
-
   const getArenaSecret = (): string | undefined =>
     options.arenaSecret ?? process.env.ARENA_SECRET;
 
@@ -2118,10 +2158,12 @@ export function register(app: polka.Polka, options: Options): Handle {
     const countsBySlot = db.getMatchCountsBySlot();
     const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
       .map(m => enrichMatchView(publicDir, m));
+    const smokeTesting = getActiveSmokeTesting();
     return {
       updatedAt: liveUpdatedAt ?? recentMatches[0]?.completedAt ?? 0,
       stale: liveStale,
       ...(liveRestarting && !liveStale ? {restarting: true} : {}),
+      ...(smokeTesting ? {smokeTesting} : {}),
       live: liveStale ? undefined : currentLive,
       runningTournament: getRunningTournamentInfo(),
       pageSize: RECENT_MATCHES_LIMIT,
@@ -2175,12 +2217,9 @@ export function register(app: polka.Polka, options: Options): Handle {
       currentLive = undefined;
       liveStale = true;
       liveRestarting = false;
+      liveSmokeTesting = undefined;
       liveUpdatedAt = getNowSec();
-      pushBattleEvent('live', {
-        updatedAt: liveUpdatedAt,
-        stale: true,
-        runningTournament: getRunningTournamentInfo(),
-      });
+      pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
       Promise.resolve(
         options.onWatchdogTimeout?.({lastSeenAt, lastMatchId: stalledMatchId})
       ).catch(err => {
@@ -2431,11 +2470,16 @@ export function register(app: polka.Polka, options: Options): Handle {
         smokeError: body.smokeError?.slice(0, 16_384),
         now: getNowSec(),
       });
+      const prevSmoke = getActiveSmokeTesting();
       for (const [agentId, snap] of liveDiagnosticsByAgent) {
         if (snap.versionId === result.version.id) {
           liveDiagnosticsByAgent.delete(agentId);
           pushDiagnosticEvent(agentId, 'done', {versionId: result.version.id});
         }
+      }
+      if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
+        liveUpdatedAt = getNowSec();
+        pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
       }
 
       Promise.resolve(options.onSubmissionStatus?.(result)).catch(err => {
@@ -2488,22 +2532,25 @@ export function register(app: polka.Polka, options: Options): Handle {
         currentLive = undefined;
         liveStale = false;
         liveRestarting = Boolean(body.restarting);
+        liveSmokeTesting = body.smokeTesting
+          ? {slug: body.smokeTesting.slug, name: body.smokeTesting.name}
+          : undefined;
         liveUpdatedAt = nowSec;
         armWatchdog(nowSec);
-        pushBattleEvent('live', {
-          updatedAt: nowSec,
-          stale: false,
-          ...(liveRestarting ? {restarting: true} : {}),
-          runningTournament: getRunningTournamentInfo(),
-        });
+        pushBattleEvent('live', buildLiveEventPayload(nowSec));
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem});
         sendJson(res, 200, {ok: true, updatedAt: nowSec});
         return;
       }
 
-      const frame = {...body} as LiveMatchInput & {system?: unknown; restarting?: unknown};
+      const frame = {...body} as LiveMatchInput & {
+        system?: unknown;
+        restarting?: unknown;
+        smokeTesting?: unknown;
+      };
       delete frame.system;
       delete frame.restarting;
+      delete frame.smokeTesting;
       if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});
@@ -2533,16 +2580,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       lastMatchId = frame.matchId;
       liveStale = false;
       liveRestarting = Boolean(body.restarting);
+      liveSmokeTesting = undefined;
       liveUpdatedAt = nowSec;
 
       armWatchdog(nowSec);
-      pushBattleEvent('live', {
-        updatedAt: nowSec,
-        stale: false,
-        ...(liveRestarting ? {restarting: true} : {}),
-        live: currentLive,
-        runningTournament: getRunningTournamentInfo(),
-      });
+      pushBattleEvent('live', buildLiveEventPayload(nowSec));
       if (currentLive.matchId !== lastNotifiedMatchId) {
         lastNotifiedMatchId = currentLive.matchId;
         Promise.resolve(options.onLiveMatch?.(currentLive)).catch(err => {
@@ -2627,11 +2669,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         const saved = db.getMatch(match.id);
         const countsBySlot = db.getMatchCountsBySlot();
         pushBattleEvent('match', {
-          updatedAt: nowSec,
-          stale: false,
-          ...(liveRestarting ? {restarting: true} : {}),
-          live: currentLive,
-          runningTournament: getRunningTournamentInfo(),
+          ...buildLiveEventPayload(nowSec),
           match: saved ? enrichMatchView(publicDir, saved) : undefined,
           totalMatches: countsBySlot.all ?? 0,
           countsBySlot,
@@ -2640,13 +2678,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           console.error('Error in onUpdate callback:', err);
         });
       } else if (clearedLive) {
-        pushBattleEvent('live', {
-          updatedAt: nowSec,
-          stale: false,
-          ...(liveRestarting ? {restarting: true} : {}),
-          live: currentLive,
-          runningTournament: getRunningTournamentInfo(),
-        });
+        pushBattleEvent('live', buildLiveEventPayload(nowSec));
       }
 
       sendJson(res, 200, {ok: true, duplicate, archivedLadder});
@@ -2686,13 +2718,7 @@ export function register(app: polka.Polka, options: Options): Handle {
           ...(statusChanged ? {status: 'completed'} : {}),
         });
         if (statusChanged) {
-          pushBattleEvent('live', {
-            updatedAt: nowSec,
-            stale: liveStale,
-            ...(liveRestarting && !liveStale ? {restarting: true} : {}),
-            live: liveStale ? undefined : currentLive,
-            runningTournament: getRunningTournamentInfo(),
-          });
+          pushBattleEvent('live', buildLiveEventPayload(nowSec));
           Promise.resolve(options.onUpdate?.('tournament-status')).catch(err => {
             console.error('Error in onUpdate callback:', err);
           });
@@ -3025,13 +3051,7 @@ export function register(app: polka.Polka, options: Options): Handle {
       });
 
       if (statusChanged) {
-        pushBattleEvent('live', {
-          updatedAt: getNowSec(),
-          stale: liveStale,
-          ...(liveRestarting && !liveStale ? {restarting: true} : {}),
-          live: liveStale ? undefined : currentLive,
-          runningTournament: getRunningTournamentInfo(),
-        });
+        pushBattleEvent('live', buildLiveEventPayload(getNowSec()));
         Promise.resolve(options.onUpdate?.('tournament-status')).catch(err => {
           console.error('Error in onUpdate callback:', err);
         });
@@ -3508,14 +3528,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       currentLive = state.live ? sanitizeLiveMatch(state.live, true) : undefined;
       liveStale = state.stale ?? false;
       liveRestarting = state.restarting ?? false;
+      liveSmokeTesting = state.smokeTesting
+        ? {slug: state.smokeTesting.slug, name: state.smokeTesting.name}
+        : undefined;
       liveUpdatedAt = state.updatedAt ?? getNowSec();
-      pushBattleEvent('live', {
-        updatedAt: liveUpdatedAt,
-        stale: liveStale,
-        ...(liveRestarting && !liveStale ? {restarting: true} : {}),
-        live: liveStale ? undefined : currentLive,
-        runningTournament: getRunningTournamentInfo(),
-      });
+      pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
     },
     setArenaSystem: (info, at) => {
       lastArenaSystem = info;
@@ -3582,6 +3599,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         watchdogTriggered,
         stale: liveStale,
         restarting: liveRestarting,
+        smokeTesting: getActiveSmokeTesting(),
         live: currentLive,
       };
     },

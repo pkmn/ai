@@ -1336,14 +1336,25 @@ function buildBattlesScript(
     const renderLive = nowSec => {
       if (!livePanel) return;
       if (!state || !state.live || state.stale) {
-        const idleMsg = state && state.stale
-          ? 'No active heartbeat — Arena is offline or idle.'
-          : 'No battle currently running — Arena is idle.';
+        let idleBody;
+        if (state && state.stale) {
+          idleBody = 'No active heartbeat — Arena is offline or idle.';
+        } else if (state && state.smokeTesting && state.smokeTesting.name) {
+          const href = resolveAgentHref(state.smokeTesting.slug);
+          const nameHtml = '<strong>' + esc(state.smokeTesting.name) + '</strong>';
+          const agentHtml = href
+            ? '<a href="' + esc(href) + '" class="subtle">' + nameHtml + '</a>'
+            : nameHtml;
+          idleBody = '<span class="yes">&#9679;</span> Testing a submission for ' +
+            agentHtml + ' — ladder battles will resume shortly.';
+        } else {
+          idleBody = 'No battle currently running — Arena is idle.';
+        }
         const tourSuffix = state && state.runningTournament
           ? ' · <a href="' + esc(state.runningTournament.href) + '" class="subtle">' +
             '<strong>&#9679; Watch ' + esc(state.runningTournament.name) + ' live</strong></a>'
           : '';
-        livePanel.innerHTML = '<div class="live-idle muted">' + idleMsg + tourSuffix + '</div>';
+        livePanel.innerHTML = '<div class="live-idle muted">' + idleBody + tourSuffix + '</div>';
         if (state && state.stale) {
           if (battleViewerWrap) battleViewerWrap.classList.add('hide');
           shownLive = undefined;
@@ -1772,7 +1783,10 @@ function buildBattlesScript(
       if (doc && doc.live && !doc.stale) {
         return doc.live.matchId + ':' + doc.live.heartbeatSeq + ':' + doc.stale + ':' + tourId;
       }
-      return 'idle:' + Boolean(doc && doc.stale) + ':' + tourId;
+      const smokeKey = (
+        doc && doc.smokeTesting && (doc.smokeTesting.slug || doc.smokeTesting.name)
+      ) || '';
+      return 'idle:' + Boolean(doc && doc.stale) + ':' + smokeKey + ':' + tourId;
     };
 
     const applySnapshot = next => {
@@ -1808,6 +1822,7 @@ function buildBattlesScript(
           state.updatedAt = data.updatedAt || nowSec;
           state.stale = Boolean(data.stale);
           state.restarting = !state.stale && Boolean(data.restarting);
+          state.smokeTesting = state.stale ? undefined : data.smokeTesting;
           state.live = state.stale ? undefined : data.live;
           state.runningTournament = data.runningTournament;
           syncRestartBanner();
@@ -1821,6 +1836,7 @@ function buildBattlesScript(
           state.updatedAt = data.updatedAt || nowSec;
           state.stale = Boolean(data.stale);
           state.restarting = !state.stale && Boolean(data.restarting);
+          state.smokeTesting = state.stale ? undefined : data.smokeTesting;
           state.live = state.stale ? undefined : data.live;
           state.runningTournament = data.runningTournament;
           if (data.totalMatches !== undefined) state.totalMatches = data.totalMatches;
@@ -3750,12 +3766,21 @@ function renderLivePanelInner(
   links: AgentLinkContext
 ): util.Child {
   if (!liveDoc?.live || liveDoc.stale) {
-    const idleMsg = liveDoc?.stale
+    const smoke = liveDoc?.smokeTesting;
+    const idleBody: util.Child = liveDoc?.stale
       ? 'No active heartbeat — Arena is offline or idle.'
-      : 'No battle currently running — Arena is idle.';
+      : smoke
+        ? (
+          <>
+            <span className='yes'>{'\u25cf'}</span> Testing a submission for{' '}
+            {renderAgentLink(smoke.name, resolveAgentHref(links, smoke.slug, smoke.name), true)}
+            {' — ladder battles will resume shortly.'}
+          </>
+        )
+        : 'No battle currently running — Arena is idle.';
     return (
       <div className='live-idle muted'>
-        {idleMsg}
+        {idleBody}
         {liveDoc?.runningTournament ? (
           <>
             {' · '}
@@ -4133,6 +4158,10 @@ function renderBattlesPage(opts: {
         if (href) agentLinks[side.slug] = href;
       }
     }
+  }
+  if (liveDoc?.smokeTesting && !agentLinks[liveDoc.smokeTesting.slug]) {
+    const href = resolveAgentHref(links, liveDoc.smokeTesting.slug, liveDoc.smokeTesting.name);
+    if (href) agentLinks[liveDoc.smokeTesting.slug] = href;
   }
 
   const historyRows = recentMatches.length === 0 ? (

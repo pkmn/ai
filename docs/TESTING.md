@@ -40,10 +40,10 @@ Run [`tools/shots.tsx`](../tools/shots.tsx) whenever editing TSX views, CSS, Djo
 scripts:
 
 ```sh
-npm run shots -- --list                          # list all 7 sections and 108 scenario names
+npm run shots -- --list                          # list all 7 sections and 109 scenario names
 npm run shots -- --baseline --only ladders,battles  # snapshot only affected states before edits
 npm run build && npm run shots -- --only ladders,battles # capture & diff targeted states (4 viewports x 2 themes)
-npm run shots -- --baseline && npm run shots     # full 108-state capture (for shared layout/global CSS)
+npm run shots -- --baseline && npm run shots     # full 109-state capture (for shared layout/global CSS)
 open .shots/index.html                           # inspect Visual Atlas
 npm run clean && npm test                        # remove mock artifacts from public/ afterward
 ```
@@ -62,7 +62,7 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
   is strict `0`-pixel outside viewers (unless `--tolerance` is passed) and tolerates up to `25%`
   sprite/animation variance inside unchanged viewer frames.
 
-**7 Atlas Sections (108 states):**
+**7 Atlas Sections (109 states):**
 1. **`static`:** Home (normal, signed-out default profile icon, manual Light/Dark theme overrides,
    and `● LIVE` `#topbar`), Background (`Under Construction`), Concepts + 5 subpages (`baselines`,
    `complexity`, `engines`, `protocol`, `variants`), Glossary, Release, Research, Arena Rules,
@@ -77,8 +77,8 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
 4. **`battles`:** Live VGC (`Initializing (/ready)`, `Team Preview` 6 HP circles, mid-battle 4
    brought, `Game 2 / 2` w/ Game 1 summary + swapped hashes), live Singles `Game 2 / 2` w/ Game 1
    `[Timeout]`, live `RAND` + Showdown viewer, expanded `RAND` & archived `VGC` replay rows
-   (`Game 1`/`2`), expanded `[Timeout]`/`[Crash]`/clean rows, format filter, Page 2, `Idle`, `Stale`,
-   empty history.
+   (`Game 1`/`2`), expanded `[Timeout]`/`[Crash]`/clean rows, format filter, Page 2, `Idle`,
+   `Smoke Testing`, `Stale`, empty history.
 5. **`tournaments`:** Completed `#1` (`SF` badges, `1-replays.7z`, expanded game replay), live Bo3
    `#2` multi-table (`Table 1` dual-thinking, `Table 2` P1 committed / P2 thinking, idle `● Watch T1`,
    expanded Bo3 `Game 1`/`2`/`3` switcher, offline log fallback), scheduled `#3` (with & without
