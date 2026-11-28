@@ -568,14 +568,21 @@ export function advanceTopKClock(
 // Active-learning cross-ladder match scheduler.
 //
 // Scores every candidate `(ladder, agentI, agentJ)` pair by:
-//   `score = infoGain * withinWeight * repeatDamper * agingBoost`
+//   `score = infoGain * withinWeight * repeatDamper * agingBoost * residency`
 // where:
 //   - `infoGain = 0.5 * ln(1 + 4 p (1 - p) (sigma_i^2 + sigma_j^2))` is expected Shannon
 //     information gain on `theta_i - theta_j`.
-//   - `withinWeight` combines exponential top-of-ladder focus (`topWeight` using
-//     `min(rank, ucbRank)` so uncertain challengers with high UCB get top-tier attention),
-//     posterior overlap, and a fast-triage bonus steering 0- and 1-match entrants against
-//     Top-5 / Top-10 calibration anchors.
+//   - `withinWeight` combines:
+//     * `topWeight`: exponential top-of-ladder focus using `min(rank, ucbRank)` normalized over
+//       `max(20, k - 1)` so small ladders (k < 20) do not compress ranks 4-6 straight to the floor.
+//     * `overlap`: posterior rating proximity.
+//     * `triageBonus`: steers 0- and 1-match newcomers against established opponents (`>= 2`
+//       matches, even before anyone has settled) and provisional Top-10 contenders (`< 10`
+//       matches, `sigma > 0.36`) against settled anchors, damped by `1 / (1 + mij)` so settling
+//       at the top never causes a repeat-match cliff.
+//     * `underplay`: provisional per-agent anti-starvation floor boosting agents lagging behind
+//       `min(medianMatches, 8)` (capped at 2.5x, decaying to 1.0x once past 8 matches so
+//       settled low-tier agents do not siphon steady-state Top-K bandwidth).
 //   - `repeatDamper = 1 / (1 + 0.25 * mij)` spreads games across distinct pairs.
 //   - `agingBoost` + hard starvation filtering (`>= maxWaitCycles * K`) guarantees no active
 //     ladder goes unscheduled even when another ladder has a burst of new submissions.
@@ -632,9 +639,10 @@ export function selectNextArenaMatch(
       ucbRank[byUCB[r]] = r;
     }
 
+    const rankSpan = Math.max(20, k - 1);
     const topWeight = new Float64Array(M);
     for (const i of act) {
-      const q = Math.min(rank[i], ucbRank[i]) / Math.max(1, k - 1);
+      const q = Math.min(rank[i], ucbRank[i]) / rankSpan;
       topWeight[i] = (1 - exploit) + exploit * 20.0 * Math.exp(-5.5 * q);
     }
 
@@ -646,6 +654,17 @@ export function selectNextArenaMatch(
       if (agentMatches[i] < 2 || (exploit > 0 && sigma[i] > 0.36 && ucb90 >= thetaTop10)) {
         inTriage[i] = 1;
       }
+    }
+
+    const sortedMatches = act.map(i => agentMatches[i]).sort((a, b) => a - b);
+    const medianMatches = sortedMatches[Math.floor(k / 2)];
+    const calibrationTarget = Math.min(medianMatches, 8);
+    const underplayBoost = new Float64Array(M);
+    for (const i of act) {
+      const deficit = calibrationTarget - agentMatches[i];
+      underplayBoost[i] = deficit > 0
+        ? Math.min(2.5, 1 + 0.8 * (deficit / (agentMatches[i] + 2)))
+        : 1.0;
     }
 
     const matchesWaiting = Math.max(0, globalMatchCount - ladder.lastMatchNumber);
@@ -661,20 +680,34 @@ export function selectNextArenaMatch(
         const p = 1 / (1 + Math.exp(-diff));
         const infoGain = 0.5 * Math.log(1 + 4 * p * (1 - p) * varSum);
         const overlap = 0.20 + 3.5 * Math.exp(-(diff * diff) / (2 * (varSum + 0.04)));
+        const mij = pairMatches[i * M + j];
 
         let triageBonus = 1.0;
-        if (inTriage[i] !== inTriage[j]) {
-          const challenger = inTriage[i] ? i : j;
-          const anchor = inTriage[i] ? j : i;
+        const isNewI = agentMatches[i] < 2;
+        const isNewJ = agentMatches[j] < 2;
+        let challenger = -1;
+        let anchor = -1;
+        if (isNewI !== isNewJ) {
+          challenger = isNewI ? i : j;
+          anchor = isNewI ? j : i;
+        } else if (!isNewI && !isNewJ && inTriage[i] !== inTriage[j]) {
+          const candidate = inTriage[i] ? i : j;
+          if (agentMatches[candidate] < 10) {
+            challenger = candidate;
+            anchor = inTriage[i] ? j : i;
+          }
+        }
+        if (challenger !== -1) {
           const target =
             agentMatches[challenger] === 0 ? thetaTop5
             : agentMatches[challenger] === 1 ? thetaTop10
             : Math.max(thetaTop10, theta[challenger]);
-          triageBonus = 1.0 + 2.0 * Math.exp(-Math.abs(theta[anchor] - target));
+          triageBonus = 1.0 + (2.0 * Math.exp(-Math.abs(theta[anchor] - target))) / (1 + mij);
         }
 
-        const mij = pairMatches[i * M + j];
-        const withinWeight = Math.sqrt(topWeight[i] * topWeight[j]) * overlap * triageBonus;
+        const underplay = Math.max(underplayBoost[i], underplayBoost[j]);
+        const withinWeight =
+          Math.sqrt(topWeight[i] * topWeight[j]) * overlap * triageBonus * underplay;
         const repeatDamper = 1 / (1 + 0.25 * mij);
         const residency = ladder.residencyMultipliers
           ? ladder.residencyMultipliers[i * M + j]

@@ -662,6 +662,91 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
     expect([choice.agentI, choice.agentJ].sort()).not.toEqual([5, 6]);
   });
 
+  test('prevents early starvation of 1-match entrants on small unsettled ladders', () => {
+    const scale = ratings.ELO_SCALE;
+    const pairMatches = new Int32Array(49);
+    const setPair = (i: number, j: number, count: number) => {
+      pairMatches[i * 7 + j] = count;
+      pairMatches[j * 7 + i] = count;
+    };
+    setPair(0, 1, 5);
+    setPair(0, 2, 4);
+    setPair(1, 2, 3);
+    setPair(0, 3, 2);
+    setPair(1, 3, 2);
+    setPair(0, 6, 1);
+    const ladders: ratings.LadderMatchState[] = [{
+      id: 'vgc',
+      activeAgentIndices: [0, 1, 2, 3, 4, 5, 6],
+      agentIds: new Int32Array([1, 2, 3, 4, 5, 6, 7]),
+      minAgents: 4,
+      theta: new Float64Array([
+        (1680 - 1500) / scale,
+        (1645 - 1500) / scale,
+        (1610 - 1500) / scale,
+        0,
+        (1409 - 1500) / scale,
+        (1398 - 1500) / scale,
+        (1240 - 1500) / scale,
+      ]),
+      sigma: new Float64Array([
+        87 / scale,
+        93 / scale,
+        93 / scale,
+        0,
+        131 / scale,
+        128 / scale,
+        214 / scale,
+      ]),
+      agentMatches: new Int32Array([14, 11, 8, 6, 3, 3, 1]),
+      pairMatches,
+      lastMatchNumber: 20,
+    }];
+    const choice = ratings.selectNextArenaMatch(ladders, 23);
+    expect([choice.agentI, choice.agentJ]).toContain(6);
+  });
+
+  test('does not grant a repeat-match triage cliff when #1 settles before #2', () => {
+    const pairMatches = new Int32Array(16);
+    pairMatches[0 * 4 + 1] = 12;
+    pairMatches[1 * 4 + 0] = 12;
+    const beforeSettle: ratings.LadderMatchState = {
+      id: 'vgc',
+      activeAgentIndices: [0, 1, 2, 3],
+      agentIds: new Int32Array([1, 2, 3, 4]),
+      minAgents: 2,
+      theta: new Float64Array([1.0, 0.9, 0.2, -0.5]),
+      sigma: new Float64Array([0.37, 0.38, 0.50, 0.70]),
+      agentMatches: new Int32Array([16, 14, 6, 3]),
+      pairMatches,
+      lastMatchNumber: 20,
+    };
+    const afterSettle: ratings.LadderMatchState = {
+      ...beforeSettle,
+      sigma: new Float64Array([0.35, 0.38, 0.50, 0.70]),
+    };
+    const pickBefore = ratings.selectNextArenaMatch([beforeSettle], 21);
+    const pickAfter = ratings.selectNextArenaMatch([afterSettle], 21);
+    expect([pickAfter.agentI, pickAfter.agentJ].sort()).not.toEqual([0, 1]);
+    expect(pickAfter.priorityScore).toBeLessThanOrEqual(pickBefore.priorityScore + 1e-6);
+  });
+
+  test('preserves Top-K focus once low-tier entrants pass calibration floor', () => {
+    const ladders: ratings.LadderMatchState[] = [{
+      id: 'sv',
+      activeAgentIndices: [0, 1, 2, 3, 4, 5],
+      agentIds: new Int32Array([1, 2, 3, 4, 5, 6]),
+      minAgents: 2,
+      theta: new Float64Array([1.4, 1.35, 0.6, 0.1, -0.8, -0.85]),
+      sigma: new Float64Array([0.22, 0.22, 0.22, 0.22, 0.22, 0.22]),
+      agentMatches: new Int32Array([30, 30, 25, 25, 10, 10]),
+      pairMatches: new Int32Array(36),
+      lastMatchNumber: 50,
+    }];
+    const choice = ratings.selectNextArenaMatch(ladders, 51);
+    expect([choice.agentI, choice.agentJ].sort()).toEqual([0, 1]);
+  });
+
   test('computeTournamentRatings solves single-game MAP while preserving unplayed priors', () => {
     expect(ratings.computeTournamentRatings(0, []).elo).toHaveLength(0);
 
