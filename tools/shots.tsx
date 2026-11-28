@@ -390,6 +390,13 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       },
     },
     {
+      name: 'home-menu-open',
+      section: 'static',
+      title: 'Home (Menu Open)',
+      path: '/',
+      click: '#site-menu > summary',
+    },
+    {
       name: 'background',
       section: 'static',
       title: 'Background',

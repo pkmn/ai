@@ -844,8 +844,63 @@ describe('server/auth.ts routes', () => {
       topControls: false,
       content: '<p>secret</p>',
     });
+    expect(html).not.toContain('id="top-nav"');
+    expect(html).not.toContain('id="site-menu"');
     expect(html).not.toContain('id="top-controls"');
     expect(html).not.toContain('id="theme-toggle"');
     expect(html).not.toContain('id="account-link"');
+  });
+
+  test('renders top-left site menu without Concepts and derives contextual backlinks', () => {
+    expect(build.resolveBackLink('/')).toBeUndefined();
+    expect(build.resolveBackLink('/arena/')).toBeUndefined();
+    expect(build.resolveBackLink('/projects/')).toBeUndefined();
+    expect(build.resolveBackLink('/wiki/')).toBeUndefined();
+    expect(build.resolveBackLink('/account/')).toBeUndefined();
+    expect(build.resolveBackLink('/arena/ladders/rand/')).toEqual({
+      href: '/arena/',
+      label: 'Arena',
+    });
+    expect(build.resolveBackLink('/arena/battles/')).toEqual({
+      href: '/arena/',
+      label: 'Arena',
+    });
+    expect(build.resolveBackLink('/arena/tournaments/1/')).toEqual({
+      href: '/arena/',
+      label: 'Arena',
+    });
+    expect(build.resolveBackLink('/projects/foul-play/')).toEqual({
+      href: '/projects/',
+      label: 'Projects',
+    });
+    expect(build.resolveBackLink('/concepts/variants/')).toEqual({
+      href: '/concepts/',
+      label: 'Concepts',
+    });
+    expect(build.resolveBackLink('/wiki/projects/Foul_Play/')).toEqual({
+      href: '/wiki/',
+      label: 'Wiki',
+    });
+
+    const ladderHtml = build.renderer.render({
+      title: 'Arena — RAND | pkmn.ai',
+      path: '/arena/ladders/rand/',
+      header: build.header('Ladders'),
+      content: '<p>standings</p>',
+    });
+    expect(ladderHtml).toContain('id="top-nav"');
+    expect(ladderHtml).toContain('id="site-menu"');
+    expect(ladderHtml).toContain('href="/arena/" class="subtle back-link"');
+    expect(ladderHtml).not.toContain('/concepts/');
+    expect(ladderHtml).toContain('href="/arena/" class="subtle" aria-current="page"');
+
+    const homeHtml = build.renderer.render({
+      title: 'pkmn.ai',
+      path: '',
+      header: '<h1>pkmn.ai</h1>',
+      content: '<p>home</p>',
+    });
+    expect(homeHtml).toContain('id="site-menu"');
+    expect(homeHtml).not.toContain('back-link');
   });
 });

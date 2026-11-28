@@ -3201,14 +3201,15 @@ function renderLadderHtml(opts: {
   const isUpcoming = l.status === 'upcoming';
 
   let ladderBottomNote: util.Child;
-  if (!isUpcoming) {
+  if (!isUpcoming || showArchive) {
     const battlesHref = `/arena/battles/#${encodeURIComponent(l.slot)}`;
     ladderBottomNote = (
       <p className='battle-note muted'>
-        <a href={battlesHref}>Recent {l.name} battles</a>
+        {!isUpcoming && <a href={battlesHref}>Recent {l.name} battles</a>}
+        {!isUpcoming && showArchive && ' · '}
         {showArchive && archive && (
           <>
-            {' · '}Data:{' '}
+            Data:{' '}
             <a href={archive.href}>
               <code>{archive.name}</code>
             </a>

@@ -83,7 +83,7 @@
   display: none;
 }
 
-#site-menu > summary svg {
+#site-menu svg {
   display: block;
   width: 1.5rem;
   height: 1.5rem;
@@ -102,24 +102,28 @@
   background-color: var(--bg-color);
   border: 1px solid var(--code-border-color);
   border-radius: var(--border-radius);
-  box-shadow: 0 6px 20px rgb(var(--fg-base) / 12%);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 12%);
 }
 
-.site-menu-panel a {
+:root[data-theme="dark"] .site-menu-panel {
+  box-shadow: 0 6px 24px rgb(0 0 0 / 45%);
+}
+
+#site-menu .site-menu-panel a {
   display: block;
   padding: 0.3rem 0.85rem;
   color: rgb(var(--fg-base) / 72%);
   white-space: nowrap;
 }
 
-.site-menu-panel a:hover,
-.site-menu-panel a:focus-visible {
+#site-menu .site-menu-panel a:hover,
+#site-menu .site-menu-panel a:focus-visible {
   color: var(--fg-color);
   text-decoration: none;
   background-color: var(--aside-bg-color);
 }
 
-.site-menu-panel a[aria-current="page"] {
+#site-menu .site-menu-panel a[aria-current="page"] {
   color: var(--fg-color);
 }
 

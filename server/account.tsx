@@ -1247,10 +1247,22 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                 e.se <= SETTLED_MAX_SE && e.matches >= SETTLED_MIN_MATCHES
               );
 
+              const ladderKey = e.ladderStatus === 'archived' || e.ladderStatus === 'settling'
+                ? e.ladderId
+                : e.slot;
+              const ladderHref = `/arena/ladders/${encodeURIComponent(ladderKey)}/`;
+              const ladderCell = (
+                <td>
+                  <a href={ladderHref} className='subtle'>
+                    <tt>{e.ladderName}</tt>
+                  </a>
+                </td>
+              );
+
               if (isChampion) {
                 return (
                   <tr>
-                    <td><tt>{e.ladderName}</tt></td>
+                    {ladderCell}
                     <td>
                       <code><strong>{e.version}</strong></code>
                       {util.renderInfoDot(e.smokeInfoStatus)}
@@ -1275,7 +1287,7 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
 
               return (
                 <tr className='secondary'>
-                  <td><tt>{e.ladderName}</tt></td>
+                  {ladderCell}
                   <td>
                     <code>{e.version}</code>
                     {util.renderInfoDot(e.smokeInfoStatus)}
@@ -1601,7 +1613,7 @@ function renderStagedSection(opts: {
 
 function renderHistorySection(
   versions: db.VersionHistoryView[],
-  ladderNameById: Map<string, string>,
+  ladderById: Map<string, db.LadderRow>,
   opts: {canReuse?: boolean; claimedVersions?: ReadonlySet<string>} = {}
 ): util.Html {
   if (!versions.length) {
@@ -1615,6 +1627,7 @@ function renderHistorySection(
 
   const canReuse = Boolean(opts.canReuse);
   const claimedVersions = opts.claimedVersions ?? new Set<string>();
+  const ladderNameById = new Map([...ladderById].map(([id, l]) => [id, l.name]));
 
   return (
     <section id='history'>
@@ -1639,10 +1652,32 @@ function renderHistorySection(
         }}
       >
         {versions.map((v, idx) => {
-          const ladderLabels: util.Child[] = v.ladders.map(id => ladderNameById.get(id) ?? id);
-          const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map(name => {
+          const ladderLabels: util.Child[] = v.ladders.map(id => {
+            const ladder = ladderById.get(id);
+            if (!ladder) return id;
+            const key = ladder.status === 'archived' || ladder.status === 'settling'
+              ? ladder.id
+              : ladder.slot;
+            return (
+              <a href={`/arena/ladders/${encodeURIComponent(key)}/`} className='subtle'>
+                {ladder.name}
+              </a>
+            );
+          });
+          const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map((name, ti) => {
             const m = /^Tournament #(\d+)/.exec(name);
-            return m ? <span title={name}>T#{m[1]}</span> : name;
+            const label = m ? `T#${m[1]}` : name;
+            const tid = v.tournaments[ti];
+            if (!tid) return m ? <span title={name}>{label}</span> : name;
+            return (
+              <a
+                href={`/arena/tournaments/${encodeURIComponent(tid)}/`}
+                className='subtle'
+                title={name}
+              >
+                {label}
+              </a>
+            );
           });
           const allLabels = [...ladderLabels, ...tourneyLabels];
           const laddersContent = allLabels.map((item, i) => (i === 0 ? item : [', ', item]));
@@ -2058,6 +2093,7 @@ export function renderAccountPage(opts: {
     );
   }
 
+  const ladderById = new Map(allLadders.map(l => [l.id, l]));
   const ladderNameById = new Map(allLadders.map(l => [l.id, l.name]));
   const openLadderIds = new Set(
     currentLadders.filter(l => l.status === 'upcoming' || l.status === 'active').map(l => l.id)
@@ -2123,7 +2159,10 @@ export function renderAccountPage(opts: {
       {renderActiveSection(activeEntries)}
 
       <section id='submission'>
-        <h3><a href='#submission' className='subtle'>Submission</a></h3>
+        <div className='section-header'>
+          <h3><a href='#submission' className='subtle'>Submission</a></h3>
+          <a href='/rules/#submission' className='section-link'>Rules &amp; packaging {'\u2192'}</a>
+        </div>
         <form
           id='submission-form'
           className={canSubmitAny ? 'form-box' : 'form-box form-disabled'}
@@ -2335,7 +2374,7 @@ export function renderAccountPage(opts: {
         </form>
       </section>
 
-      {renderHistorySection(versions, ladderNameById, {canReuse: canSubmitAny, claimedVersions})}
+      {renderHistorySection(versions, ladderById, {canReuse: canSubmitAny, claimedVersions})}
 
       <script>{ACCOUNT_SCRIPT}</script>
     </>

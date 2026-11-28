@@ -18,6 +18,23 @@ h3 {
   font-size: 1.15em;
 }
 
+.section-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.5ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 1.75rem 0 0.6rem;
+}
+
+.section-header h3 {
+  margin: 0;
+}
+
+.section-link {
+  font-size: 0.88em;
+}
+
 .muted {
   color: rgb(var(--fg-base) / 50%);
 }

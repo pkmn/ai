@@ -903,7 +903,7 @@ describe('populated Arena leaderboard views', () => {
   test('renders profile pages for Pending projects without ladder entries', async () => {
     const tmProfileHtml = await h.getText('/projects/technical-machine/');
     expect(tmProfileHtml).toContain('davidstone/technical-machine');
-    expect(tmProfileHtml).toContain('No Arena ladder entries yet.');
+    expect(tmProfileHtml).toContain('No <a href="/arena/">Arena</a> ladder entries yet.');
   });
 
   test('redirects non-Arena project slugs to /projects/#<id>', async () => {
@@ -3250,6 +3250,7 @@ describe('JSON route parity & retired pool archives', () => {
       'home-theme-light',
       'home-theme-dark',
       'home-live-banner',
+      'home-menu-open',
       'account-teams-complete',
     ]);
   });
@@ -4703,6 +4704,145 @@ describe('JSON route parity & retired pool archives', () => {
       expect(panelHtml).not.toContain('Testing a submission');
       const liveJson = await h.getJson<{smokeTesting?: arena.LiveSmokeTest}>('/api/live.json');
       expect(liveJson.smokeTesting).toBeUndefined();
+    } finally {
+      await h.close();
+      testDb.close();
+    }
+  });
+
+  test('renders navigation cross-links across ladders, battles, and profiles', async () => {
+    const testDb = new Database(':memory:', {now: 1_760_000_000});
+    testDb.syncLadders(undefined, 1_760_000_000);
+    testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
+    testDb.syncProjectsFromYaml(
+      [
+        '- name: Alpha',
+        '  arena:',
+        '    owners:',
+        '      alice: alice.101',
+        '- name: Beta',
+        '  arena:',
+        '    owners:',
+        '      bob: bob.102',
+      ].join('\n'),
+      undefined,
+      1_760_000_000
+    );
+    const alpha = testDb.getAgentBySlug('alpha')!;
+    const beta = testDb.getAgentBySlug('beta')!;
+    testDb.setAgentLadders(alpha.id, ['rby'], 1_760_000_000);
+    testDb.setAgentLadders(beta.id, ['rby'], 1_760_000_000);
+    const aVer = testDb.createSubmission({
+      agentId: alpha.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/a.tar.zst',
+      sha256: 'a'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    const bVer = testDb.createSubmission({
+      agentId: beta.id,
+      version: '1.0.0',
+      package: 'bundle',
+      url: 'https://example.com/b.tar.zst',
+      sha256: 'b'.repeat(64),
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_000,
+    });
+    testDb.applySubmissionStatus({versionId: aVer.id, smokeStatus: 'passed', now: 1_760_000_001});
+    testDb.applySubmissionStatus({versionId: bVer.id, smokeStatus: 'passed', now: 1_760_000_001});
+    testDb.upsertTournament({
+      id: '1',
+      name: 'Tournament #1: RBY',
+      format: 'gen1ou',
+      version: '0.11.0',
+      gamesPerMatchup: 2,
+      parallelTables: 1,
+      hardware: 'Test Host',
+      status: 'completed',
+      startsAt: 1_760_000_000,
+      completedAt: 1_760_000_010,
+    });
+    testDb.upsertTournamentEntrant({
+      tournamentId: '1',
+      agentId: alpha.id,
+      versionId: aVer.id,
+      seed: 1,
+    });
+    testDb.db.prepare(
+      "UPDATE tournament_entrants SET final_rank = 1 WHERE tournament_id = '1' AND agent_id = ?"
+    ).run(alpha.id);
+    playMatch(testDb, 'gen1ou20261109', aVer.id, bVer.id, 'W', 'W', 1_760_000_020);
+
+    const h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
+    try {
+      h.arenaHandle.setLiveState({
+        stale: false,
+        updatedAt: 1_760_000_045,
+        live: {
+          heartbeatSeq: 5,
+          matchId: 'gen1ou-0000010',
+          ladderId: 'gen1ou20261109',
+          slot: 'rby',
+          format: 'gen1ou',
+          game: 1,
+          turn: 7,
+          activeSlot: 'p1',
+          turnStartedAt: 1_760_000_044,
+          turnBudgetSeconds: 60,
+          incrementSeconds: 15,
+          p1: {
+            slug: 'alpha',
+            name: 'Alpha',
+            version: '1.0.0',
+            bankSeconds: 150,
+            lastTurnMillis: 120,
+            meanTurnMillis: 120,
+            ram: 512,
+          },
+          p2: {
+            slug: 'beta',
+            name: 'Beta',
+            version: '1.0.0',
+            bankSeconds: 150,
+            lastTurnMillis: 110,
+            meanTurnMillis: 110,
+            ram: 512,
+          },
+        },
+      });
+
+      const ladderHtml = await h.getText('/arena/ladders/rby/');
+      expect(ladderHtml).toContain('<h2>Ladders</h2>');
+      expect(ladderHtml).not.toContain('<h2><a href="/arena/"');
+      expect(ladderHtml).toContain('href="/arena/" class="subtle back-link"');
+      expect(ladderHtml).toContain('class="ladder-live"');
+      expect(ladderHtml).toContain('Alpha vs. Beta');
+      expect(ladderHtml).toContain('href="/arena/battles/#rby"');
+
+      const battlesHtml = await h.getText('/arena/battles/');
+      expect(battlesHtml).toContain('<h2>Battles</h2>');
+      expect(battlesHtml).not.toContain('<h2><a href="/arena/"');
+      expect(battlesHtml).toContain(
+        '<a href="/arena/ladders/rby/"><tt><strong>RBY</strong></tt></a> · ' +
+        '<code>gen1ou-0000010</code>'
+      );
+      expect(battlesHtml).toContain(
+        '<a href="/arena/ladders/rby/"><tt><strong>RBY</strong></tt></a> · <time'
+      );
+
+      const profileHtml = await h.getText('/projects/alpha/');
+      expect(profileHtml).toContain('href="/projects/" class="subtle back-link"');
+      expect(profileHtml).toContain('<a href="/arena/ladders/rby/" title="View RBY ladder">');
+      expect(profileHtml).toContain('<strong>Tournaments</strong>');
+      expect(profileHtml).toContain('href="/arena/tournaments/1/"');
+      expect(profileHtml).toContain('<tt>T#1 #1</tt>');
+
+      const tourHtml = await h.getText('/arena/tournaments/1/');
+      expect(tourHtml).toContain('<h2>Tournaments</h2>');
+      expect(tourHtml).not.toContain('<h2><a href="/arena/"');
+      expect(tourHtml).toContain('href="/arena/" class="subtle back-link"');
     } finally {
       await h.close();
       testDb.close();
