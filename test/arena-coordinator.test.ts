@@ -1793,4 +1793,37 @@ describe('Coordinator', () => {
       h.stateDb.close();
     }
   });
+
+  test('recyclePodmanVm skips stop when already draining', async () => {
+    const calls: string[] = [];
+    await coordinator.recyclePodmanVm({
+      isDraining: () => true,
+      exec: (file, args) => {
+        calls.push(`${file} ${args.join(' ')}`);
+        return Promise.resolve();
+      },
+      sleep: () => Promise.resolve(),
+    });
+    expect(calls).toEqual([]);
+  });
+
+  test('recyclePodmanVm still kickstarts service if drain begins during stop', async () => {
+    const calls: string[] = [];
+    let draining = false;
+    await coordinator.recyclePodmanVm({
+      isDraining: () => draining,
+      exec: (file, args) => {
+        calls.push(`${file} ${args.join(' ')}`);
+        if (file === 'podman' && args[0] === 'machine') {
+          draining = true;
+        }
+        return Promise.resolve();
+      },
+      sleep: () => Promise.resolve(),
+    });
+    expect(calls).toEqual([
+      'podman machine stop podman-machine-default',
+      'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
+    ]);
+  });
 });

@@ -231,12 +231,15 @@ export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<void> {
   const readyTimeoutMillis = deps?.readyTimeoutMillis ?? PODMAN_READY_TIMEOUT_MILLIS;
   const readyPollMillis = deps?.readyPollMillis ?? PODMAN_READY_POLL_MILLIS;
 
+  if (isDraining()) return;
   try {
     await run('podman', ['machine', 'stop', PODMAN_MACHINE_NAME], {timeout: 30_000});
   } catch (err) {
     console.error('Failed to stop Podman VM for memory reclaim:', err);
   }
-  if (isDraining()) return;
+  // Always kickstart `ai.pkmn.podman` once a stop has been issued (`ai.pkmn.podman.plist` is a
+  // one-shot boot launcher with no KeepAlive, so skipping kickstart during drain would leave the
+  // VM permanently stopped across restarts).
   try {
     await run(
       'sudo',
