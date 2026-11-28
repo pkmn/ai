@@ -1826,4 +1826,104 @@ describe('Coordinator', () => {
       'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
     ]);
   });
+
+  test('processPendingSubmissions reports OCI status before recycling Podman VM', async () => {
+    const events: string[] = [];
+    const rootDir = path.join(tmpDir, 'smoke-oci-order');
+    const stateDb = new arenaDb.Database(':memory:');
+    const fakeResult: arbiter.ArenaGameResult = {
+      outcome: 'W',
+      winner: 'p1',
+      turns: 1,
+      endReason: 'win',
+      omniscientLog: '|turn|1\n|win|Agent A\n',
+      p1: {
+        bankSeconds: 120,
+        peakRam: 128,
+        initMillis: 50,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+      p2: {
+        bankSeconds: 120,
+        peakRam: 64,
+        initMillis: 40,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+    };
+    const origPullDesc = Object.getOwnPropertyDescriptor(packages, 'pullAndVerifyOciImage')!;
+    const origRunDesc = Object.getOwnPropertyDescriptor(
+      arbiter.TimeSlicedArenaGame.prototype,
+      'run'
+    )!;
+    Object.defineProperty(packages, 'pullAndVerifyOciImage', {
+      configurable: true,
+      enumerable: true,
+      get: () => (): packages.UnpackResult => ({sha256: 'a'.repeat(64), unpackedBytes: 2048}),
+    });
+    Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', {
+      ...origRunDesc,
+      value: () => Promise.resolve(fakeResult),
+    });
+    const fakeClient = {
+      getPendingSubmissions: () => Promise.resolve({
+        ladders: [],
+        submissions: [{
+          versionId: 99,
+          agentId: 1,
+          agentSlug: 'foul-play',
+          agentName: 'Foul Play',
+          version: '4.0.0',
+          package: 'oci' as const,
+          url: 'ghcr.io/pmariglia/foul-play:4.0.0',
+          sha256: 'a'.repeat(64),
+          ladders: ['gen9customgame'],
+          tournaments: [],
+          teamsByLadder: {},
+        }],
+      }),
+      reportSubmissionStatus: (payload: serverArena.SubmissionStatusPayload) => {
+        events.push(`status:${payload.smokeStatus}`);
+        return Promise.resolve({
+          ok: true as const,
+          versionId: payload.versionId,
+          smokeStatus: payload.smokeStatus,
+          retiredByLadder: {},
+        });
+      },
+      sendHeartbeat: () => Promise.resolve({ok: true as const, updatedAt: 0}),
+    } as unknown as serverArena.Client;
+    const ladderSnap: coordinator.LadderSnapshot = {
+      id: 'gen9customgame',
+      slot: 'rand',
+      format: 'gen9randombattle',
+      team: 'random',
+      status: 'active',
+      min: 2,
+      entries: [],
+      pairAggregates: [],
+    };
+    const coord = new coordinator.Coordinator({
+      client: fakeClient,
+      stateDb,
+      baselineSpec: {mode: 'native', target: defaultAgentScript},
+      rootDir,
+      devMode: true,
+      recyclePodmanVm: () => {
+        events.push('recycle');
+      },
+    });
+    try {
+      const count = await coord.processPendingSubmissions(
+        new Map([['gen9customgame', ladderSnap]])
+      );
+      expect(count).toBe(1);
+      expect(events).toEqual(['status:staged', 'recycle']);
+    } finally {
+      Object.defineProperty(packages, 'pullAndVerifyOciImage', origPullDesc);
+      Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', origRunDesc);
+      stateDb.close();
+    }
+  });
 });

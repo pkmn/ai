@@ -826,6 +826,8 @@ export class Coordinator {
       let smokeError: string | undefined;
 
       let keepStaged = false;
+      let smokeDurationMillis: number;
+      let threw = false;
       try {
         for (const item of targetsToTest) {
           let t1Packed: string;
@@ -979,6 +981,10 @@ export class Coordinator {
           engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
         }
         keepStaged = smokeError === undefined;
+        smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
+      } catch (err) {
+        threw = true;
+        throw err;
       } finally {
         // Keep passed ladder builds staged locally on SSD (not yet archived to `/Volumes/Archive`)
         // so Activation archives directly without re-downloading and one-time auth tokens can be
@@ -993,49 +999,53 @@ export class Coordinator {
             versionId: sub.versionId,
           }).catch(() => undefined);
         }
-        if (mode === 'container') {
+        if (threw && mode === 'container') {
           await this.maybeRecyclePodmanVm();
         }
       }
 
-      const smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
+      try {
+        if (smokeError) {
+          await this.reportSubmissionOrOutbox({
+            versionId: sub.versionId,
+            smokeStatus: 'failed',
+            ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
+            smokeError,
+            ...(diagnostics.length ? {diagnostics} : {}),
+          });
+          continue;
+        }
 
-      if (smokeError) {
+        this.stateDb.upsertLocalAgent({
+          versionId: sub.versionId,
+          agentId: sub.agentId,
+          slug: sub.agentSlug,
+          version: sub.version,
+          mode,
+          target: targetId,
+          residency: 'staged',
+          unpackedBytes,
+        });
+
         await this.reportSubmissionOrOutbox({
           versionId: sub.versionId,
-          smokeStatus: 'failed',
+          smokeStatus: 'staged',
           ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
-          smokeError,
+          unpackedBytes,
+          smokeDurationMillis,
+          smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),
+          ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
+            ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
+            : {}),
+          smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
+          ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
           ...(diagnostics.length ? {diagnostics} : {}),
         });
-        continue;
+      } finally {
+        if (mode === 'container') {
+          await this.maybeRecyclePodmanVm();
+        }
       }
-
-      this.stateDb.upsertLocalAgent({
-        versionId: sub.versionId,
-        agentId: sub.agentId,
-        slug: sub.agentSlug,
-        version: sub.version,
-        mode,
-        target: targetId,
-        residency: 'staged',
-        unpackedBytes,
-      });
-
-      await this.reportSubmissionOrOutbox({
-        versionId: sub.versionId,
-        smokeStatus: 'staged',
-        ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
-        unpackedBytes,
-        smokeDurationMillis,
-        smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),
-        ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
-          ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
-          : {}),
-        smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
-        ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
-        ...(diagnostics.length ? {diagnostics} : {}),
-      });
     }
 
     return processed;
