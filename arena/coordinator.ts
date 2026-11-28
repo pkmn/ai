@@ -861,6 +861,8 @@ export class Coordinator {
         let keepStaged = false;
         let smokeDurationMillis: number;
         let threw = false;
+        let diagnosticFinished = false;
+        let diagnosticChain = Promise.resolve();
         try {
           for (const item of targetsToTest) {
             let t1Packed: string;
@@ -923,13 +925,13 @@ export class Coordinator {
               stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
               devMode: this.devMode,
               onTurn: info => {
-                if (!this.client.sendDiagnosticLive) return;
+                if (!this.client.sendDiagnosticLive || diagnosticFinished) return;
                 const p1Label = `${sub.agentName} (P1)`;
                 const p2Label = `${sub.agentName} (P2)`;
                 const lines = arbiter
                   .rewriteBlindPlayerNames(info.omniscientLog, p1Label, p2Label)
                   .split('\n');
-                return this.client.sendDiagnosticLive({
+                const payload: arena.DiagnosticLivePayload = {
                   versionId: sub.versionId,
                   agentId: sub.agentId,
                   agentSlug: sub.agentSlug,
@@ -961,7 +963,15 @@ export class Coordinator {
                   },
                   lines,
                   ...(info.winHistory?.length ? {winHistory: info.winHistory} : {}),
-                }).then(() => undefined).catch(() => undefined);
+                };
+                const next = diagnosticChain.then(() => {
+                  if (diagnosticFinished) return;
+                  return this.client.sendDiagnosticLive?.(payload)
+                    .then(() => undefined)
+                    .catch(() => undefined);
+                });
+                diagnosticChain = next;
+                return next;
               },
             });
             const res = await game.run();
@@ -1026,6 +1036,8 @@ export class Coordinator {
           if (!keepStaged) {
             this.cleanupUnpackedAgent(mode, targetId);
           }
+          diagnosticFinished = true;
+          await diagnosticChain;
           if (this.client.sendDiagnosticLive) {
             await this.client.sendDiagnosticLive({
               done: true,

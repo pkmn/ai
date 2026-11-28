@@ -1532,6 +1532,57 @@ describe('Arena SSE streams', () => {
 
     expect(ctrl.getState().smokeTesting).toEqual({slug: 'foul-play', name: 'Foul Play'});
   });
+
+  test('ignores late diagnostic-live frames after done', async () => {
+    const diagFrame: arena.DiagnosticLivePayload = {
+      versionId: 42,
+      agentId: 1,
+      agentSlug: '0-error',
+      agentName: '0 ERROR',
+      version: '1.0.0',
+      format: 'gen9ou',
+      targetName: 'Gen 9 OU',
+      phase: 'battle',
+      turn: 1,
+      turnStartedAt: 1_760_000_000,
+      turnBudgetSeconds: 150,
+      incrementSeconds: 15,
+      p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+      p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+      lines: ['|turn|1'],
+    };
+    await client.sendDiagnosticLive(diagFrame);
+    await client.sendDiagnosticLive({done: true, agentId: 1, versionId: 42});
+    await client.sendDiagnosticLive({...diagFrame, turn: 2});
+
+    expect(ctrl.getLiveDiagnostic(1)).toBeUndefined();
+    expect(ctrl.getState().smokeTesting).toBeUndefined();
+  });
+
+  test('clears orphaned live diagnostics on plain idle heartbeat', async () => {
+    await client.sendDiagnosticLive({
+      versionId: 43,
+      agentId: 1,
+      agentSlug: '0-error',
+      agentName: '0 ERROR',
+      version: '1.0.0',
+      format: 'gen9ou',
+      targetName: 'Gen 9 OU',
+      phase: 'battle',
+      turn: 1,
+      turnStartedAt: 1_760_000_000,
+      turnBudgetSeconds: 150,
+      incrementSeconds: 15,
+      p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+      p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+      lines: ['|turn|1'],
+    });
+    expect(ctrl.getState().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+
+    await client.sendHeartbeat({idle: true});
+    expect(ctrl.getLiveDiagnostic(1)).toBeUndefined();
+    expect(ctrl.getState().smokeTesting).toBeUndefined();
+  });
 });
 
 describe('pkmn CLI commands', () => {

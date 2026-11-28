@@ -1960,6 +1960,7 @@ export function register(app: polka.Polka, options: Options): Handle {
   const battleStreamClients = new Set<http.ServerResponse>();
   const tournamentStreamClients = new Map<string, Set<http.ServerResponse>>();
   const liveDiagnosticsByAgent = new Map<number, LiveDiagnostic>();
+  const completedDiagnosticVersions = new Map<number, number>();
   const diagnosticStreamClients = new Map<number, Set<http.ServerResponse>>();
 
   const keepaliveTimer = setInterval(() => {
@@ -2055,9 +2056,28 @@ export function register(app: polka.Polka, options: Options): Handle {
     if (clients.size === 0) diagnosticStreamClients.delete(agentId);
   };
 
+  const markDiagnosticVersionDone = (versionId: number, nowSec: number) => {
+    for (const [vid, doneAt] of completedDiagnosticVersions) {
+      if (nowSec - doneAt > DIAGNOSTIC_STALE_SECONDS) completedDiagnosticVersions.delete(vid);
+    }
+    completedDiagnosticVersions.set(versionId, nowSec);
+  };
+
+  const isDiagnosticVersionDone = (versionId: number, nowSec: number): boolean => {
+    const doneAt = completedDiagnosticVersions.get(versionId);
+    if (doneAt === undefined) return false;
+    if (nowSec - doneAt > DIAGNOSTIC_STALE_SECONDS) {
+      completedDiagnosticVersions.delete(versionId);
+      return false;
+    }
+    return true;
+  };
+
   const setLiveDiagnostic = (payload: DiagnosticLivePayload) => {
+    const nowSec = getNowSec();
     const prevSmoke = getActiveSmokeTesting();
     if ('done' in payload) {
+      markDiagnosticVersionDone(payload.versionId, nowSec);
       const existing = liveDiagnosticsByAgent.get(payload.agentId);
       if (!existing || existing.versionId === payload.versionId) {
         liveDiagnosticsByAgent.delete(payload.agentId);
@@ -2069,13 +2089,13 @@ export function register(app: polka.Polka, options: Options): Handle {
       }
       pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
       if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
-        liveUpdatedAt = getNowSec();
+        liveUpdatedAt = nowSec;
         pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
       }
       options.onDiagnosticLive?.(payload, true);
       return;
     }
-    const nowSec = getNowSec();
+    if (isDiagnosticVersionDone(payload.versionId, nowSec)) return;
     const existing = liveDiagnosticsByAgent.get(payload.agentId);
     const transition =
       existing?.versionId !== payload.versionId ||
@@ -2475,6 +2495,8 @@ export function register(app: polka.Polka, options: Options): Handle {
         smokeError: body.smokeError?.slice(0, 16_384),
         now: getNowSec(),
       });
+      const nowSec = getNowSec();
+      markDiagnosticVersionDone(result.version.id, nowSec);
       const prevSmoke = getActiveSmokeTesting();
       if (liveSmokeTesting?.slug === result.agent.slug) {
         liveSmokeTesting = undefined;
@@ -2486,7 +2508,7 @@ export function register(app: polka.Polka, options: Options): Handle {
         }
       }
       if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
-        liveUpdatedAt = getNowSec();
+        liveUpdatedAt = nowSec;
         pushBattleEvent('live', buildLiveEventPayload(liveUpdatedAt));
       }
 
@@ -2543,6 +2565,12 @@ export function register(app: polka.Polka, options: Options): Handle {
         liveSmokeTesting = body.smokeTesting
           ? {slug: body.smokeTesting.slug, name: body.smokeTesting.name}
           : undefined;
+        if (!liveSmokeTesting) {
+          for (const [agentId, snap] of liveDiagnosticsByAgent) {
+            liveDiagnosticsByAgent.delete(agentId);
+            pushDiagnosticEvent(agentId, 'done', {versionId: snap.versionId});
+          }
+        }
         liveUpdatedAt = nowSec;
         armWatchdog(nowSec);
         pushBattleEvent('live', buildLiveEventPayload(nowSec));
