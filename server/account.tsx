@@ -10,7 +10,7 @@ import type * as db from '../db';
 import {header, injectLiveBanner, renderErrorPage, renderer} from '../static/build';
 import * as util from '../static/util';
 
-import type * as arena from './arena';
+import * as arena from './arena';
 import {Auth, REGISTER_ISSUE_URL, isAdmin, isCrossSiteRequest} from './auth';
 import {extractPerspectiveLogs} from './protocol';
 import {AI_PANEL_STYLE, buildAiPanelClientJs, renderAiPanelHtml} from './render';
@@ -1247,13 +1247,14 @@ function renderActiveSection(entries: db.ActiveEntryView[]): util.Html {
                 e.se <= SETTLED_MAX_SE && e.matches >= SETTLED_MIN_MATCHES
               );
 
-              const ladderKey = e.ladderStatus === 'archived' || e.ladderStatus === 'settling'
-                ? e.ladderId
-                : e.slot;
-              const ladderHref = `/arena/ladders/${encodeURIComponent(ladderKey)}/`;
+              const href = arena.ladderHref({
+                id: e.ladderId,
+                slot: e.slot,
+                status: e.ladderStatus,
+              });
               const ladderCell = (
                 <td>
-                  <a href={ladderHref} className='subtle'>
+                  <a href={href} className='subtle'>
                     <tt>{e.ladderName}</tt>
                   </a>
                 </td>
@@ -1655,11 +1656,8 @@ function renderHistorySection(
           const ladderLabels: util.Child[] = v.ladders.map(id => {
             const ladder = ladderById.get(id);
             if (!ladder) return id;
-            const key = ladder.status === 'archived' || ladder.status === 'settling'
-              ? ladder.id
-              : ladder.slot;
             return (
-              <a href={`/arena/ladders/${encodeURIComponent(key)}/`} className='subtle'>
+              <a href={arena.ladderHref(ladder)} className='subtle'>
                 {ladder.name}
               </a>
             );

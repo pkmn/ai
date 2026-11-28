@@ -3241,17 +3241,11 @@ function renderLadderHtml(opts: {
       >
         <label htmlFor='season-select' className='muted'>Season</label>
         <select id='season-select' className='min-select' aria-label='Season'>
-          {slotSeasons.map(s => {
-            const isCurrentSlot = s.status === 'active' || s.status === 'upcoming';
-            const sHref = isCurrentSlot
-              ? `/arena/ladders/${encodeURIComponent(s.slot)}/`
-              : `/arena/ladders/${encodeURIComponent(s.id)}/`;
-            return (
-              <option value={sHref} selected={s.id === l.id}>
-                {s.name}
-              </option>
-            );
-          })}
+          {slotSeasons.map(s => (
+            <option value={arena.ladderHref(s)} selected={s.id === l.id}>
+              {s.name}
+            </option>
+          ))}
         </select>
       </div>
       <nav className={`subnav${isUpcoming ? ' hide' : ''}`} aria-label='Version filter'>
@@ -4232,8 +4226,7 @@ function renderBattlesPage(opts: {
   const allLadders = db.getLadders();
   const ladderMeta: Record<string, {name: string; href: string}> = {};
   for (const l of allLadders) {
-    const key = l.status === 'archived' || l.status === 'settling' ? l.id : l.slot;
-    const entry = {name: l.name, href: `/arena/ladders/${encodeURIComponent(key)}/`};
+    const entry = {name: l.name, href: arena.ladderHref(l)};
     ladderMeta[l.id] = entry;
     if (currentBySlot.get(l.slot)?.id === l.id) ladderMeta[l.slot] = entry;
   }

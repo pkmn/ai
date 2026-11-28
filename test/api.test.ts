@@ -1628,6 +1628,54 @@ describe('Arena SSE streams', () => {
     expect(ctrl.getState().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
     expect(ctrl.getLiveDocument().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
   });
+
+  test('uses ladder ID in enrichMatchView ladderHref for settling seasons', () => {
+    expect(arena.ladderHref({id: 'gen1ou20261109', slot: 'rby', status: 'active'}))
+      .toBe('/arena/ladders/rby/');
+    expect(arena.ladderHref({id: 'gen1ou20261109', slot: 'rby', status: 'settling'}))
+      .toBe('/arena/ladders/gen1ou20261109/');
+    expect(arena.ladderHref({id: 'gen1ou20261109', slot: 'rby', status: 'archived'}))
+      .toBe('/arena/ladders/gen1ou20261109/');
+
+    const game = {
+      gameNumber: 1 as const,
+      outcome: 'W' as const,
+      turns: 20,
+      endReason: 'normal',
+      p1: {initMillis: 50, meanTurnMillis: 100, bankSeconds: 140, peakRam: 256},
+      p2: {initMillis: 50, meanTurnMillis: 100, bankSeconds: 140, peakRam: 256},
+    };
+    const enriched = arena.enrichMatchView(tmpDir, {
+      id: 'rby-0000001',
+      ladderId: 'gen1ou20261109',
+      ladderName: 'RBY',
+      slot: 'rby',
+      format: 'gen1ou',
+      teamMode: 'harvested',
+      ladderStatus: 'settling',
+      seed: '1,2,3,4',
+      p1: {
+        slug: 'a',
+        name: 'A',
+        version: '1.0.0',
+        initMillis: 50,
+        meanTurnMillis: 100,
+        peakRam: 256,
+      },
+      p2: {
+        slug: 'b',
+        name: 'B',
+        version: '1.0.0',
+        initMillis: 50,
+        meanTurnMillis: 100,
+        peakRam: 256,
+      },
+      games: [game, {...game, gameNumber: 2 as const}],
+      category: 'WW',
+      completedAt: 1_760_000_000,
+    });
+    expect(enriched.ladderHref).toBe('/arena/ladders/gen1ou20261109/');
+  });
 });
 
 describe('pkmn CLI commands', () => {

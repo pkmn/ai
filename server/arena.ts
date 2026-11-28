@@ -860,10 +860,15 @@ export function normalizeLiveViewer(input?: LiveViewerInput): LiveViewerState | 
   };
 }
 
+export function ladderHref(ladder: {id: string; slot: string; status: db.LadderStatus}): string {
+  const key = ladder.status === 'archived' || ladder.status === 'settling'
+    ? ladder.id
+    : ladder.slot;
+  return `/arena/ladders/${encodeURIComponent(key)}/`;
+}
+
 export function enrichMatchView(publicDir: string, m: db.RecentMatchView): BattleHistoryEntry {
-  const ladderHref = m.ladderStatus === 'archived'
-    ? `/arena/ladders/${encodeURIComponent(m.ladderId)}/`
-    : `/arena/ladders/${encodeURIComponent(m.slot)}/`;
+  const href = ladderHref({id: m.ladderId, slot: m.slot, status: m.ladderStatus});
   const [g1, g2] = m.games;
   const canExposeLogs =
     m.teamMode === 'random' ||
@@ -871,7 +876,7 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
   if (!canExposeLogs) {
     return {
       ...m,
-      ladderHref,
+      ladderHref: href,
       games: [{...g1}, {...g2}],
     };
   }
@@ -890,7 +895,7 @@ export function enrichMatchView(publicDir: string, m: db.RecentMatchView): Battl
     : undefined;
   return {
     ...m,
-    ladderHref,
+    ladderHref: href,
     games: [
       {...g1, ...(game1LogHref !== undefined ? {logHref: game1LogHref} : {})},
       {...g2, ...(game2LogHref !== undefined ? {logHref: game2LogHref} : {})},

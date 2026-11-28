@@ -135,13 +135,6 @@ interface LadderLink {
   name: string;
 }
 
-function resolveLadderHref(ladder: db.LadderRow): string {
-  const key = ladder.status === 'archived' || ladder.status === 'settling'
-    ? ladder.id
-    : ladder.slot;
-  return `/arena/ladders/${encodeURIComponent(key)}/`;
-}
-
 function buildVersionDynamicStats(
   entry: db.AgentLadderProfileEntry,
   adjacentLos: ReadonlyMap<number, number>,
@@ -2210,7 +2203,7 @@ function buildLadderProfileBundle(opts: {
     </>
   );
 
-  const ladderLink: LadderLink = {href: resolveLadderHref(l), name: l.name};
+  const ladderLink: LadderLink = {href: arena.ladderHref(l), name: l.name};
   const vstats: Record<string, VersionDynamicStats> = {
     all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos, ladderLink),
   };
