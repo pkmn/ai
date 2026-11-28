@@ -777,7 +777,7 @@ export class Coordinator {
         const sysInfo = await this.getSystemInfo?.();
         await this.client.sendHeartbeat({
           idle: true,
-          smokeTesting: {slug: sub.agentSlug, name: sub.agentName},
+          smokeTesting: {slug: sub.agentSlug, name: sub.agentName, versionId: sub.versionId},
           ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
           ...(sysInfo ? {system: sysInfo} : {}),
         }).catch(() => undefined);

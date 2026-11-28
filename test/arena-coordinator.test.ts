@@ -209,7 +209,7 @@ describe('Coordinator', () => {
       expect(h.getLadderTeamsCalls()).toBe(0);
       expect(h.heartbeats).toContainEqual({
         idle: true,
-        smokeTesting: {slug: 'foul-play', name: 'Foul Play'},
+        smokeTesting: {slug: 'foul-play', name: 'Foul Play', versionId: 30},
       });
       expect(h.reportedStatuses).toHaveLength(1);
       expect(h.reportedStatuses[0].smokeStatus).toBe('staged');
@@ -272,7 +272,7 @@ describe('Coordinator', () => {
       ).rejects.toThrow(/missing sample team pool/);
       expect(h.getLadderTeamsCalls()).toBe(0);
       expect(h.heartbeats).toEqual([
-        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play'}},
+        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play', versionId: 30}},
         {idle: true},
       ]);
       expect(h.reportedStatuses).toHaveLength(0);
@@ -296,7 +296,7 @@ describe('Coordinator', () => {
         )
       ).rejects.toThrow(/simulated sqlite write failure/);
       expect(h.heartbeats).toEqual([
-        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play'}},
+        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play', versionId: 30}},
         {idle: true},
       ]);
     } finally {

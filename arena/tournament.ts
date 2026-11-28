@@ -2096,6 +2096,7 @@ export class Coordinator {
               version: sub.version,
               format: smokeFormat,
               targetName: meta?.name ?? `Tournament #${tid}`,
+              tournament: true,
               phase: state.turn === 0 ? 'preview' : 'battle',
               turn: state.turn,
               ...(activeSlot ? {activeSlot} : {}),
@@ -2192,6 +2193,7 @@ export class Coordinator {
             done: true,
             agentId: sub.agentId,
             versionId: sub.versionId,
+            tournament: true,
           }).catch(() => undefined);
         }
       }

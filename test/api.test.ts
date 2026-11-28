@@ -1583,6 +1583,51 @@ describe('Arena SSE streams', () => {
     expect(ctrl.getLiveDiagnostic(1)).toBeUndefined();
     expect(ctrl.getState().smokeTesting).toBeUndefined();
   });
+
+  test('excludes tournament diagnostics from ladder smokeTesting status', async () => {
+    await client.sendDiagnosticLive({
+      versionId: 44,
+      agentId: 1,
+      agentSlug: '0-error',
+      agentName: '0 ERROR',
+      version: '1.0.0',
+      format: 'gen9ou',
+      targetName: 'Tournament #1: Gen 9 OU',
+      tournament: true,
+      phase: 'battle',
+      turn: 1,
+      turnStartedAt: 1_760_000_000,
+      turnBudgetSeconds: 150,
+      incrementSeconds: 15,
+      p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+      p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+      lines: ['|turn|1'],
+    });
+
+    expect(ctrl.getLiveDiagnostic(1)?.tournament).toBe(true);
+    expect(ctrl.getState().smokeTesting).toBeUndefined();
+    expect(ctrl.getLiveDocument().smokeTesting).toBeUndefined();
+
+    // Plain ladder idle heartbeat leaves concurrent GCP tournament diagnostic intact.
+    await client.sendHeartbeat({idle: true});
+    expect(ctrl.getLiveDiagnostic(1)?.versionId).toBe(44);
+  });
+
+  test('does not let tournament diagnostic done clobber active ladder smokeTesting', async () => {
+    await client.sendHeartbeat({
+      idle: true,
+      smokeTesting: {slug: '0-error', name: '0 ERROR', versionId: 100},
+    });
+    await client.sendDiagnosticLive({
+      done: true,
+      agentId: 1,
+      versionId: 200,
+      tournament: true,
+    });
+
+    expect(ctrl.getState().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+    expect(ctrl.getLiveDocument().smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+  });
 });
 
 describe('pkmn CLI commands', () => {
