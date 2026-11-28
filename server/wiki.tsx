@@ -996,12 +996,11 @@ export class Wiki {
   }
 
   getVisibleProjectWikiHref(agentName: string, req?: http.IncomingMessage): string | undefined {
-    this.refreshMetadata();
-    const canonical = this.resolveSlug(`${PROJECTS_PREFIX}${agentName}`);
+    const canonical = this.resolveSlug(`${PROJECTS_PREFIX}${agentName}`, true);
     if (!isProjectNamespace(canonical) || !this.projectPages.has(canonical)) return undefined;
     const record = this.readCanonicalRecord(canonical);
     if (!record) return undefined;
-    const vis = this.resolveVisibility(canonical, record.visibility);
+    const vis: PageVisibility = record.visibility ?? 'developers';
     if (vis !== 'public') {
       if (!req) return undefined;
       const login = this.getSessionUser(req);
