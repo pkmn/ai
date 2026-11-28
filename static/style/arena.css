@@ -27,6 +27,14 @@ h3 {
   font-size: 1.15em;
 }
 
+.heading-arrow {
+  display: inline-block;
+  width: 0.78em;
+  height: 0.78em;
+  margin-left: 0.25ch;
+  vertical-align: -0.06em;
+}
+
 .arena-blurb {
   max-width: 80ch;
   margin: 0 auto 1.25rem;

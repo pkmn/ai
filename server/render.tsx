@@ -3277,7 +3277,21 @@ function renderLadderHtml(opts: {
       </section>
       {!isUpcoming && (
         <h3 id='battles'>
-          <a href={`/arena/battles/#${encodeURIComponent(l.slot)}`}>Battles</a>
+          <a href={`/arena/battles/#${encodeURIComponent(l.slot)}`}>
+            Battles
+            <svg
+              className='heading-arrow'
+              viewBox='0 0 14 14'
+              fill='none'
+              stroke='currentColor'
+              strokeWidth='2'
+              strokeLinecap='round'
+              strokeLinejoin='round'
+              aria-hidden='true'
+            >
+              <path d='M2.5 7h8.5M7.5 3.5 11 7l-3.5 3.5' />
+            </svg>
+          </a>
         </h3>
       )}
       <section id='history' className={historyRes.isEmpty || isUpcoming ? 'hide' : undefined}>

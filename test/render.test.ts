@@ -4819,9 +4819,8 @@ describe('JSON route parity & retired pool archives', () => {
       expect(ladderHtml).not.toContain('back-link');
       expect(ladderHtml).toContain('class="ladder-live"');
       expect(ladderHtml).toContain('Alpha vs. Beta');
-      expect(ladderHtml).toContain(
-        '<h3 id="battles"><a href="/arena/battles/#rby">Battles</a></h3>'
-      );
+      expect(ladderHtml).toContain('<h3 id="battles"><a href="/arena/battles/#rby">Battles<svg');
+      expect(ladderHtml).toContain('class="heading-arrow"');
       expect(ladderHtml.indexOf('id="battles"')).toBeGreaterThan(
         ladderHtml.indexOf('id="standings"')
       );
