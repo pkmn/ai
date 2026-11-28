@@ -770,11 +770,18 @@ export function buildBattleDetailClientJs(): string {
       const g1EndSuffix = end1.show ? (' · ' + end1.html) : '';
       const g2EndSuffix = end2.show ? (' · ' + end2.html) : '';
 
+      const ladderMetaPrefix = !omitOutcome && m.ladderHref && m.ladderName
+        ? '<a href="' + esc(m.ladderHref) + '"><tt><strong>' +
+          esc(m.ladderName) + '</strong></tt></a> · '
+        : '';
+
       return '<div class="battle-detail"' + replayAttrs + '>' +
         '<div class="battle-detail-meta">' +
-          '<time class="muted" data-epoch="' + m.completedAt + '">' +
-            esc(localTimestamp(m.completedAt)) +
-          '</time>' +
+          '<span>' + ladderMetaPrefix +
+            '<time class="muted" data-epoch="' + m.completedAt + '">' +
+              esc(localTimestamp(m.completedAt)) +
+            '</time>' +
+          '</span>' +
           '<span><span class="muted">Seed:</span> <code>' + esc(m.seed) + '</code></span>' +
         '</div>' +
         '<div class="battle-detail-grid">' +
@@ -1043,7 +1050,8 @@ export function buildBattleDetailClientJs(): string {
 
 function buildBattlesScript(
   initialLiveJson: string,
-  agentLinksJson: string
+  agentLinksJson: string,
+  ladderMetaJson: string
 ): string {
   return `
   (() => {
@@ -1060,6 +1068,7 @@ function buildBattlesScript(
   document.addEventListener('DOMContentLoaded', () => {
     let state = ${initialLiveJson} || {};
     const agentLinks = ${agentLinksJson};
+    const ladderMeta = ${ladderMetaJson};
     const HP_PCT_KEY = 'pkmn-live-hp-percent';
     const livePanelWrap = document.getElementById('live-panel-wrap');
     const liveHpToggle = document.getElementById('live-hp-pct');
@@ -1433,7 +1442,12 @@ function buildBattlesScript(
       const livePanelAiHtml = liveAiHtml
         ? '<div class="ai-panel">' + liveAiHtml + '</div>'
         : '';
-      livePanel.innerHTML = '<div class="live-header"><span><code>' + esc(l.matchId) +
+      const lm = ladderMeta[l.ladderId] || (l.slot && ladderMeta[l.slot]);
+      const liveLadderPrefix = lm
+        ? '<a href="' + esc(lm.href) + '"><tt><strong>' + esc(lm.name) + '</strong></tt></a> · '
+        : '';
+      livePanel.innerHTML = '<div class="live-header"><span>' + liveLadderPrefix +
+        '<code>' + esc(l.matchId) +
         '</code> · <strong>Game ' + l.game +
         ' / 2</strong>' + stepText + '</span>' +
         '<span class="muted">Heartbeat <tt>#' + l.heartbeatSeq + '</tt> (<tt id="hb-age">' +
@@ -1728,6 +1742,13 @@ function buildBattlesScript(
       if (!location.hash) return;
       const id = decodeURIComponent(location.hash.slice(1));
       if (!id || id === 'live' || id === 'history') return;
+      const fmtRadio = document.getElementById('bf-' + id);
+      if (fmtRadio && fmtRadio.tagName === 'INPUT' && fmtRadio.name === 'bformat') {
+        fmtRadio.checked = true;
+        currentFmt = fmtRadio.value;
+        loadHistoryPage(currentFmt, 1, false);
+        return;
+      }
       const el = document.getElementById(id);
       if (el && el.tagName === 'TR') {
         el.classList.remove('hide');
@@ -2911,6 +2932,7 @@ function renderLadderHtml(opts: {
   db: db.Database;
   renderer: build.Renderer;
   links: AgentLinkContext;
+  liveMatch?: arena.LiveMatch;
   restarting?: boolean;
   nowSec: number;
 }): string {
@@ -2922,6 +2944,7 @@ function renderLadderHtml(opts: {
     db,
     renderer,
     links,
+    liveMatch,
     restarting,
     nowSec,
   } = opts;
@@ -3173,23 +3196,43 @@ function renderLadderHtml(opts: {
   }
 
   const archive = arena.resolveLadderArchive(publicDir, l);
+  const showArchive =
+    Boolean(((l.team === 'pools' && l.status === 'archived') || l.team === 'random') && archive);
+  const isUpcoming = l.status === 'upcoming';
 
   let ladderBottomNote: util.Child;
-  if (((l.team === 'pools' && l.status === 'archived') || l.team === 'random') && archive) {
+  if (!isUpcoming) {
+    const battlesHref = `/arena/battles/#${encodeURIComponent(l.slot)}`;
     ladderBottomNote = (
       <p className='battle-note muted'>
-        Data:{' '}
-        <a href={archive.href}>
-          <code>{archive.name}</code>
-        </a>
+        <a href={battlesHref}>Recent {l.name} battles</a>
+        {showArchive && archive && (
+          <>
+            {' · '}Data:{' '}
+            <a href={archive.href}>
+              <code>{archive.name}</code>
+            </a>
+          </>
+        )}
       </p>
     );
   }
 
+  const isLadderLive = !isUpcoming &&
+    liveMatch !== undefined &&
+    (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
+  const ladderLiveNote: util.Child = isLadderLive && liveMatch ? (
+    <p className='ladder-live'>
+      <a href='/arena/battles/' className='live-pill'>{'\u25cf'} LIVE</a>{' '}
+      <a href='/arena/battles/' className='subtle'>
+        {liveMatch.p1.name} vs. {liveMatch.p2.name}
+      </a>
+    </p>
+  ) : undefined;
+
   const historyRes = renderHistorySection(l, topHistoryAgents, snapshots, nowSec);
   const matchupsRes = renderMatchupsSection(entries, pairs, links, l.status);
 
-  const isUpcoming = l.status === 'upcoming';
   const ladderContent = String(
     <>
       <nav aria-label='Format'>
@@ -3234,6 +3277,7 @@ function renderLadderHtml(opts: {
           </li>
         </ul>
       </nav>
+      {ladderLiveNote}
       <section id='standings'>
         {standingsPane}
       </section>
@@ -3803,7 +3847,8 @@ function renderLiveSlotCard(
 function renderLivePanelInner(
   liveDoc: arena.LiveDocument | undefined,
   nowSec: number,
-  links: AgentLinkContext
+  links: AgentLinkContext,
+  ladderMeta: Readonly<Record<string, {name: string; href: string}>> = {}
 ): util.Child {
   if (!liveDoc?.live || liveDoc.stale) {
     const smoke = liveDoc?.smokeTesting;
@@ -3835,11 +3880,18 @@ function renderLivePanelInner(
 
   const l = liveDoc.live;
   const hbAge = Math.max(0, nowSec - liveDoc.updatedAt);
+  const liveLadder = ladderMeta[l.ladderId] ?? (l.slot ? ladderMeta[l.slot] : undefined);
 
   return (
     <>
       <div className='live-header'>
         <span>
+          {liveLadder && (
+            <>
+              <a href={liveLadder.href}><tt><strong>{liveLadder.name}</strong></tt></a>
+              {' · '}
+            </>
+          )}
           <code>{l.matchId}</code> · <strong>Game {l.game} / 2</strong>
           {l.phase === 'init'
             ? <> · Initializing (<code>/ready</code>)</>
@@ -4073,7 +4125,15 @@ export function battleInlineDetailHtml(
       data-g2-log={g2.logHref}
     >
       <div className='battle-detail-meta'>
-        <util.Time epoch={m.completedAt} className='muted' />
+        <span>
+          {!omitOutcome && m.ladderHref && m.ladderName && (
+            <>
+              <a href={m.ladderHref}><tt><strong>{m.ladderName}</strong></tt></a>
+              {' · '}
+            </>
+          )}
+          <util.Time epoch={m.completedAt} className='muted' />
+        </span>
         <span>
           <span className='muted'>Seed:</span> <code>{m.seed}</code>
         </span>
@@ -4151,9 +4211,17 @@ function renderBattlesPage(opts: {
   const {publicDir} = links;
   const countsBySlot = liveDoc?.countsBySlot ?? db.getMatchCountsBySlot();
   const currentBySlot = new Map(db.getCurrentLadders().map(l => [l.slot, l]));
+  const allLadders = db.getLadders();
+  const ladderMeta: Record<string, {name: string; href: string}> = {};
+  for (const l of allLadders) {
+    const key = l.status === 'archived' || l.status === 'settling' ? l.id : l.slot;
+    const entry = {name: l.name, href: `/arena/ladders/${encodeURIComponent(key)}/`};
+    ladderMeta[l.id] = entry;
+    if (currentBySlot.get(l.slot)?.id === l.id) ladderMeta[l.slot] = entry;
+  }
   const filterSlots: Array<{slot: db.LadderSlot; name: string}> = [];
   const seenSlots = new Set<db.LadderSlot>();
-  for (const l of db.getLadders()) {
+  for (const l of allLadders) {
     if (seenSlots.has(l.slot)) continue;
     const current = currentBySlot.get(l.slot);
     if (!current && !(countsBySlot[l.slot] > 0)) continue;
@@ -4315,7 +4383,7 @@ function renderBattlesPage(opts: {
         </div>
         <div className='live-panel' id='live-panel-wrap'>
           <div id='live-panel'>
-            {renderLivePanelInner(liveDoc, nowSec, links)}
+            {renderLivePanelInner(liveDoc, nowSec, links, ladderMeta)}
           </div>
           <div
             className={`battle-viewer-wrap${liveMatchWithLines ? '' : ' hide'}`}
@@ -4367,7 +4435,8 @@ function renderBattlesPage(opts: {
       <script>
         {util.raw(buildBattlesScript(
           safeInlineJson(initialState),
-          safeInlineJson(agentLinks)
+          safeInlineJson(agentLinks),
+          safeInlineJson(ladderMeta)
         ))}
       </script>
     </>
@@ -4639,6 +4708,7 @@ export function register(app: polka.Polka, options: Options) {
         db,
         renderer,
         links: getLinks(),
+        liveMatch: !state.stale ? state.live : undefined,
         restarting: !state.stale && state.restarting,
         nowSec: getNowSec(),
       }),

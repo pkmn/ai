@@ -67,6 +67,22 @@ h3 {
   font-size: 0.95em;
 }
 
+.ladder-live {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75ch;
+  align-items: center;
+  justify-content: center;
+  margin: -0.35rem 0 1rem;
+  font-size: 0.9em;
+}
+
+.battle-note {
+  margin: 1.25rem 0 0;
+  font-size: 0.88em;
+  text-align: center;
+}
+
 .muted {
   color: rgb(var(--fg-base) / 50%);
 }
