@@ -3213,9 +3213,9 @@ function renderLadderHtml(opts: {
     );
   }
 
-  const isLadderLive = !isUpcoming &&
+  const isLadderLive = l.status !== 'upcoming' && l.status !== 'archived' &&
     liveMatch !== undefined &&
-    (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
+    (liveMatch.ladderId ? liveMatch.ladderId === l.id : liveMatch.slot === l.slot);
   const ladderLiveNote: util.Child = isLadderLive && liveMatch ? (
     <p className='ladder-live'>
       <a href='/arena/battles/' className='live-pill'>{'\u25cf'} LIVE</a>{' '}
@@ -3479,9 +3479,9 @@ function renderArenaHubHtml(opts: {
       leaderCell = <td className='muted'>{stateLabel}</td>;
     }
 
-    const isLive = l.status !== 'upcoming' &&
+    const isLive = l.status !== 'upcoming' && l.status !== 'archived' &&
       liveMatch !== undefined &&
-      (liveMatch.ladderId === l.id || liveMatch.slot === l.slot);
+      (liveMatch.ladderId ? liveMatch.ladderId === l.id : liveMatch.slot === l.slot);
     let lastCell: util.Child = <td className='num muted'>—</td>;
     if (isLive) {
       lastCell = (

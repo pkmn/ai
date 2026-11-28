@@ -526,6 +526,55 @@ describe('empty Arena SSR views', () => {
     }
   });
 
+  test('omits live indicator on archived ladder when another season is live', async () => {
+    db.setLadderStatus('gen9ou20261109', 'archived', NOW);
+    h.arenaHandle.setLiveState({
+      stale: false,
+      updatedAt: NOW,
+      live: {
+        heartbeatSeq: 1,
+        matchId: 'gen9ou-0000099',
+        ladderId: 'gen9ou20270101',
+        slot: 'sv',
+        format: 'gen9ou',
+        game: 1,
+        turn: 4,
+        activeSlot: 'p1',
+        turnStartedAt: NOW - 2,
+        turnBudgetSeconds: 60,
+        incrementSeconds: 15,
+        p1: {
+          slug: 'alpha',
+          name: 'Alpha',
+          version: '1.0.0',
+          bankSeconds: 150,
+          lastTurnMillis: 100,
+          meanTurnMillis: 100,
+          ram: 256,
+        },
+        p2: {
+          slug: 'beta',
+          name: 'Beta',
+          version: '1.0.0',
+          bankSeconds: 150,
+          lastTurnMillis: 100,
+          meanTurnMillis: 100,
+          ram: 256,
+        },
+      },
+    });
+    try {
+      const svLadderHtml = await h.getText('/arena/ladders/gen9ou20261109/');
+      expect(svLadderHtml).not.toContain('class="ladder-live"');
+      expect(svLadderHtml).not.toContain('Alpha vs. Beta');
+    } finally {
+      h.arenaHandle.setLiveState({stale: false, updatedAt: NOW, live: undefined});
+      db.db.prepare(
+        "UPDATE ladders SET status = 'upcoming', archived_at = NULL WHERE id = ?"
+      ).run('gen9ou20261109');
+    }
+  });
+
   test('renders empty active status notice on /arena/ladders/sv/', async () => {
     db.db.prepare("UPDATE ladders SET status = 'active' WHERE id = ?").run('gen9ou20261109');
     try {
