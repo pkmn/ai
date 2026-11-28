@@ -1662,11 +1662,9 @@ function renderHistorySection(
               </a>
             );
           });
-          const tourneyLabels: util.Child[] = (v.tournamentNames ?? []).map((name, ti) => {
+          const tourneyLabels: util.Child[] = v.tournamentEntries.map(({id: tid, name}) => {
             const m = /^Tournament #(\d+)/.exec(name);
             const label = m ? `T#${m[1]}` : name;
-            const tid = v.tournaments[ti];
-            if (!tid) return m ? <span title={name}>{label}</span> : name;
             return (
               <a
                 href={`/arena/tournaments/${encodeURIComponent(tid)}/`}

@@ -53,6 +53,7 @@ export interface AgentVersionRow {
 export interface VersionHistoryView extends AgentVersionRow {
   activeLadderNames: string[];
   tournamentNames: string[];
+  tournamentEntries: Array<{id: string; name: string}>;
   queueAhead?: number;
   diagnostics?: smokeDiagnostics.Summary[];
   smokeInfoStatus?: smokeDiagnostics.InfoStatus;
@@ -317,17 +318,17 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
   }
 
   const entrantRows = db.prepare(`
-    SELECT te.version_id, t.name
+    SELECT te.version_id, te.tournament_id, t.name
     FROM tournament_entrants te
     JOIN tournaments t ON t.id = te.tournament_id
     WHERE te.agent_id = ?
     ORDER BY t.starts_at ASC, t.id ASC
-  `).all(agentId) as Array<{version_id: number; name: string}>;
+  `).all(agentId) as Array<{version_id: number; tournament_id: string; name: string}>;
 
-  const tourneysByVersion = new Map<number, string[]>();
+  const tourneysByVersion = new Map<number, Array<{id: string; name: string}>>();
   for (const r of entrantRows) {
     const list = tourneysByVersion.get(r.version_id) ?? [];
-    list.push(r.name);
+    list.push({id: r.tournament_id, name: r.name});
     tourneysByVersion.set(r.version_id, list);
   }
 
@@ -336,12 +337,13 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
   return rawVersions.map(v => {
     const mapped = mapVersionRow(v);
     const enrolled = tourneysByVersion.get(v.id) ?? [];
-    let tournamentNames = enrolled;
-    if (!tournamentNames.length) {
-      tournamentNames = mapped.tournaments.map(
-        tid => getTournament(db, tid)?.name ?? `Tournament #${tid}`
-      );
-    }
+    const tournamentEntries = enrolled.length
+      ? enrolled
+      : mapped.tournaments.map(tid => ({
+        id: tid,
+        name: getTournament(db, tid)?.name ?? `Tournament #${tid}`,
+      }));
+    const tournamentNames = tournamentEntries.map(t => t.name);
     const queueAhead = mapped.smokeStatus === 'pending'
       ? countPendingAhead(
         db,
@@ -359,6 +361,7 @@ export function getVersionsForAgent(db: DatabaseSync, agentId: number): VersionH
       ...mapped,
       activeLadderNames: activeByVersion.get(v.id) ?? [],
       tournamentNames,
+      tournamentEntries,
       ...(queueAhead !== undefined ? {queueAhead} : {}),
       ...(diagnostics?.length ? {diagnostics} : {}),
       ...(smokeInfoStatus !== undefined ? {smokeInfoStatus} : {}),

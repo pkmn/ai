@@ -2657,5 +2657,65 @@ describe('account routes', () => {
       expect(res.status).toBe(200);
       expect(submissionChanges).toBe(1);
     });
+
+    test('aligns /account/ history tournament links with enrolled tournament IDs', async () => {
+      const fp = db.getAgentBySlug('foul-play')!;
+      db.upsertTournament({
+        id: '1',
+        name: 'Tournament #1: RBY',
+        format: 'gen1ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: 'Test Host',
+        status: 'scheduled',
+        startsAt: currentNow + 3 * 86400,
+      });
+      db.upsertTournament({
+        id: '2',
+        name: 'Tournament #2: ADV',
+        format: 'gen3ou',
+        version: '0.11.0',
+        gamesPerMatchup: 2,
+        parallelTables: 1,
+        hardware: 'Test Host',
+        status: 'scheduled',
+        startsAt: currentNow + 5 * 86400,
+      });
+      const created = db.createSubmission({
+        agentId: fp.id,
+        version: '3.4.0',
+        package: 'oci',
+        url: 'ghcr.io/pkmn/fp:3.4.0',
+        sha256: SHA_A,
+        ladderIds: [],
+        tournamentIds: ['2', '1'],
+        now: currentNow,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '1',
+        agentId: fp.id,
+        versionId: created.id,
+        seed: 1,
+      });
+      db.upsertTournamentEntrant({
+        tournamentId: '2',
+        agentId: fp.id,
+        versionId: created.id,
+        seed: 1,
+      });
+
+      const res = await fetch(`${baseUrl}/account/`, {
+        headers: {Cookie: cookieFor('pmariglia')},
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain(
+        '<a href="/arena/tournaments/1/" class="subtle" title="Tournament #1: RBY">T#1</a>'
+      );
+      expect(html).toContain(
+        '<a href="/arena/tournaments/2/" class="subtle" title="Tournament #2: ADV">T#2</a>'
+      );
+    });
   });
 });
