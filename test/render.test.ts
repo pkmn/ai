@@ -476,6 +476,7 @@ describe('empty Arena SSR views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     h = await startRenderHarness({db, publicDir: tmpPublic, now: NOW});
   });
@@ -569,6 +570,7 @@ describe('populated Arena leaderboard views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
 
     forceLadderActive(db, 'gen1ou20261109');
@@ -1162,6 +1164,7 @@ describe('tournament SSR views', () => {
     seedStaticPublicAssets(tmpPublic);
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     forceLadderActive(db, 'gen9ou20261109');
 
@@ -1701,6 +1704,7 @@ describe('SSR cache invalidation', () => {
     fs.mkdirSync(tmpPublic, {recursive: true});
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
   });
 
@@ -2419,6 +2423,7 @@ describe('JSON route parity & retired pool archives', () => {
     fs.mkdirSync(tmpPublic, {recursive: true});
     db = new Database(':memory:', {now: DAY_1});
     db.syncLadders(undefined, DAY_1);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     syncTestProjects(db, path.join(tmpDir, 'avatars'), DAY_1);
     forceLadderActive(db, 'gen1ou20261109');
     forceLadderActive(db, 'gen9championsvgc2026regmc');

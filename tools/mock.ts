@@ -1167,10 +1167,10 @@ export class Runner {
     );
 
     if (fs.existsSync(this.baseLaddersFile)) {
-      let rawLadders = fs.readFileSync(this.baseLaddersFile, 'utf8');
-      if (openLadders) {
-        rawLadders = rawLadders.replace(/status:\s*upcoming/g, 'status: active');
-      }
+      const rawLadders = fs.readFileSync(this.baseLaddersFile, 'utf8').replace(
+        /status:\s*(?:upcoming|active)/g,
+        openLadders ? 'status: active' : 'status: upcoming'
+      );
       if (path.resolve(this.baseLaddersFile) !== path.resolve(this.laddersFile)) {
         fs.mkdirSync(path.dirname(this.laddersFile), {recursive: true});
         fs.writeFileSync(this.laddersFile, rawLadders, 'utf8');

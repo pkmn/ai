@@ -344,6 +344,7 @@ describe('account routes', () => {
     const nextDb = new Database(':memory:');
     db = nextDb;
     nextDb.syncLadders();
+    nextDb.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     nextDb.syncProjectsFromYaml(PROJECTS_YAML, path.join(tmpDir, 'avatars'), currentNow);
     nextDb.setAgentLadders('0-error', ALL_SLOTS, currentNow);
     nextDb.setAgentLadders('foul-play', ALL_SLOTS, currentNow);

@@ -412,7 +412,7 @@ describe('ladders configuration', () => {
     const db = new database.Database(':memory:');
     try {
       db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
-      expect(db.getActiveLadders()).toEqual([]);
+      expect(db.getActiveLadders()).toHaveLength(5);
       expect(db.getCurrentLadders().map(l => ({
         id: l.id,
         slot: l.slot,
@@ -431,7 +431,7 @@ describe('ladders configuration', () => {
           team: 'harvested',
           min: 2,
           discord: '1563716887131459685',
-          status: 'upcoming',
+          status: 'active',
         },
         {
           id: 'gen3ou20261109',
@@ -441,7 +441,7 @@ describe('ladders configuration', () => {
           team: 'harvested',
           min: 2,
           discord: '1563717163481825472',
-          status: 'upcoming',
+          status: 'active',
         },
         {
           id: 'gen9ou20261109',
@@ -451,7 +451,7 @@ describe('ladders configuration', () => {
           team: 'harvested',
           min: 2,
           discord: '1563717708720377977',
-          status: 'upcoming',
+          status: 'active',
         },
         {
           id: 'gen9randombattle20261109',
@@ -461,7 +461,7 @@ describe('ladders configuration', () => {
           team: 'random',
           min: 2,
           discord: '1563718027994992752',
-          status: 'upcoming',
+          status: 'active',
         },
         {
           id: 'gen9championsvgc2026regmc',
@@ -471,7 +471,7 @@ describe('ladders configuration', () => {
           team: 'pools',
           min: 4,
           discord: '1564121375558340768',
-          status: 'upcoming',
+          status: 'active',
         },
       ]);
     } finally {
@@ -2448,6 +2448,7 @@ describe('tournament standings', () => {
   const createTelemetryDb = () => {
     const telDb = new database.Database(':memory:', {now: 1_760_000_000});
     telDb.syncLadders(database.LADDERS_FILE, 1_760_000_000);
+    telDb.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     telDb.syncProjectsFromYaml(`
 - slug: alpha
   name: Alpha
@@ -3309,6 +3310,7 @@ describe('per-ladder qualification & migrations', () => {
       const db = new database.Database(':memory:');
       try {
         db.syncLadders(database.LADDERS_FILE, 1_760_000_000);
+        db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
         const yamlText = `
 - name: Magpie
   active: 2025
@@ -5430,6 +5432,7 @@ describe('discord watches', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
       db.syncLadders(undefined, 1_700_000_000);
+      db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
       db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
       const alpha = db.getAgentBySlug('alpha')!;
       db.setAgentLadders(alpha.id, ['vgc'], 1_700_000_000);
@@ -5670,6 +5673,7 @@ describe('discord watches', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
       db.syncLadders(undefined, 1_700_000_000);
+      db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
       db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
       const ladderId = 'gen9championsvgc2026regmc';
       const alpha = db.getAgentBySlug('alpha')!;
@@ -5715,6 +5719,7 @@ describe('discord watches', () => {
     const db = new database.Database(':memory:', {now: 1_700_000_000});
     try {
       db.syncLadders(undefined, 1_700_000_000);
+      db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
       db.syncProjectsFromYaml(sampleProjects, undefined, 1_700_000_000);
       const ladderId = 'gen9championsvgc2026regmc';
       const alpha = db.getAgentBySlug('alpha')!;
@@ -5904,6 +5909,7 @@ describe('diagnostic version pruning', () => {
   function setupDb(now = 1_760_000_000) {
     const db = new database.Database(':memory:', {now});
     db.syncLadders(undefined, now);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     db.syncProjectsFromYaml(sampleProjects, undefined, now);
     db.setAgentLadders('alpha', ['rby'], now);
     db.setUnlimitedSmokeTests('alpha', true, now);
@@ -6235,6 +6241,7 @@ describe('saved pool team wiping', () => {
   function setupPoolDb(now = 1_760_000_000) {
     const db = new database.Database(':memory:', {now});
     db.syncLadders(undefined, now);
+    db.db.prepare("UPDATE ladders SET status = 'upcoming'").run();
     db.syncProjectsFromYaml(sampleProjects, undefined, now);
     db.setAgentLadders('alpha', ['vgc'], now);
     db.setAgentLadders('beta', ['vgc'], now);
