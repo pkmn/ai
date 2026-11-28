@@ -134,21 +134,6 @@
   border: 0;
 }
 
-#top-nav .back-link {
-  display: inline-flex;
-  gap: 0.25ch;
-  align-items: baseline;
-  color: rgb(var(--fg-base) / 62%);
-  font-size: 0.9rem;
-  white-space: nowrap;
-}
-
-#top-nav .back-link:hover,
-#top-nav .back-link:focus-visible {
-  color: var(--fg-color);
-  text-decoration: underline;
-}
-
 #top-controls {
   position: absolute;
   top: 1.25rem;
@@ -216,16 +201,6 @@
   display: block;
 }
 
-@media (width < 540px) {
-  header:has(#top-nav .back-link) {
-    margin-top: 3.25rem;
-  }
-
-  header:has(#topbar):has(#top-nav .back-link) {
-    margin-top: 5.25rem;
-  }
-}
-
 @media (width < 480px) {
   #top-nav {
     top: 1rem;
@@ -247,10 +222,6 @@
 
   header:has(#topbar) {
     margin-top: 4.75rem;
-  }
-
-  header:has(#topbar):has(#top-nav .back-link) {
-    margin-top: 5rem;
   }
 }
 

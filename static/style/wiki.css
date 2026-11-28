@@ -105,12 +105,6 @@ main img {
   font-size: 0.9em;
 }
 
-.wiki-profile-link {
-  margin: -0.25rem 0 1.5rem;
-  font-size: 0.92em;
-  text-align: center;
-}
-
 .muted {
   color: rgb(var(--fg-base) / 50%);
 }

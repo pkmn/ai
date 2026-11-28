@@ -4816,10 +4816,18 @@ describe('JSON route parity & retired pool archives', () => {
       const ladderHtml = await h.getText('/arena/ladders/rby/');
       expect(ladderHtml).toContain('<h2>Ladders</h2>');
       expect(ladderHtml).not.toContain('<h2><a href="/arena/"');
-      expect(ladderHtml).toContain('href="/arena/" class="subtle back-link"');
+      expect(ladderHtml).not.toContain('back-link');
       expect(ladderHtml).toContain('class="ladder-live"');
       expect(ladderHtml).toContain('Alpha vs. Beta');
-      expect(ladderHtml).toContain('href="/arena/battles/#rby"');
+      expect(ladderHtml).toContain(
+        '<h3 id="battles"><a href="/arena/battles/#rby">Battles</a></h3>'
+      );
+      expect(ladderHtml.indexOf('id="battles"')).toBeGreaterThan(
+        ladderHtml.indexOf('id="standings"')
+      );
+      expect(ladderHtml.indexOf('id="battles"')).toBeLessThan(
+        ladderHtml.indexOf('id="history"')
+      );
 
       const battlesHtml = await h.getText('/arena/battles/');
       expect(battlesHtml).toContain('<h2>Battles</h2>');
@@ -4833,7 +4841,7 @@ describe('JSON route parity & retired pool archives', () => {
       );
 
       const profileHtml = await h.getText('/projects/alpha/');
-      expect(profileHtml).toContain('href="/projects/" class="subtle back-link"');
+      expect(profileHtml).not.toContain('back-link');
       expect(profileHtml).toContain('<a href="/arena/ladders/rby/" title="View RBY ladder">');
       expect(profileHtml).toContain('<strong>Tournaments</strong>');
       expect(profileHtml).toContain('href="/arena/tournaments/1/"');
@@ -4842,7 +4850,7 @@ describe('JSON route parity & retired pool archives', () => {
       const tourHtml = await h.getText('/arena/tournaments/1/');
       expect(tourHtml).toContain('<h2>Tournaments</h2>');
       expect(tourHtml).not.toContain('<h2><a href="/arena/"');
-      expect(tourHtml).toContain('href="/arena/" class="subtle back-link"');
+      expect(tourHtml).not.toContain('back-link');
     } finally {
       await h.close();
       testDb.close();

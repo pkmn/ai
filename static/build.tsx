@@ -208,11 +208,6 @@ export function applyAccountProfile(html: string, account?: AccountProfile): str
   });
 }
 
-export interface BackLink {
-  href: string;
-  label: string;
-}
-
 interface SiteMenuItem {
   href: string;
   label: string;
@@ -266,20 +261,8 @@ const SITE_MENU_SECONDARY: readonly SiteMenuItem[] = [
   },
 ];
 
-export function resolveBackLink(pagePath: string): BackLink | undefined {
-  const p = pagePath.replace(/\/+$/, '') || '/';
-  if (p.startsWith('/arena/')) return {href: '/arena/', label: 'Arena'};
-  if (p.startsWith('/projects/')) return {href: '/projects/', label: 'Projects'};
-  if (p.startsWith('/concepts/')) return {href: '/concepts/', label: 'Concepts'};
-  if (p.startsWith('/wiki/')) return {href: '/wiki/', label: 'Wiki'};
-  return undefined;
-}
-
-export function formatTopNav(pagePath: string, backLink?: BackLink | false): string {
+export function formatTopNav(pagePath: string): string {
   const normalized = pagePath.replace(/\/+$/, '') || '/';
-  const resolvedBack = backLink === false
-    ? undefined
-    : (backLink ?? resolveBackLink(pagePath));
   const renderItem = (item: SiteMenuItem) => {
     const active = item.match(normalized);
     return (
@@ -312,11 +295,6 @@ export function formatTopNav(pagePath: string, backLink?: BackLink | false): str
           {SITE_MENU_SECONDARY.map(renderItem)}
         </div>
       </details>
-      {resolvedBack && (
-        <a href={resolvedBack.href} className='subtle back-link'>
-          <span aria-hidden='true'>{'\u2039'}</span> {resolvedBack.label}
-        </a>
-      )}
     </div>
   );
 }
@@ -464,7 +442,6 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   preconnect?: readonly string[];
   preloadImages?: readonly string[];
   topControls?: boolean;
-  backLink?: BackLink | false;
 }
 
 const BUILT_STYLESHEET_RE = /^index\.[0-9a-f]{8}\.css$/;
@@ -534,7 +511,7 @@ export class Renderer extends site.page.Renderer {
     let headerHtml = withBanner;
     if (page.topControls !== false) {
       if (!headerHtml?.includes('id="top-nav"')) {
-        const topNav = formatTopNav(page.path, page.backLink);
+        const topNav = formatTopNav(page.path);
         headerHtml = headerHtml ? `${headerHtml}\n  ${topNav}` : topNav;
       }
       if (!headerHtml?.includes('id="top-controls"')) {

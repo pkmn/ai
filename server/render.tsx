@@ -3201,20 +3201,13 @@ function renderLadderHtml(opts: {
   const isUpcoming = l.status === 'upcoming';
 
   let ladderBottomNote: util.Child;
-  if (!isUpcoming || showArchive) {
-    const battlesHref = `/arena/battles/#${encodeURIComponent(l.slot)}`;
+  if (showArchive && archive) {
     ladderBottomNote = (
       <p className='battle-note muted'>
-        {!isUpcoming && <a href={battlesHref}>Recent {l.name} battles</a>}
-        {!isUpcoming && showArchive && ' · '}
-        {showArchive && archive && (
-          <>
-            Data:{' '}
-            <a href={archive.href}>
-              <code>{archive.name}</code>
-            </a>
-          </>
-        )}
+        Data:{' '}
+        <a href={archive.href}>
+          <code>{archive.name}</code>
+        </a>
       </p>
     );
   }
@@ -3282,6 +3275,11 @@ function renderLadderHtml(opts: {
       <section id='standings'>
         {standingsPane}
       </section>
+      {!isUpcoming && (
+        <h3 id='battles'>
+          <a href={`/arena/battles/#${encodeURIComponent(l.slot)}`}>Battles</a>
+        </h3>
+      )}
       <section id='history' className={historyRes.isEmpty || isUpcoming ? 'hide' : undefined}>
         <h3><a href='#history' className='subtle'>History</a></h3>
         {historyRes.node}

@@ -230,7 +230,7 @@ const STYLE = fs.readFileSync(util.root('static', 'style', 'wiki.css'), 'utf8');
 function renderPageHtml(opts: {
   id?: string;
   title: string;
-  heading: string;
+  heading: util.Html | string;
   path: string;
   nav?: util.Html | string;
   content: util.Html | string;
@@ -1657,26 +1657,24 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
     const meta: {title?: string; summary?: string} = {};
     const renderedHtml = renderDjot(record.content, meta);
     const projectPage = wiki.getProjectPage(slug);
-    const heading = meta.title ?? projectPage?.name ?? formatTitle(slug);
-    const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
-    const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
-    const isPublic = vis === 'public' && !loggedIn;
-    let profileLink: util.Child = undefined;
+    const titleText = meta.title ?? projectPage?.name ?? formatTitle(slug);
+    let heading: util.Html | string = titleText;
     if (projectPage) {
       const profileSlug = util.slugify(projectPage.name).toLowerCase();
       const agent = wiki.db?.getAgentBySlug(profileSlug);
       if (profileSlug && (!wiki.db || (agent && agent.status !== 'disabled'))) {
-        profileLink = (
-          <p className='wiki-profile-link'>
-            <a href={`/projects/${encodeURIComponent(profileSlug)}/`}>
-              Arena profile {'\u2192'}
-            </a>
-          </p>
+        heading = (
+          <a href={`/projects/${encodeURIComponent(profileSlug)}/`} className='subtle'>
+            {titleText}
+          </a>
         );
       }
     }
+    const viewPath = slug === 'index' ? '/wiki' : `/wiki/${encoded}`;
+    const loggedIn = Boolean(getEffectiveUser(req) || wiki.auth.getSession(req));
+    const isPublic = vis === 'public' && !loggedIn;
     sendWikiHtml(req, res, renderPage({
-      title: heading,
+      title: titleText,
       heading,
       path: slug === 'index' ? '/wiki/' : `/wiki/${encoded}/`,
       nav: wikiNav(
@@ -1686,7 +1684,7 @@ export function register(app: polka.Polka, wiki: Wiki): Wiki {
         logoutReturnTo(viewPath, vis),
         canShowEdit(slug, req, loggedIn)
       ),
-      content: <>{profileLink}{util.raw(renderedHtml)}</>,
+      content: util.raw(renderedHtml),
     }), isPublic);
   };
 

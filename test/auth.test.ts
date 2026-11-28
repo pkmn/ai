@@ -851,37 +851,7 @@ describe('server/auth.ts routes', () => {
     expect(html).not.toContain('id="account-link"');
   });
 
-  test('renders top-left site menu without Concepts and derives contextual backlinks', () => {
-    expect(build.resolveBackLink('/')).toBeUndefined();
-    expect(build.resolveBackLink('/arena/')).toBeUndefined();
-    expect(build.resolveBackLink('/projects/')).toBeUndefined();
-    expect(build.resolveBackLink('/wiki/')).toBeUndefined();
-    expect(build.resolveBackLink('/account/')).toBeUndefined();
-    expect(build.resolveBackLink('/arena/ladders/rand/')).toEqual({
-      href: '/arena/',
-      label: 'Arena',
-    });
-    expect(build.resolveBackLink('/arena/battles/')).toEqual({
-      href: '/arena/',
-      label: 'Arena',
-    });
-    expect(build.resolveBackLink('/arena/tournaments/1/')).toEqual({
-      href: '/arena/',
-      label: 'Arena',
-    });
-    expect(build.resolveBackLink('/projects/foul-play/')).toEqual({
-      href: '/projects/',
-      label: 'Projects',
-    });
-    expect(build.resolveBackLink('/concepts/variants/')).toEqual({
-      href: '/concepts/',
-      label: 'Concepts',
-    });
-    expect(build.resolveBackLink('/wiki/projects/Foul_Play/')).toEqual({
-      href: '/wiki/',
-      label: 'Wiki',
-    });
-
+  test('renders top-left site menu without Concepts or backlinks', () => {
     const ladderHtml = build.renderer.render({
       title: 'Arena — RAND | pkmn.ai',
       path: '/arena/ladders/rand/',
@@ -890,7 +860,7 @@ describe('server/auth.ts routes', () => {
     });
     expect(ladderHtml).toContain('id="top-nav"');
     expect(ladderHtml).toContain('id="site-menu"');
-    expect(ladderHtml).toContain('href="/arena/" class="subtle back-link"');
+    expect(ladderHtml).not.toContain('back-link');
     expect(ladderHtml).not.toContain('/concepts/');
     expect(ladderHtml).toContain('href="/arena/" class="subtle" aria-current="page"');
 
