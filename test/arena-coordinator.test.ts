@@ -50,7 +50,8 @@ describe('Coordinator', () => {
     opts?: {
       baselineSpec?: arbiter.AgentLaunchSpec;
       omitSmokeTeams?: boolean;
-      recyclePodmanVm?: () => Promise<void> | void;
+      recyclePodmanVm?: () =>
+        Promise<coordinator.PodmanRecycleResult | void> | coordinator.PodmanRecycleResult | void;
     }
   ) {
     const reportedStatuses: serverArena.SubmissionStatusPayload[] = [];
@@ -1924,6 +1925,117 @@ describe('Coordinator', () => {
       Object.defineProperty(packages, 'pullAndVerifyOciImage', origPullDesc);
       Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', origRunDesc);
       stateDb.close();
+    }
+  });
+
+  test('recyclePodmanVm returns error when launchctl kickstart fails', async () => {
+    const origError = console.error;
+    console.error = () => undefined;
+    try {
+      const res = await coordinator.recyclePodmanVm({
+        exec: file => file === 'sudo'
+          ? Promise.reject(new Error('launchctl failed'))
+          : Promise.resolve(),
+        sleep: () => Promise.resolve(),
+      });
+      expect(res).toEqual({ok: false, error: 'launchctl kickstart failed: launchctl failed'});
+    } finally {
+      console.error = origError;
+    }
+  });
+
+  test('recyclePodmanVm returns error when readiness poll times out', async () => {
+    let fakeNow = 1_000;
+    const origError = console.error;
+    console.error = () => undefined;
+    try {
+      const res = await coordinator.recyclePodmanVm({
+        exec: (file, args) => file === 'podman' && args[0] === 'info'
+          ? Promise.reject(new Error('socket not ready'))
+          : Promise.resolve(),
+        now: () => fakeNow,
+        sleep: millis => {
+          fakeNow += millis;
+          return Promise.resolve();
+        },
+        readyTimeoutMillis: 1_000,
+        readyPollMillis: 500,
+      });
+      expect(res).toEqual({
+        ok: false,
+        error: 'Timed out waiting for Podman VM API socket after recycle',
+      });
+    } finally {
+      console.error = origError;
+    }
+  });
+
+  test('playNextScheduledMatch alerts on Podman recycle failure then resolves', async () => {
+    const results: coordinator.PodmanRecycleResult[] = [
+      {ok: false, error: 'socket timeout'},
+      {ok: true},
+    ];
+    const h = createMockCoordHarness('recycle-alert', {
+      recyclePodmanVm: () => results.shift(),
+    });
+    const fakeResult: arbiter.ArenaGameResult = {
+      outcome: 'W',
+      winner: 'p1',
+      turns: 1,
+      endReason: 'win',
+      omniscientLog: '|turn|1\n|win|Agent A\n',
+      p1: {
+        bankSeconds: 120,
+        peakRam: 128,
+        initMillis: 50,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+      p2: {
+        bankSeconds: 120,
+        peakRam: 64,
+        initMillis: 40,
+        lastTurnMillis: 10,
+        meanTurnMillis: 10,
+      },
+    };
+    const origRunDesc = Object.getOwnPropertyDescriptor(
+      arbiter.TimeSlicedArenaGame.prototype,
+      'run'
+    )!;
+    Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', {
+      ...origRunDesc,
+      value: () => Promise.resolve(fakeResult),
+    });
+    try {
+      h.stateDb.upsertLocalAgent({
+        versionId: 30,
+        agentId: 1,
+        slug: 'foul-play',
+        version: '3.0.0',
+        mode: 'container',
+        target: 'foul-play-3.0.0-v30',
+        residency: 'hot',
+        unpackedBytes: 1024,
+      });
+      installLocalAgent(h, {versionId: 25, agentId: 2, slug: 'pokechamp', version: '1.0.0'});
+
+      await h.coord.playNextScheduledMatch([h.ladderSnap]);
+      expect(h.alerts).toEqual([{
+        key: 'podman-recycle',
+        message: 'Podman VM recycle failed on Arena runner',
+        detail: 'socket timeout',
+      }]);
+
+      await h.coord.playNextScheduledMatch([h.ladderSnap]);
+      expect(h.alerts[1]).toEqual({
+        key: 'podman-recycle',
+        message: 'Podman VM recycle recovered on Arena runner',
+        resolved: true,
+      });
+    } finally {
+      Object.defineProperty(arbiter.TimeSlicedArenaGame.prototype, 'run', origRunDesc);
+      h.stateDb.close();
     }
   });
 });

@@ -185,7 +185,7 @@ export interface Options {
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
   isRestarting?: () => boolean;
   diagnosticWallCapMillis?: number;
-  recyclePodmanVm?: () => Promise<void> | void;
+  recyclePodmanVm?: () => Promise<PodmanRecycleResult | void> | PodmanRecycleResult | void;
 }
 
 interface LadderFaultCounter {
@@ -216,11 +216,13 @@ export interface PodmanRecycleDeps {
   readyPollMillis?: number;
 }
 
+export type PodmanRecycleResult = {ok: true} | {ok: false; error: string};
+
 // `libkrun`/`krunkit` releases freed guest pages lazily via `MADV_FREE` on macOS, leaving an idle
 // Podman VM holding up to 26+ GiB of host RAM, compressed pages, and swap after an OCI match or
 // smoke test. Stopping and kickstarting `ai.pkmn.podman` immediately returns 100% of that memory
 // to macOS before the next native match (costing ~6s only after OCI runs).
-export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<void> {
+export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<PodmanRecycleResult> {
   const run = deps?.exec ?? (async (file, args, options) => {
     await execFileAsync(file, [...args], options);
   });
@@ -231,7 +233,7 @@ export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<void> {
   const readyTimeoutMillis = deps?.readyTimeoutMillis ?? PODMAN_READY_TIMEOUT_MILLIS;
   const readyPollMillis = deps?.readyPollMillis ?? PODMAN_READY_POLL_MILLIS;
 
-  if (isDraining()) return;
+  if (isDraining()) return {ok: true};
   try {
     await run('podman', ['machine', 'stop', PODMAN_MACHINE_NAME], {timeout: 30_000});
   } catch (err) {
@@ -247,21 +249,25 @@ export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<void> {
       {timeout: 15_000}
     );
   } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
     console.error('Failed to restart Podman VM via launchctl:', err);
-    return;
+    return {ok: false, error: `launchctl kickstart failed: ${detail}`};
   }
   const deadline = now() + readyTimeoutMillis;
   while (!isDraining() && now() < deadline) {
     try {
       await run('podman', ['info', '--format', '{{.Host.Os}}'], {timeout: 5_000});
-      return;
+      return {ok: true};
     } catch {
       await sleep(readyPollMillis);
     }
   }
   if (!isDraining()) {
-    console.error('Timed out waiting for Podman VM API socket after recycle');
+    const error = 'Timed out waiting for Podman VM API socket after recycle';
+    console.error(error);
+    return {ok: false, error};
   }
+  return {ok: true};
 }
 
 function isPlayerFault(result: arbiter.ArenaGameResult, slot: 'p1' | 'p2'): boolean {
@@ -315,7 +321,8 @@ export class Coordinator {
     Promise<system.ArenaSystemInfo | undefined> | system.ArenaSystemInfo | undefined;
   private readonly isRestarting?: () => boolean;
   private readonly diagnosticWallCapMillis?: number;
-  private readonly recyclePodmanVmFn?: () => Promise<void> | void;
+  private readonly recyclePodmanVmFn?: () =>
+    Promise<PodmanRecycleResult | void> | PodmanRecycleResult | void;
   private readonly versionByLadderId = new Map<string, string>();
   private readonly teamModeByLadderId = new Map<string, db.TeamMode>();
   private readonly harvestedCache = new Map<string, teams.HarvestedPoolEntry[]>();
@@ -326,6 +333,7 @@ export class Coordinator {
   private readonly brokenUntilByVersion = new Map<number, number>();
   private heartbeatSeq = 0;
   private draining = false;
+  private podmanRecycleAlerted = false;
 
   constructor(options: Options) {
     this.client = options.client;
@@ -345,12 +353,29 @@ export class Coordinator {
 
   private async maybeRecyclePodmanVm(): Promise<void> {
     if (this.draining) return;
+    let res: PodmanRecycleResult | void;
     if (this.recyclePodmanVmFn) {
-      await this.recyclePodmanVmFn();
+      res = await this.recyclePodmanVmFn();
+    } else if (this.devMode || process.platform !== 'darwin') {
       return;
+    } else {
+      res = await recyclePodmanVm({isDraining: () => this.draining});
     }
-    if (this.devMode || process.platform !== 'darwin') return;
-    await recyclePodmanVm({isDraining: () => this.draining});
+    if (res && !res.ok) {
+      this.podmanRecycleAlerted = true;
+      this.notifyAlert({
+        key: 'podman-recycle',
+        message: 'Podman VM recycle failed on Arena runner',
+        detail: res.error,
+      });
+    } else if (this.podmanRecycleAlerted) {
+      this.podmanRecycleAlerted = false;
+      this.notifyAlert({
+        key: 'podman-recycle',
+        message: 'Podman VM recycle recovered on Arena runner',
+        resolved: true,
+      });
+    }
   }
 
   private cleanupUnpackedAgent(mode: db.ExecutionMode, targetId: string) {
