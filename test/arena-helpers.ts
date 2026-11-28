@@ -260,6 +260,7 @@ export async function withRealArenaServer<T>(
     secret: string;
     publicDir: string;
     samplesDir: string;
+    heartbeats: Array<{at: number; hasLive: boolean}>;
   }) => Promise<T>
 ): Promise<T> {
   const db = new Database(':memory:');
@@ -272,12 +273,16 @@ export async function withRealArenaServer<T>(
   const publicDir = path.join(tmpDir, `${prefix}-public`);
   const samplesDir = path.join(tmpDir, `${prefix}-samples`);
   fs.mkdirSync(publicDir, {recursive: true});
+  const heartbeats: Array<{at: number; hasLive: boolean}> = [];
   const ctrl = serverArena.register(app, {
     db,
     auth: authInst,
     arenaSecret: secret,
     publicDir,
     samplesDir,
+    onHeartbeat: ev => {
+      heartbeats.push({at: ev.at, hasLive: Boolean(ev.live)});
+    },
   });
   const server = http.createServer((req, res) => app.handler(req as polka.Request, res));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -285,7 +290,7 @@ export async function withRealArenaServer<T>(
   const client = new serverArena.Client({serverUrl, arenaSecret: secret});
 
   try {
-    return await fn({db, client, serverUrl, secret, publicDir, samplesDir});
+    return await fn({db, client, serverUrl, secret, publicDir, samplesDir, heartbeats});
   } finally {
     ctrl.close();
     const closed = new Promise<void>(resolve => server.close(() => resolve()));

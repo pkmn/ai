@@ -10,10 +10,12 @@ import polka from 'polka';
 import {ALL_SLOTS, Database} from '../db';
 import type * as db from '../db';
 import * as arena from '../server/arena';
+import * as auth from '../server/auth';
 import * as ratings from '../server/ratings';
 import * as render from '../server/render';
 import {formatPoolTeamLabel} from '../server/teams';
 import * as tournaments from '../server/tournaments';
+import * as wiki from '../server/wiki';
 import {syncStaticLiveBanner} from '../static/build';
 import * as util from '../static/util';
 import {Fragment, h as jsx, raw, root} from '../static/util';
@@ -190,6 +192,7 @@ interface RenderHarnessOptions {
   publicDir: string;
   staticDir?: string;
   avatarsDir?: string;
+  wiki?: wiki.Wiki;
   liveDoc?: arena.LiveDocument;
   tournamentBroadcast?: tournaments.LiveBroadcast;
   now?: number | (() => number);
@@ -271,6 +274,7 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
   render.register(app, {
     db: opts.db,
     arena: arenaHandle,
+    wiki: opts.wiki,
     publicDir: opts.publicDir,
     staticDir: opts.staticDir,
     avatarsDir: opts.avatarsDir,
@@ -296,8 +300,8 @@ async function startRenderHarness(opts: RenderHarnessOptions) {
     baseUrl,
     arenaHandle,
     getRaw: (route: string, init?: RequestInit) => fetch(`${baseUrl}${route}`, init),
-    getText: async (route: string) => {
-      const res = await fetch(`${baseUrl}${route}`);
+    getText: async (route: string, init?: RequestInit) => {
+      const res = await fetch(`${baseUrl}${route}`, init);
       expect({route, status: res.status}).toEqual({route, status: 200});
       return res.text();
     },
@@ -4950,5 +4954,130 @@ describe('battles smoke-testing status', () => {
         expect(liveJson.smokeTesting).toBeUndefined();
       }
     );
+  });
+});
+
+describe('project profile wiki visibility gating', () => {
+  const SESSION_SECRET = 'profile-wiki-session-secret-32-bytes';
+  let tmpDir: string;
+  let tmpPublic: string;
+  let testDb: Database;
+  let h: RenderHarness;
+
+  const githubCookie = (login: string, id = 101) => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = auth.signToken({github: {id, login}, exp}, SESSION_SECRET);
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
+
+  const discordCookie = (id: string) => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const token = auth.signToken({discord: {id, username: 'member'}, exp}, SESSION_SECRET);
+    return `${auth.SESSION_COOKIE}=${encodeURIComponent(token)}`;
+  };
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-wiki-'));
+    tmpPublic = path.join(tmpDir, 'public');
+    const wikiDir = path.join(tmpDir, 'wiki');
+    const projectsFile = path.join(tmpDir, 'projects.yml');
+    fs.mkdirSync(tmpPublic, {recursive: true});
+    fs.mkdirSync(path.join(wikiDir, 'projects'), {recursive: true});
+    const projectsYaml = [
+      '- name: Public Agent',
+      '  active: 2026',
+      '  arena:',
+      '    owners:',
+      '      alice: alice.101',
+      '- name: Dev Only',
+      '  active: 2026',
+      '  arena:',
+      '    owners:',
+      '      bob: bob.102',
+      '- name: Discord Only',
+      '  active: 2026',
+      '  arena:',
+      '    owners:',
+      '      carol: carol.103',
+    ].join('\n');
+    fs.writeFileSync(projectsFile, projectsYaml, 'utf8');
+    fs.writeFileSync(
+      path.join(wikiDir, 'projects', 'Public_Agent.dj'),
+      wiki.serializePageContent('# Public Agent\n\nPublic notes.\n', 'public'),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(wikiDir, 'projects', 'Dev_Only.dj'),
+      wiki.serializePageContent('# Dev Only\n\nPrivate dev notes.\n', 'developers'),
+      'utf8'
+    );
+    fs.writeFileSync(
+      path.join(wikiDir, 'projects', 'Discord_Only.dj'),
+      wiki.serializePageContent('# Discord Only\n\nDiscord member notes.\n', 'discord'),
+      'utf8'
+    );
+
+    testDb = new Database(':memory:', {now: NOW});
+    testDb.syncLadders(undefined, NOW);
+    testDb.syncProjectsFromYaml(projectsYaml, undefined, NOW);
+    const wikiAuth = new auth.Auth({
+      db: testDb,
+      config: {sessionSecret: SESSION_SECRET},
+      isDiscordMember: id => id === '999',
+    });
+    const wikiInst = new wiki.Wiki({
+      wikiDir,
+      projectsFile,
+      db: testDb,
+      auth: wikiAuth,
+    });
+    h = await startRenderHarness({
+      db: testDb,
+      publicDir: tmpPublic,
+      wiki: wikiInst,
+      now: NOW,
+    });
+  });
+
+  afterAll(async () => {
+    await h.close();
+    testDb.close();
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
+
+  test('links public project wiki pages for unauthenticated visitors', async () => {
+    const html = await h.getText('/projects/public-agent/');
+    expect(html).toContain('<strong>Wiki</strong>');
+    expect(html).toContain('href="/wiki/projects/Public_Agent"');
+  });
+
+  test('hides developers-only project wiki links from unauthenticated visitors', async () => {
+    const html = await h.getText('/projects/dev-only/');
+    expect(html).not.toContain('<strong>Wiki</strong>');
+    expect(html).not.toContain('/wiki/projects/Dev_Only');
+  });
+
+  test('reveals developers-only project wiki links to registered developers', async () => {
+    const html = await h.getText('/projects/dev-only/', {
+      headers: {Cookie: githubCookie('alice')},
+    });
+    expect(html).toContain('<strong>Wiki</strong>');
+    expect(html).toContain('href="/wiki/projects/Dev_Only"');
+  });
+
+  test('gates discord-only project wiki links on verified Discord membership', async () => {
+    const anonHtml = await h.getText('/projects/discord-only/');
+    expect(anonHtml).not.toContain('/wiki/projects/Discord_Only');
+
+    const outsiderHtml = await h.getText('/projects/discord-only/', {
+      headers: {Cookie: discordCookie('111')},
+    });
+    expect(outsiderHtml).not.toContain('/wiki/projects/Discord_Only');
+
+    const memberHtml = await h.getText('/projects/discord-only/', {
+      headers: {Cookie: discordCookie('999')},
+    });
+    expect(memberHtml).toContain('<strong>Wiki</strong>');
+    expect(memberHtml).toContain('href="/wiki/projects/Discord_Only"');
   });
 });

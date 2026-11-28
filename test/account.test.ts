@@ -2717,5 +2717,44 @@ describe('account routes', () => {
         '<a href="/arena/tournaments/2/" class="subtle" title="Tournament #2: ADV">T#2</a>'
       );
     });
+
+    test('links active or history ladders to ladder pages on /account/', async () => {
+      openLadders(['gen1ou20261109']);
+      const fp = db.getAgentBySlug('foul-play')!;
+      const created = db.createSubmission({
+        agentId: fp.id,
+        version: '3.5.0',
+        package: 'bundle',
+        url: 'https://github.com/pkmn/fp.tar.zst',
+        sha256: SHA_A,
+        ladderIds: ['gen1ou20261109'],
+        now: currentNow,
+      });
+      db.applySubmissionStatus({
+        versionId: created.id,
+        smokeStatus: 'passed',
+        sha256: SHA_A,
+        unpackedBytes: 1024,
+        now: currentNow + 5,
+      });
+
+      const res = await fetch(`${baseUrl}/account/`, {
+        headers: {Cookie: cookieFor('pmariglia')},
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain('<a href="/arena/ladders/rby/" class="subtle"><tt>RBY</tt></a>');
+      expect(html).toContain('<a href="/arena/ladders/rby/" class="subtle">RBY</a>');
+    });
+
+    test('renders Rules submission link with two-row header bar on /account/', async () => {
+      const res = await fetch(`${baseUrl}/account/`, {
+        headers: {Cookie: cookieFor('pmariglia')},
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html.match(/class="account-bar-row"/g)).toHaveLength(2);
+      expect(html).toContain('<a href="/rules/#submission" class="section-link">Rules</a>');
+    });
   });
 });

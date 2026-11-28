@@ -731,6 +731,25 @@ describe('streaks, Top-K reign clocks, and active matchmaker', () => {
     expect(pickAfter.priorityScore).toBeLessThanOrEqual(pickBefore.priorityScore + 1e-6);
   });
 
+  test('damps triage bonus by repeat pair count for provisional Top-10 contenders', () => {
+    const pairMatches = new Int32Array(16);
+    pairMatches[0 * 4 + 2] = 6;
+    pairMatches[2 * 4 + 0] = 6;
+    const ladder: ratings.LadderMatchState = {
+      id: 'vgc',
+      activeAgentIndices: [0, 1, 2, 3],
+      agentIds: new Int32Array([1, 2, 3, 4]),
+      minAgents: 2,
+      theta: new Float64Array([1.0, 1.0, 0.9, -0.5]),
+      sigma: new Float64Array([0.25, 0.25, 0.50, 0.25]),
+      agentMatches: new Int32Array([20, 20, 6, 20]),
+      pairMatches,
+      lastMatchNumber: 20,
+    };
+    const pick = ratings.selectNextArenaMatch([ladder], 21);
+    expect([pick.agentI, pick.agentJ].sort()).toEqual([1, 2]);
+  });
+
   test('preserves Top-K focus once low-tier entrants pass calibration floor', () => {
     const ladders: ratings.LadderMatchState[] = [{
       id: 'sv',

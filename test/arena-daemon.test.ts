@@ -878,4 +878,61 @@ describe('Coordinator HTTP & TournamentCoordinator', () => {
       expect(h.alerts[0].key).toBe('tourney-smoke-infra');
       expect(h.alerts[0].detail).toContain('missing sample team pool');
     });
+
+  test('sends idle heartbeat when runDaemon smoke tests a submission without playing a match',
+    async () => {
+      await withRealArenaServer(
+        tmpDir,
+        'daemon-smoke-idle',
+        async ({db, serverUrl, secret, heartbeats}) => {
+          db.syncLaddersFromYaml([
+            '- name: RAND',
+            '  id: gen9randombattle202611',
+            '  format: gen9randombattle',
+            "  version: '0.11.0'",
+            '  team: random',
+            '  status: active',
+          ].join('\n'));
+          db.syncProjectsFromYaml([
+            '- name: Foul Play',
+            '  active: 2026',
+            '  arena: {owners: {pmariglia: pmariglia.535629}}',
+          ].join('\n'));
+          db.setAgentLadders('foul-play', ['rand']);
+          const fp = db.getAgentBySlug('foul-play')!;
+          db.createSubmission({
+            agentId: fp.id,
+            version: '1.0.0',
+            package: 'bundle',
+            url: `file://${bundleTar}`,
+            sha256: bundleSha,
+            ladderIds: ['gen9randombattle202611'],
+          });
+
+          const prevDev = process.env.ARENA_DEV;
+          process.env.ARENA_DEV = '1';
+          try {
+            await arenaIndex.runDaemon({
+              serverUrl,
+              arenaSecret: secret,
+              stateDbPath: path.join(tmpDir, 'daemon-smoke-idle.sqlite'),
+              rootDir: path.join(tmpDir, 'daemon-smoke-idle'),
+              maxTurns: 1,
+              once: true,
+            });
+            expect(heartbeats.length).toBeGreaterThanOrEqual(2);
+            expect(heartbeats.every(hb => !hb.hasLive)).toBe(true);
+            const liveDoc = await (await fetch(`${serverUrl}/api/live.json`)).json() as {
+              smokeTesting?: serverArena.LiveSmokeTest;
+              stale: boolean;
+            };
+            expect(liveDoc.stale).toBe(false);
+            expect(liveDoc.smokeTesting).toBeUndefined();
+          } finally {
+            if (prevDev === undefined) delete process.env.ARENA_DEV;
+            else process.env.ARENA_DEV = prevDev;
+          }
+        }
+      );
+    }, 15_000);
 });
