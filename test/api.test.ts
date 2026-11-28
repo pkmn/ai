@@ -1372,6 +1372,109 @@ describe('Arena SSE streams', () => {
     expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?limit=999`)).status).toBe(400);
     expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?offset=-1`)).status).toBe(400);
   });
+
+  test('clears heartbeat smokeTesting when diagnostic-live reports done', async () => {
+    const zeroAgent = db.getAgentBySlug('0-error')!;
+    const stream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
+    try {
+      await stream.waitForEvent('snapshot');
+      await client.sendHeartbeat({
+        idle: true,
+        smokeTesting: {slug: '0-error', name: '0 ERROR'},
+      });
+      await stream.waitForEvent('live', 1);
+
+      await client.sendDiagnosticLive({
+        versionId: vZeroId,
+        agentId: zeroAgent.id,
+        agentSlug: '0-error',
+        agentName: '0 ERROR',
+        version: '1.0.0',
+        format: 'gen1ou',
+        targetName: 'RBY',
+        phase: 'battle',
+        turn: 1,
+        turnStartedAt: 1_760_000_050,
+        turnBudgetSeconds: 150,
+        incrementSeconds: 15,
+        p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+        p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+        lines: ['|turn|1'],
+      });
+      await client.sendDiagnosticLive({done: true, agentId: zeroAgent.id, versionId: vZeroId});
+
+      const cleared = await stream.waitForEvent('live', 2);
+      expect(cleared.data.smokeTesting).toBeUndefined();
+      expect(ctrl.getState().smokeTesting).toBeUndefined();
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test('clears heartbeat smokeTesting when submission-status reports completion', async () => {
+    const zeroAgent = db.getAgentBySlug('0-error')!;
+    db.db.prepare('UPDATE ladder_entries SET settled_at = 1760000030 WHERE version_id = ?').run(
+      vZeroId
+    );
+    const pendingId = db.createSubmission({
+      agentId: zeroAgent.id,
+      version: '2.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-2.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_030 + 15 * 86400,
+    }).id;
+    const stream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
+    try {
+      await stream.waitForEvent('snapshot');
+      await client.sendHeartbeat({
+        idle: true,
+        smokeTesting: {slug: '0-error', name: '0 ERROR'},
+      });
+      await stream.waitForEvent('live', 1);
+
+      await client.reportSubmissionStatus({
+        versionId: pendingId,
+        smokeStatus: 'failed',
+        smokeError: 'Package unpack/verification failed',
+      });
+
+      const cleared = await stream.waitForEvent('live', 2);
+      expect(cleared.data.smokeTesting).toBeUndefined();
+      expect(ctrl.getState().smokeTesting).toBeUndefined();
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test('preserves heartbeat smokeTesting when submission-status targets another agent', async () => {
+    const zeroAgent = db.getAgentBySlug('0-error')!;
+    db.db.prepare('UPDATE ladder_entries SET settled_at = 1760000030 WHERE version_id = ?').run(
+      vZeroId
+    );
+    const pendingId = db.createSubmission({
+      agentId: zeroAgent.id,
+      version: '2.0.0',
+      package: 'bundle',
+      url: 'https://github.com/pkmn/0-error-2.tar.zst',
+      sha256: SHA,
+      ladderIds: ['gen1ou20261109'],
+      now: 1_760_000_030 + 15 * 86400,
+    }).id;
+
+    await client.sendHeartbeat({
+      idle: true,
+      smokeTesting: {slug: 'foul-play', name: 'Foul Play'},
+    });
+    await client.reportSubmissionStatus({
+      versionId: pendingId,
+      smokeStatus: 'failed',
+      smokeError: 'Late outbox replay',
+    });
+
+    expect(ctrl.getState().smokeTesting).toEqual({slug: 'foul-play', name: 'Foul Play'});
+  });
 });
 
 describe('pkmn CLI commands', () => {

@@ -2061,6 +2061,11 @@ export function register(app: polka.Polka, options: Options): Handle {
       const existing = liveDiagnosticsByAgent.get(payload.agentId);
       if (!existing || existing.versionId === payload.versionId) {
         liveDiagnosticsByAgent.delete(payload.agentId);
+        const doneSlug = existing?.agentSlug ??
+          (liveSmokeTesting ? db.getAgentById(payload.agentId)?.slug : undefined);
+        if (doneSlug && liveSmokeTesting?.slug === doneSlug) {
+          liveSmokeTesting = undefined;
+        }
       }
       pushDiagnosticEvent(payload.agentId, 'done', {versionId: payload.versionId});
       if (!sameSmokeTest(getActiveSmokeTesting(), prevSmoke)) {
@@ -2471,6 +2476,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         now: getNowSec(),
       });
       const prevSmoke = getActiveSmokeTesting();
+      if (liveSmokeTesting?.slug === result.agent.slug) {
+        liveSmokeTesting = undefined;
+      }
       for (const [agentId, snap] of liveDiagnosticsByAgent) {
         if (snap.versionId === result.version.id) {
           liveDiagnosticsByAgent.delete(agentId);
