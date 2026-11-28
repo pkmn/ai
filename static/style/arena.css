@@ -393,7 +393,7 @@ table.matrix td.diag {
 }
 
 .live-panel.show-hp-pct .hp-orb.fainted + .hp-pct {
-  color: rgb(var(--fg-base) / 38%);
+  color: rgb(var(--fg-base) / 48%);
 }
 
 .live-g1 {
@@ -785,7 +785,8 @@ tr.battle-row.expanded .battle-toggle {
     padding: 1.1ch 1.25ch;
   }
 
-  .live-panel.show-hp-pct .hp-orbs {
+  .live-panel.show-hp-pct .hp-orbs,
+  .live-panel.show-hp-pct .live-g1 .hp-orbs {
     gap: 0.24rem 0.72ch;
   }
 
