@@ -2342,16 +2342,32 @@ describe('SSR cache invalidation', () => {
       expect(battlesIndex).toContain('Timeout');
       expect(battlesIndex).toContain('id="battles-pager"');
 
+      // Game 2 keeps P1 = Match Player 1 (with swapped Team 2 & Match P1 telemetry) and
+      // P2 = Match Player 2 (with swapped Team 1 & Match P2 telemetry).
+      const g2Start = battlesIndex.indexOf('<span>Game 2</span>');
+      const g2End = battlesIndex.indexOf('</div></div></div></td>', g2Start);
+      const g2Html = battlesIndex.slice(g2Start, g2End);
+      expect(g2Html).toMatch(
+        new RegExp(`<tt>P1</tt> <code[^>]*>${p1OwnedHash}</code></span><span><tt>325 ms/turn</tt>`)
+      );
+      expect(g2Html).toMatch(
+        new RegExp(`<tt>P2</tt> <code[^>]*>${unknownHash}</code></span><span><tt>690 ms/turn</tt>`)
+      );
+
       const fpProfile = await h.getText('/projects/foul-play/');
       expect(fpProfile).toContain('<th>Version</th>');
       expect(fpProfile).not.toContain('<th>Ver.</th>');
       expect(fpProfile).toContain('data-detail-for="vgc-0000001"');
       expect(fpProfile).toContain('<span>Game 1</span>');
       expect(fpProfile).toContain('<span>Game 2</span>');
-      expect(fpProfile).toContain('<tt>(P1)</tt>');
-      expect(fpProfile).toContain('<tt>(P2)</tt>');
+      expect(fpProfile.match(/<tt>\(P1\)<\/tt>/g)).toHaveLength(2);
+      expect(fpProfile).not.toContain('<tt>(P2)</tt>');
       expect(fpProfile).not.toContain('Client Telemetry');
       expect(fpProfile).toContain('99,88,77,66');
+
+      const jaxProfile = await h.getText('/projects/jaxcalibur/');
+      expect(jaxProfile.match(/<tt>\(P2\)<\/tt>/g)).toHaveLength(2);
+      expect(jaxProfile).not.toContain('<tt>(P1)</tt>');
     } finally {
       await h.close();
     }

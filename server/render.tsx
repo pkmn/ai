@@ -745,10 +745,8 @@ export function buildBattleDetailClientJs(): string {
       const omitOutcome = Boolean(perspectiveSlug);
       const p1IsUs = Boolean(perspectiveSlug && m.p1 && m.p1.slug === perspectiveSlug);
       const p2IsUs = Boolean(perspectiveSlug && m.p2 && m.p2.slug === perspectiveSlug);
-      const g1P1Label = p1IsUs ? '(P1)' : 'P1';
-      const g1P2Label = p2IsUs ? '(P2)' : 'P2';
-      const g2P1Label = p2IsUs ? '(P1)' : 'P1';
-      const g2P2Label = p1IsUs ? '(P2)' : 'P2';
+      const p1Label = p1IsUs ? '(P1)' : 'P1';
+      const p2Label = p2IsUs ? '(P2)' : 'P2';
 
       const [g1, g2] = m.games;
       const end1 = formatEndReason(g1.endReason);
@@ -787,11 +785,11 @@ export function buildBattleDetailClientJs(): string {
               '</span>' +
             '</div>' +
             '<div class="battle-detail-line">' +
-              '<span><tt>' + g1P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
+              '<span><tt>' + p1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
               formatGamePlayerTelemetryHtml(g1.p1) +
             '</div>' +
             '<div class="battle-detail-line">' +
-              '<span><tt>' + g1P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
+              '<span><tt>' + p2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
               formatGamePlayerTelemetryHtml(g1.p2) +
             '</div>' +
           '</div>' +
@@ -803,12 +801,12 @@ export function buildBattleDetailClientJs(): string {
               '</span>' +
             '</div>' +
             '<div class="battle-detail-line">' +
-              '<span><tt>' + g2P1Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g2.p2) +
+              '<span><tt>' + p1Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
+              formatGamePlayerTelemetryHtml(g2.p1) +
             '</div>' +
             '<div class="battle-detail-line">' +
-              '<span><tt>' + g2P2Label + '</tt>' + (showPools ? ' ' + t2Code : '') + '</span>' +
-              formatGamePlayerTelemetryHtml(g2.p1) +
+              '<span><tt>' + p2Label + '</tt>' + (showPools ? ' ' + t1Code : '') + '</span>' +
+              formatGamePlayerTelemetryHtml(g2.p2) +
             '</div>' +
           '</div>' +
         '</div>' +
@@ -3975,11 +3973,11 @@ export function formatGamePlayerTelemetryNode(p: GamePlayerTelemetry): util.Chil
 }
 
 // Renders the inline expandable detail panel inside a battle history table row.
-// Note on blind-pair seat swapping: in Game 1, Match P1 sits in Showdown slot `p1` with Team 1
-// (`p1TeamLabel`) and Match P2 sits in slot `p2` with Team 2 (`p2TeamLabel`); in Game 2, the two
-// agents swap seats (`p1` = Match P2 with Team 1, `p2` = Match P1 with Team 2) under the identical
-// `@pkmn/sim` PRNG seed so simultaneous residual/switch ordering and speed-tie PRNG consumption
-// stay coupled to the teams while canceling team matchup bias to first order.
+// Both Game 1 and Game 2 keep `P1`/`P2` aligned with Match Player 1 and Match Player 2 from the
+// parent table row (matching the live slot cards and `W`/`L` game outcomes). Because Game 2 swaps
+// seats and teams under the identical `@pkmn/sim` PRNG seed (to cancel team matchup bias to first
+// order), Match P1 plays Team 2 (`p2TeamLabel`) and Match P2 plays Team 1 (`p1TeamLabel`) in
+// Game 2.
 export function battleInlineDetailHtml(
   m: arena.BattleHistoryEntry,
   perspectiveSlug?: string
@@ -3987,10 +3985,8 @@ export function battleInlineDetailHtml(
   const omitOutcome = Boolean(perspectiveSlug);
   const p1IsUs = Boolean(perspectiveSlug && m.p1.slug === perspectiveSlug);
   const p2IsUs = Boolean(perspectiveSlug && m.p2.slug === perspectiveSlug);
-  const g1P1Label = p1IsUs ? '(P1)' : 'P1';
-  const g1P2Label = p2IsUs ? '(P2)' : 'P2';
-  const g2P1Label = p2IsUs ? '(P1)' : 'P1';
-  const g2P2Label = p1IsUs ? '(P2)' : 'P2';
+  const p1Label = p1IsUs ? '(P1)' : 'P1';
+  const p2Label = p2IsUs ? '(P2)' : 'P2';
 
   const [g1, g2] = m.games;
   const end1 = formatEndReasonNode(g1.endReason);
@@ -4029,14 +4025,14 @@ export function battleInlineDetailHtml(
           </div>
           <div className='battle-detail-line'>
             <span>
-              <tt>{g1P1Label}</tt>
+              <tt>{p1Label}</tt>
               {showPools ? <> {t1Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(g1.p1)}
           </div>
           <div className='battle-detail-line'>
             <span>
-              <tt>{g1P2Label}</tt>
+              <tt>{p2Label}</tt>
               {showPools ? <> {t2Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(g1.p2)}
@@ -4053,17 +4049,17 @@ export function battleInlineDetailHtml(
           </div>
           <div className='battle-detail-line'>
             <span>
-              <tt>{g2P1Label}</tt>
-              {showPools ? <> {t1Code}</> : undefined}
-            </span>
-            {formatGamePlayerTelemetryNode(g2.p2)}
-          </div>
-          <div className='battle-detail-line'>
-            <span>
-              <tt>{g2P2Label}</tt>
+              <tt>{p1Label}</tt>
               {showPools ? <> {t2Code}</> : undefined}
             </span>
             {formatGamePlayerTelemetryNode(g2.p1)}
+          </div>
+          <div className='battle-detail-line'>
+            <span>
+              <tt>{p2Label}</tt>
+              {showPools ? <> {t1Code}</> : undefined}
+            </span>
+            {formatGamePlayerTelemetryNode(g2.p2)}
           </div>
         </div>
       </div>
