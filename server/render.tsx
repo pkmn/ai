@@ -4222,8 +4222,11 @@ function renderBattlesPage(opts: {
   } = opts;
   const {publicDir} = links;
   const countsBySlot = liveDoc?.countsBySlot ?? db.getMatchCountsBySlot();
-  const currentBySlot = new Map(db.getCurrentLadders().map(l => [l.slot, l]));
   const allLadders = db.getLadders();
+  const currentBySlot = new Map<db.LadderSlot, db.LadderRow>();
+  for (const l of allLadders) {
+    if (l.status === 'upcoming' || l.status === 'active') currentBySlot.set(l.slot, l);
+  }
   const ladderMeta: Record<string, {name: string; href: string}> = {};
   for (const l of allLadders) {
     const entry = {name: l.name, href: arena.ladderHref(l)};
@@ -4258,9 +4261,10 @@ function renderBattlesPage(opts: {
   ));
 
   const agentLinks: Record<string, string> = {};
-  for (const s of db.getProjectArenaSummaries()) {
-    const href = resolveAgentHref(links, s.slug, s.name);
-    if (href) agentLinks[s.slug] = href;
+  if (links.profileSlugs) {
+    for (const slug of links.profileSlugs) {
+      agentLinks[slug] = `/projects/${encodeURIComponent(slug)}/`;
+    }
   }
   for (const m of recentMatches) {
     for (const side of [m.p1, m.p2]) {
