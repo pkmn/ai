@@ -2601,14 +2601,9 @@ export function register(app: polka.Polka, options: Options): Handle {
         return;
       }
 
-      const frame = {...body} as LiveMatchInput & {
-        system?: unknown;
-        restarting?: unknown;
-        smokeTesting?: unknown;
-      };
+      const frame = {...body} as LiveMatchInput & {system?: unknown; restarting?: unknown};
       delete frame.system;
       delete frame.restarting;
-      delete frame.smokeTesting;
       if (currentLive?.matchId === frame.matchId && frame.heartbeatSeq < currentLive.heartbeatSeq) {
         armWatchdog(nowSec);
         options.onHeartbeat?.({at: nowSec, system: lastArenaSystem, live: currentLive});

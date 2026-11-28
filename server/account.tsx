@@ -2158,7 +2158,7 @@ export function renderAccountPage(opts: {
       {renderActiveSection(activeEntries)}
 
       <section id='submission'>
-        <div className='section-header'>
+        <div className='section-head'>
           <h3><a href='#submission' className='subtle'>Submission</a></h3>
           <a href='/rules/#submission' className='section-link'>Rules</a>
         </div>

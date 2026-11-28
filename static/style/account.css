@@ -18,7 +18,7 @@ h3 {
   font-size: 1.15em;
 }
 
-.section-header {
+.section-head {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem 1.5ch;
@@ -27,7 +27,7 @@ h3 {
   margin: 1.75rem 0 0.6rem;
 }
 
-.section-header h3 {
+.section-head h3 {
   margin: 0;
 }
 

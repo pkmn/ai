@@ -1741,7 +1741,12 @@ function buildBattlesScript(
 
     const checkHash = async () => {
       if (!location.hash) return;
-      const id = decodeURIComponent(location.hash.slice(1));
+      let id;
+      try {
+        id = decodeURIComponent(location.hash.slice(1));
+      } catch {
+        return;
+      }
       if (!id || id === 'live' || id === 'history') return;
       const fmtRadio = document.getElementById('bf-' + id);
       if (fmtRadio && fmtRadio.tagName === 'INPUT' && fmtRadio.name === 'bformat') {

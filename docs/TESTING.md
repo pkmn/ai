@@ -64,9 +64,9 @@ substrings) to capture only affected states, and `--tolerance <px>` to relax pix
 
 **7 Atlas Sections (114 states):**
 1. **`static`:** Home (normal, signed-out default profile icon, manual Light/Dark theme overrides,
-   `● LIVE` `#topbar`, and opened `#site-menu` dropdown), Background (`Under Construction`), Concepts + 5 subpages (`baselines`,
-   `complexity`, `engines`, `protocol`, `variants`), Glossary, Release, Research, Arena Rules,
-   `404`.
+   `● LIVE` `#topbar`, and opened `#site-menu` dropdown), Background (`Under Construction`),
+   Concepts + 5 subpages (`baselines`, `complexity`, `engines`, `protocol`, `variants`), Glossary,
+   Release, Research, Arena Rules, `404`.
 2. **`projects`:** Filters (`Active`/`All`/`Inactive`), champion profile (`/projects/0-error/`,
    version & H2H filters, expanded telemetry, empty filter), provisional w/ company
    (`/projects/pokerus/`), qualified w/ 0 entries (`/projects/cynthiai/`), pending
