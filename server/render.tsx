@@ -3250,7 +3250,7 @@ function renderLadderHtml(opts: {
 
   const liveTournament = db.getRunningTournament();
   const ladderHeader = build.injectLiveBanner(
-    build.header(<a href='/arena/' className='subtle'>Ladders</a>),
+    build.header('Ladders'),
     liveTournament,
     restarting
   );
@@ -4375,7 +4375,7 @@ function renderBattlesPage(opts: {
     id: 'battles',
     title: 'Arena — Battles | pkmn.ai',
     header: build.injectLiveBanner(
-      build.header(<a href='/arena/' className='subtle'>Battles</a>),
+      build.header('Battles'),
       db.getRunningTournament(),
       Boolean(liveDoc && !liveDoc.stale && liveDoc.restarting)
     ),

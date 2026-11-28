@@ -104,6 +104,19 @@ export const SET_THEME = [
   "img.addEventListener('error',onErr);",
   'if(img.complete&&img.naturalWidth===0)onErr();',
   '}',
+  "var menu=document.getElementById('site-menu');",
+  'if(menu){',
+  "document.addEventListener('click',function(ev){",
+  'if(menu.open&&!menu.contains(ev.target))menu.open=false;',
+  '});',
+  "document.addEventListener('keydown',function(ev){",
+  "if(ev.key==='Escape'&&menu.open){",
+  'menu.open=false;',
+  "var sum=menu.querySelector('summary');",
+  'if(sum)sum.focus();',
+  '}',
+  '});',
+  '}',
   '})();',
 ].join('');
 
@@ -193,6 +206,119 @@ export function applyAccountProfile(html: string, account?: AccountProfile): str
       ` aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${svg}${img}</a>`
     );
   });
+}
+
+export interface BackLink {
+  href: string;
+  label: string;
+}
+
+interface SiteMenuItem {
+  href: string;
+  label: string;
+  match: (normalizedPath: string) => boolean;
+}
+
+const SITE_MENU_PRIMARY: readonly SiteMenuItem[] = [
+  {
+    href: '/arena/',
+    label: 'Arena',
+    match: p =>
+      p === '/arena' || p.startsWith('/arena/ladders/') || p.startsWith('/arena/tournaments/'),
+  },
+  {
+    href: '/arena/battles/',
+    label: 'Battles',
+    match: p => p === '/arena/battles' || p.startsWith('/arena/battles/'),
+  },
+  {
+    href: '/projects/',
+    label: 'Projects',
+    match: p => p === '/projects' || p.startsWith('/projects/'),
+  },
+  {
+    href: '/rules/',
+    label: 'Rules',
+    match: p => p === '/rules',
+  },
+];
+
+const SITE_MENU_SECONDARY: readonly SiteMenuItem[] = [
+  {
+    href: '/wiki/',
+    label: 'Wiki',
+    match: p => p === '/wiki' || p.startsWith('/wiki/'),
+  },
+  {
+    href: '/research/',
+    label: 'Research',
+    match: p => p === '/research',
+  },
+  {
+    href: '/glossary/',
+    label: 'Glossary',
+    match: p => p === '/glossary',
+  },
+  {
+    href: '/chat/',
+    label: 'Discord',
+    match: () => false,
+  },
+];
+
+export function resolveBackLink(pagePath: string): BackLink | undefined {
+  const p = pagePath.replace(/\/+$/, '') || '/';
+  if (p.startsWith('/arena/')) return {href: '/arena/', label: 'Arena'};
+  if (p.startsWith('/projects/')) return {href: '/projects/', label: 'Projects'};
+  if (p.startsWith('/concepts/')) return {href: '/concepts/', label: 'Concepts'};
+  if (p.startsWith('/wiki/')) return {href: '/wiki/', label: 'Wiki'};
+  return undefined;
+}
+
+export function formatTopNav(pagePath: string, backLink?: BackLink | false): string {
+  const normalized = pagePath.replace(/\/+$/, '') || '/';
+  const resolvedBack = backLink === false
+    ? undefined
+    : (backLink ?? resolveBackLink(pagePath));
+  const renderItem = (item: SiteMenuItem) => {
+    const active = item.match(normalized);
+    return (
+      <a
+        href={item.href}
+        className='subtle'
+        aria-current={active ? 'page' : undefined}
+      >
+        {active ? <strong>{item.label}</strong> : item.label}
+      </a>
+    );
+  };
+  return String(
+    <div id='top-nav'>
+      <details id='site-menu'>
+        <summary aria-label='Navigation menu' title='Menu'>
+          <svg className='menu-icon' viewBox='0 0 20 20' aria-hidden='true'>
+            <path
+              d='M3 5.5h14M3 10h14M3 14.5h14'
+              fill='none'
+              stroke='currentColor'
+              strokeWidth='2'
+              strokeLinecap='round'
+            />
+          </svg>
+        </summary>
+        <div className='site-menu-panel' role='navigation' aria-label='Site navigation'>
+          {SITE_MENU_PRIMARY.map(renderItem)}
+          <hr />
+          {SITE_MENU_SECONDARY.map(renderItem)}
+        </div>
+      </details>
+      {resolvedBack && (
+        <a href={resolvedBack.href} className='subtle back-link'>
+          <span aria-hidden='true'>{'\u2039'}</span> {resolvedBack.label}
+        </a>
+      )}
+    </div>
+  );
 }
 
 export const TOP_CONTROLS = String(
@@ -338,6 +464,7 @@ export interface Page extends Omit<site.page.Page, 'content' | 'header'> {
   preconnect?: readonly string[];
   preloadImages?: readonly string[];
   topControls?: boolean;
+  backLink?: BackLink | false;
 }
 
 const BUILT_STYLESHEET_RE = /^index\.[0-9a-f]{8}\.css$/;
@@ -404,9 +531,16 @@ export class Renderer extends site.page.Renderer {
     const withBanner = banner && !rawHeader?.includes('id="topbar"')
       ? (rawHeader ? `${banner}\n  ${rawHeader}` : banner)
       : rawHeader;
-    const headerHtml = page.topControls === false || withBanner?.includes('id="top-controls"')
-      ? withBanner
-      : (withBanner ? `${withBanner}\n  ${TOP_CONTROLS}` : TOP_CONTROLS);
+    let headerHtml = withBanner;
+    if (page.topControls !== false) {
+      if (!headerHtml?.includes('id="top-nav"')) {
+        const topNav = formatTopNav(page.path, page.backLink);
+        headerHtml = headerHtml ? `${headerHtml}\n  ${topNav}` : topNav;
+      }
+      if (!headerHtml?.includes('id="top-controls"')) {
+        headerHtml = headerHtml ? `${headerHtml}\n  ${TOP_CONTROLS}` : TOP_CONTROLS;
+      }
+    }
 
     const preconnectTags = (page.preconnect ?? [])
       .map(origin => `<link rel="preconnect" href="${escapeHtml(origin)}">`)
@@ -586,7 +720,7 @@ const build = async (rebuild?: boolean) => {
     // runtime.
     const projectsDir = path.join(PUBLIC, 'projects');
     if (fs.exists(projectsDir)) fs.remove(projectsDir);
-    for (const placeholder of ['chat', 'account', 'arena', 'projects', 'wiki']) {
+    for (const placeholder of ['chat', 'account', 'arena', 'arena/battles', 'projects', 'wiki']) {
       const file = path.join(PUBLIC, placeholder, 'index.html');
       fs.mkdir(path.dirname(file));
       fs.write(file, '');
@@ -650,6 +784,7 @@ const build = async (rebuild?: boolean) => {
         }
         const keep =
           rel === 'index.html' ||
+          rel === 'battles/index.html' ||
           (runningTournament !== undefined &&
             rel === `tournaments/${runningTournament.id}/index.html`) ||
           /\.(?:7z|log|tar)$/i.test(entry.name);

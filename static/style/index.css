@@ -47,6 +47,104 @@
   border-radius: 3px;
 }
 
+#top-nav {
+  position: absolute;
+  top: 1.25rem;
+  left: 1.25rem;
+  z-index: 6;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  font-weight: normal;
+  line-height: 1;
+}
+
+#topbar ~ #top-nav {
+  top: 3.25rem;
+}
+
+#site-menu {
+  position: relative;
+}
+
+#site-menu > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--fg-color);
+  list-style: none;
+  cursor: pointer;
+}
+
+#site-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+#site-menu > summary svg {
+  display: block;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.site-menu-panel {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  z-index: 20;
+  min-width: 10.5rem;
+  padding: 0.35rem 0;
+  font-size: 0.92rem;
+  line-height: 1.4;
+  text-align: left;
+  background-color: var(--bg-color);
+  border: 1px solid var(--code-border-color);
+  border-radius: var(--border-radius);
+  box-shadow: 0 6px 20px rgb(var(--fg-base) / 12%);
+}
+
+.site-menu-panel a {
+  display: block;
+  padding: 0.3rem 0.85rem;
+  color: rgb(var(--fg-base) / 72%);
+  white-space: nowrap;
+}
+
+.site-menu-panel a:hover,
+.site-menu-panel a:focus-visible {
+  color: var(--fg-color);
+  text-decoration: none;
+  background-color: var(--aside-bg-color);
+}
+
+.site-menu-panel a[aria-current="page"] {
+  color: var(--fg-color);
+}
+
+.site-menu-panel hr {
+  height: 1px;
+  margin: 0.3rem 0;
+  background-color: var(--code-border-color);
+  border: 0;
+}
+
+#top-nav .back-link {
+  display: inline-flex;
+  gap: 0.25ch;
+  align-items: baseline;
+  color: rgb(var(--fg-base) / 62%);
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+#top-nav .back-link:hover,
+#top-nav .back-link:focus-visible {
+  color: var(--fg-color);
+  text-decoration: underline;
+}
+
 #top-controls {
   position: absolute;
   top: 1.25rem;
@@ -114,7 +212,26 @@
   display: block;
 }
 
+@media (width < 540px) {
+  header:has(#top-nav .back-link) {
+    margin-top: 3.25rem;
+  }
+
+  header:has(#topbar):has(#top-nav .back-link) {
+    margin-top: 5.25rem;
+  }
+}
+
 @media (width < 480px) {
+  #top-nav {
+    top: 1rem;
+    left: 1rem;
+  }
+
+  #topbar ~ #top-nav {
+    top: 3rem;
+  }
+
   #top-controls {
     top: 1rem;
     right: 1rem;
@@ -126,6 +243,10 @@
 
   header:has(#topbar) {
     margin-top: 4.75rem;
+  }
+
+  header:has(#topbar):has(#top-nav .back-link) {
+    margin-top: 5rem;
   }
 }
 

@@ -3480,7 +3480,7 @@ export function renderTournamentPage(opts: {
   );
 
   const pageHeader = injectLiveBanner(
-    header(<a href='/arena/' className='subtle'>Tournaments</a>),
+    header('Tournaments'),
     liveTournament ?? db.getRunningTournament(),
     arenaRestarting
   );
