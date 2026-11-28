@@ -1689,8 +1689,8 @@ describe('Coordinator', () => {
     expect(calls).toEqual([
       'podman machine stop podman-machine-default',
       'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
-      'podman info --format {{.Host.Os}}',
-      'podman info --format {{.Host.Os}}',
+      'podman info --format {{.Host.OS}}',
+      'podman info --format {{.Host.OS}}',
     ]);
     expect(sleeps).toBe(1);
   });
@@ -1716,7 +1716,7 @@ describe('Coordinator', () => {
     expect(calls).toEqual([
       'podman machine stop podman-machine-default',
       'sudo -n /bin/launchctl kickstart -k system/ai.pkmn.podman',
-      'podman info --format {{.Host.Os}}',
+      'podman info --format {{.Host.OS}}',
     ]);
   });
 

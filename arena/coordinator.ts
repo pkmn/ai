@@ -258,7 +258,7 @@ export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<PodmanR
   const deadline = now() + readyTimeoutMillis;
   while (!isDraining() && now() < deadline) {
     try {
-      await run('podman', ['info', '--format', '{{.Host.Os}}'], {timeout: 5_000});
+      await run('podman', ['info', '--format', '{{.Host.OS}}'], {timeout: 5_000});
       return {ok: true};
     } catch {
       await sleep(readyPollMillis);
