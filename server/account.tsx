@@ -2110,35 +2110,38 @@ export function renderAccountPage(opts: {
   const content = (
     <>
       <div className='account-bar' id='account'>
-        <span>
-          <span className='muted'>Developer:</span>{' '}
-          <a
-            href={`https://github.com/${encodeURIComponent(developer.githubLogin)}`}
-            className='subtle'
-          >
-            <strong>{developer.githubLogin}</strong>
-          </a>
-        </span>
-        <span className='muted'>·</span>
-        <span><span className='muted'>Discord:</span> {discordView}</span>
-        <span className='muted'>·</span>
-        <span><span className='muted'>API Token:</span> {apiTokenView}</span>
-        <span className='muted'>·</span>
-        <span>
-          <span className='muted'>Project:</span>{' '}
-          <a href={projectHref} className='subtle'><strong>{agent.name}</strong></a>
-        </span>
-        <span className='muted'>·</span>
-        <span>
-          <span className='muted'>Status:</span>{' '}
-          <span className={statusClass} {...util.localizedTitleFromText(statusTitle)}>
-            {status.label}
+        <div className='account-bar-row'>
+          <span>
+            <span className='muted'>Project:</span>{' '}
+            <a href={projectHref} className='subtle'><strong>{agent.name}</strong></a>
           </span>
-        </span>
-        <span className='muted'>·</span>
-        <form method='POST' action='/auth/logout?return_to=%2Farena%2F' className='inline-form'>
-          <button type='submit' className='link-btn'>Logout</button>
-        </form>
+          <span className='muted'>·</span>
+          <span>
+            <span className='muted'>Developer:</span>{' '}
+            <a
+              href={`https://github.com/${encodeURIComponent(developer.githubLogin)}`}
+              className='subtle'
+            >
+              <strong>{developer.githubLogin}</strong>
+            </a>
+          </span>
+          <span className='muted'>·</span>
+          <form method='POST' action='/auth/logout?return_to=%2Farena%2F' className='inline-form'>
+            <button type='submit' className='link-btn'>Logout</button>
+          </form>
+        </div>
+        <div className='account-bar-row'>
+          <span>
+            <span className='muted'>Status:</span>{' '}
+            <span className={statusClass} {...util.localizedTitleFromText(statusTitle)}>
+              {status.label}
+            </span>
+          </span>
+          <span className='muted'>·</span>
+          <span><span className='muted'>Discord:</span> {discordView}</span>
+          <span className='muted'>·</span>
+          <span><span className='muted'>API Token:</span> {apiTokenView}</span>
+        </div>
       </div>
 
       <div id='api-token-banner' className='staged-box hide' />

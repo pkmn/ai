@@ -94,12 +94,19 @@ tr.secondary td {
 
 .account-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem 1.25ch;
+  flex-direction: column;
+  gap: 0.35rem;
   align-items: center;
-  justify-content: center;
   margin: 0.25rem 0 1.5rem;
   font-size: 0.95em;
+}
+
+.account-bar-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.25ch;
+  align-items: center;
+  justify-content: center;
 }
 
 .form-box {
