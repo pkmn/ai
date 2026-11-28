@@ -130,17 +130,32 @@ function formatCurStreakNode(winStreak: number, lossStreak: number, played: numb
   return <span className='muted'>—</span>;
 }
 
+interface LadderLink {
+  href: string;
+  name: string;
+}
+
+function resolveLadderHref(ladder: db.LadderRow): string {
+  const key = ladder.status === 'archived' || ladder.status === 'settling'
+    ? ladder.id
+    : ladder.slot;
+  return `/arena/ladders/${encodeURIComponent(key)}/`;
+}
+
 function buildVersionDynamicStats(
   entry: db.AgentLadderProfileEntry,
-  adjacentLos: ReadonlyMap<number, number>
+  adjacentLos: ReadonlyMap<number, number>,
+  ladder: LadderLink
 ): VersionDynamicStats {
   const isProvisional =
     entry.role !== 'retired' && (entry.matches < 10 || entry.se > 60);
+  const ladderTip = `View ${ladder.name} ladder`;
   let rank: string;
   if (entry.role === 'retired') {
     rank = String(
       <span className='muted'>
-        — (retired
+        — (
+        <a href={ladder.href} title={ladderTip}>retired</a>
         {entry.retiredAt ? (
           <>
             {' '}
@@ -169,16 +184,18 @@ function buildVersionDynamicStats(
       : '';
     rank = String(
       <>
-        <strong>#{entry.rankCurrent}</strong>
+        <a href={ladder.href} title={ladderTip}><strong>#{entry.rankCurrent}</strong></a>
         {Boolean(rangeNote || losNote) && (
           <> <span className='muted'>{rangeNote}{losNote}</span></>
         )}
       </>
     );
   } else if (isProvisional) {
-    rank = String(<span className='muted'>Provisional</span>);
+    rank = String(<a href={ladder.href} title={ladderTip}>Provisional</a>);
   } else {
-    rank = String(<span className='muted'>— (active)</span>);
+    rank = String(
+      <span className='muted'>— (<a href={ladder.href} title={ladderTip}>active</a>)</span>
+    );
   }
 
   const eloRounded = Math.round(entry.elo);
@@ -240,13 +257,14 @@ function buildVersionDynamicStats(
 function buildAllVersionsDynamicStats(
   entries: db.AgentLadderProfileEntry[],
   familyStats: db.AgentLadderStatsRow | undefined,
-  adjacentLos: ReadonlyMap<number, number>
+  adjacentLos: ReadonlyMap<number, number>,
+  ladder: LadderLink
 ): VersionDynamicStats {
   const activeEntries = entries
     .filter(e => e.role === 'champion' || e.role === 'challenger')
     .sort((a, b) => b.lcb - a.lcb || b.elo - a.elo);
   const rep = activeEntries[0] ?? entries[0];
-  const base = buildVersionDynamicStats(rep, adjacentLos);
+  const base = buildVersionDynamicStats(rep, adjacentLos, ladder);
 
   let totalW = 0;
   let totalL = 0;
@@ -1083,7 +1101,8 @@ function buildProjectMetaRows(
   db: db.Database,
   agent: db.AgentRow,
   meta: render.ProjectMeta | undefined,
-  latestEntry: db.AgentLadderArtifact | undefined
+  latestEntry: db.AgentLadderArtifact | undefined,
+  wikiHref?: string
 ): util.Html[] {
   const rows: util.Html[] = [];
   const devs = db.getDevelopersForAgent(agent.id);
@@ -1173,6 +1192,40 @@ function buildProjectMetaRows(
             </>
           )}
         </td>
+      </tr>
+    );
+  }
+
+  const tournamentEntries = db.getTournamentEntriesForAgent(agent.id);
+  if (tournamentEntries.length > 0) {
+    rows.push(
+      <tr>
+        <td><strong>Tournaments</strong></td>
+        <td>
+          {tournamentEntries.map((t, i) => {
+            const href = `/arena/tournaments/${encodeURIComponent(t.tournamentId)}/`;
+            const shortMatch = /^Tournament #(\d+)/.exec(t.tournamentName);
+            const label = shortMatch ? `T#${shortMatch[1]}` : t.tournamentName;
+            const rankSuffix = t.tournamentStatus === 'completed' && t.finalRank !== undefined
+              ? ` #${t.finalRank}`
+              : '';
+            return [
+              i > 0 && ', ',
+              <a href={href} className='subtle' title={t.tournamentName}>
+                <tt>{label}{rankSuffix}</tt>
+              </a>,
+            ];
+          })}
+        </td>
+      </tr>
+    );
+  }
+
+  if (wikiHref) {
+    rows.push(
+      <tr>
+        <td><strong>Wiki</strong></td>
+        <td><a href={wikiHref}>{agent.name}</a></td>
       </tr>
     );
   }
@@ -2157,8 +2210,9 @@ function buildLadderProfileBundle(opts: {
     </>
   );
 
+  const ladderLink: LadderLink = {href: resolveLadderHref(l), name: l.name};
   const vstats: Record<string, VersionDynamicStats> = {
-    all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos),
+    all: buildAllVersionsDynamicStats(agentEntries, familyStats, adjacentLos, ladderLink),
   };
   const reign: Record<string, string> = {
     all: buildReignRowsHtml(
@@ -2175,7 +2229,7 @@ function buildLadderProfileBundle(opts: {
   };
 
   for (const e of agentEntries) {
-    vstats[e.version] = buildVersionDynamicStats(e, adjacentLos);
+    vstats[e.version] = buildVersionDynamicStats(e, adjacentLos, ladderLink);
     reign[e.version] = buildReignRowsHtml(
       {
         top1EnteredAt: e.top1EnteredAt,
@@ -2283,6 +2337,7 @@ export function renderAgentProfileHtml(opts: {
   links: render.AgentLinkContext;
   avatarsDir?: string;
   liveTournament?: {id: string; name: string};
+  wikiHref?: string;
   nowSec: number;
 }): string {
   const {
@@ -2292,6 +2347,7 @@ export function renderAgentProfileHtml(opts: {
     links,
     avatarsDir = AVATARS_DIR,
     liveTournament,
+    wikiHref,
     nowSec,
   } = opts;
   const {projectMeta, logoSizes} = links;
@@ -2358,7 +2414,7 @@ export function renderAgentProfileHtml(opts: {
         <section id='overview'>
           <div className='grid-2'>
             <table className='kv'>
-              {buildProjectMetaRows(db, agent, meta, undefined)}
+              {buildProjectMetaRows(db, agent, meta, undefined, wikiHref)}
             </table>
 
             <table className='kv'>
@@ -2410,7 +2466,7 @@ export function renderAgentProfileHtml(opts: {
           </div>
         </section>
 
-        <p className='empty-state muted'>No Arena ladder entries yet.</p>
+        <p className='empty-state muted'>No <a href='/arena/'>Arena</a> ladder entries yet.</p>
 
         <section id='versions' className='hide'>
           <h3><a href='#versions' className='subtle'>Versions</a></h3>
@@ -2509,7 +2565,7 @@ export function renderAgentProfileHtml(opts: {
       <section id='overview'>
         <div className='grid-2'>
           <table className='kv'>
-            {buildProjectMetaRows(db, agent, meta, latestArtifact)}
+            {buildProjectMetaRows(db, agent, meta, latestArtifact, wikiHref)}
           </table>
 
           <table className='kv'>

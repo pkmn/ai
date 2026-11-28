@@ -451,6 +451,7 @@ export function createServerApp(options: ServerAppOptions): ServerAppHandle {
   render.register(app, {
     db,
     arena: arenaHandle,
+    wiki: wikiInstance,
     publicDir,
   });
   wiki.register(app, wikiInstance);

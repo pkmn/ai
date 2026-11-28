@@ -19,6 +19,7 @@ import * as arena from './arena';
 import * as profile from './profile';
 import * as ratings from './ratings';
 import * as tournaments from './tournaments';
+import type * as wiki from './wiki';
 
 export const PUBLIC_DIR = util.root('public');
 export const STATIC_DIR =
@@ -2049,6 +2050,7 @@ export interface LadderTeamsDocument {
 export interface Options {
   db: db.Database;
   arena: arena.Handle;
+  wiki?: wiki.Wiki;
   publicDir?: string;
   staticDir?: string;
   avatarsDir?: string;
@@ -4865,6 +4867,7 @@ export function register(app: polka.Polka, options: Options) {
           links: getLinks(),
           avatarsDir,
           liveTournament: db.getRunningTournament(),
+          wikiHref: options.wiki?.getVisibleProjectWikiHref(agent.name, req),
           nowSec: getNowSec(),
         }),
         contentType: 'text/html; charset=utf-8',

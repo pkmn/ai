@@ -992,6 +992,10 @@ export class Database extends SqliteDatabase {
     return entrants.getTournamentEntrantsByAgent(this.db);
   }
 
+  getTournamentEntriesForAgent(agentId: number): entrants.AgentTournamentEntryView[] {
+    return entrants.getTournamentEntriesForAgent(this.db, agentId);
+  }
+
   upsertTournamentGame(input: tournamentMatches.UpsertTournamentGameInput) {
     tournamentMatches.upsertTournamentGame(this.db, input);
   }

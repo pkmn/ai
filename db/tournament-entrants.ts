@@ -200,6 +200,63 @@ export function getTournamentEntrantsByAgent(
   return out;
 }
 
+export function getTournamentEntriesForAgent(
+  db: DatabaseSync,
+  agentId: number
+): AgentTournamentEntryView[] {
+  const rows = db.prepare(`
+    SELECT
+      te.tournament_id,
+      t.name AS tournament_name,
+      t.status AS tournament_status,
+      t.starts_at,
+      av.version,
+      te.seed,
+      te.points,
+      te.game_wins,
+      te.game_losses,
+      te.game_ties,
+      te.elo,
+      te.se,
+      te.final_rank
+    FROM tournament_entrants te
+    JOIN tournaments t ON t.id = te.tournament_id
+    JOIN agent_versions av ON av.id = te.version_id
+    WHERE te.agent_id = ?
+    ORDER BY t.starts_at DESC, te.tournament_id DESC
+  `).all(agentId) as Array<{
+    tournament_id: string;
+    tournament_name: string;
+    tournament_status: 'scheduled' | 'running' | 'completed';
+    starts_at: number;
+    version: string;
+    seed: number;
+    points: number;
+    game_wins: number;
+    game_losses: number;
+    game_ties: number;
+    elo: number;
+    se: number;
+    final_rank: number | null;
+  }>;
+
+  return rows.map(r => ({
+    tournamentId: r.tournament_id,
+    tournamentName: r.tournament_name,
+    tournamentStatus: r.tournament_status,
+    startsAt: r.starts_at,
+    version: r.version,
+    seed: r.seed,
+    points: r.points,
+    gameWins: r.game_wins,
+    gameLosses: r.game_losses,
+    gameTies: r.game_ties,
+    elo: r.elo,
+    se: r.se,
+    finalRank: r.final_rank ?? undefined,
+  }));
+}
+
 // Recomputes Round-Robin points, Sonneborn-Berger opponent-weighted tiebreakers, event-scoped
 // Davidson MAP Elo ± SE, and optional final 1..M placements (including any 100-game #1 vs #2
 // Superfinal swap) over all completed games for `tournamentId`.

@@ -2765,6 +2765,7 @@ async function startFixture(): Promise<Fixture> {
   render.register(app, {
     db,
     arena: arenaHandle,
+    wiki: wikiInstance,
     publicDir,
     staticDir,
     avatarsDir,
