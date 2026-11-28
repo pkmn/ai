@@ -648,11 +648,11 @@ export function selectNextArenaMatch(
 
     const thetaTop10 = theta[byTheta[Math.min(k - 1, 9)]];
     const thetaTop5 = theta[byTheta[Math.min(k - 1, 4)]];
-    const inTriage = new Uint8Array(M);
+    const unsettledTop = new Uint8Array(M);
     for (const i of act) {
       const ucb90 = theta[i] + 1.28 * sigma[i];
-      if (agentMatches[i] < 2 || (exploit > 0 && sigma[i] > 0.36 && ucb90 >= thetaTop10)) {
-        inTriage[i] = 1;
+      if (exploit > 0 && sigma[i] > 0.36 && ucb90 >= thetaTop10) {
+        unsettledTop[i] = 1;
       }
     }
 
@@ -690,11 +690,11 @@ export function selectNextArenaMatch(
         if (isNewI !== isNewJ) {
           challenger = isNewI ? i : j;
           anchor = isNewI ? j : i;
-        } else if (!isNewI && !isNewJ && inTriage[i] !== inTriage[j]) {
-          const candidate = inTriage[i] ? i : j;
+        } else if (!isNewI && !isNewJ && unsettledTop[i] !== unsettledTop[j]) {
+          const candidate = unsettledTop[i] ? i : j;
           if (agentMatches[candidate] < 10) {
             challenger = candidate;
-            anchor = inTriage[i] ? j : i;
+            anchor = unsettledTop[i] ? j : i;
           }
         }
         if (challenger !== -1) {
