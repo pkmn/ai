@@ -1373,6 +1373,63 @@ describe('Arena SSE streams', () => {
     expect((await fetch(`${srv.baseUrl}/api/tournaments/2/games.json?offset=-1`)).status).toBe(400);
   });
 
+  test('streams heartbeat smokeTesting transitions over /api/battles/stream', async () => {
+    const stream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
+    try {
+      await stream.waitForEvent('snapshot');
+
+      await client.sendHeartbeat({
+        idle: true,
+        smokeTesting: {slug: '0-error', name: '0 ERROR'},
+      });
+      const startEvt = await stream.waitForEvent('live', 1);
+      expect(startEvt.data.smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+      expect(startEvt.data.live).toBeUndefined();
+
+      await client.sendHeartbeat({idle: true});
+      const clearEvt = await stream.waitForEvent('live', 2);
+      expect(clearEvt.data.smokeTesting).toBeUndefined();
+    } finally {
+      await stream.close();
+    }
+  });
+
+  test('streams diagnostic-live smokeTesting transitions over /api/battles/stream', async () => {
+    const stream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
+    try {
+      await stream.waitForEvent('snapshot');
+
+      const diagFrame: arena.DiagnosticLivePayload = {
+        versionId: 42,
+        agentId: 1,
+        agentSlug: '0-error',
+        agentName: '0 ERROR',
+        version: '1.0.0',
+        format: 'gen9ou',
+        targetName: 'Gen 9 OU',
+        phase: 'battle',
+        turn: 1,
+        turnStartedAt: 1_760_000_000,
+        turnBudgetSeconds: 150,
+        incrementSeconds: 15,
+        p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
+        p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
+        lines: ['|turn|1'],
+      };
+      await client.sendDiagnosticLive(diagFrame);
+      const startEvt = await stream.waitForEvent('live', 1);
+      expect(startEvt.data.smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
+
+      await client.sendDiagnosticLive({...diagFrame, turn: 2, lines: ['|turn|1', '|turn|2']});
+      await client.sendDiagnosticLive({done: true, agentId: 1, versionId: 42});
+      const doneEvt = await stream.waitForEvent('live', 2);
+      expect(doneEvt.data.smokeTesting).toBeUndefined();
+      expect(stream.received.filter(e => e.event === 'live')).toHaveLength(2);
+    } finally {
+      await stream.close();
+    }
+  });
+
   test('clears heartbeat smokeTesting when diagnostic-live reports done', async () => {
     const zeroAgent = db.getAgentBySlug('0-error')!;
     const stream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
@@ -1448,7 +1505,7 @@ describe('Arena SSE streams', () => {
     }
   });
 
-  test('preserves heartbeat smokeTesting when submission-status targets another agent', async () => {
+  test('keeps heartbeat smokeTesting when submission-status targets another agent', async () => {
     const zeroAgent = db.getAgentBySlug('0-error')!;
     db.db.prepare('UPDATE ladder_entries SET settled_at = 1760000030 WHERE version_id = ?').run(
       vZeroId
@@ -4129,62 +4186,6 @@ describe('createServerApp production HTTP hardening', () => {
       expect(transitions).toEqual([true, false, true]);
     } finally {
       ctrl.close();
-    }
-  });
-
-  test('streams smokeTesting state transitions over /api/battles/stream', async () => {
-    const app = polka();
-    const ctrl = arena.register(app, {db, arenaSecret: ARENA_SECRET, publicDir: tmpDir});
-    const srv = await startTestServer(app);
-    const client = new arena.Client({serverUrl: srv.baseUrl, arenaSecret: ARENA_SECRET});
-    const battleStream = await openPersistentSse(srv.baseUrl, '/api/battles/stream');
-    try {
-      await battleStream.waitForEvent('snapshot');
-
-      await client.sendHeartbeat({
-        idle: true,
-        smokeTesting: {slug: '0-error', name: '0 ERROR'},
-      });
-      const startEvt = await battleStream.waitForEvent('live', 1);
-      expect(startEvt.data.smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
-      expect(startEvt.data.live).toBeUndefined();
-
-      await client.sendHeartbeat({idle: true});
-      const clearEvt = await battleStream.waitForEvent('live', 2);
-      expect(clearEvt.data.smokeTesting).toBeUndefined();
-
-      // Diagnostic-live start and done also flip smokeTesting on /api/battles/stream without
-      // emitting redundant battle SSE events on subsequent turns or exposing version strings.
-      const diagFrame: arena.DiagnosticLivePayload = {
-        versionId: 42,
-        agentId: 1,
-        agentSlug: '0-error',
-        agentName: '0 ERROR',
-        version: '1.0.0',
-        format: 'gen9ou',
-        targetName: 'Gen 9 OU',
-        phase: 'battle',
-        turn: 1,
-        turnStartedAt: 1_760_000_000,
-        turnBudgetSeconds: 150,
-        incrementSeconds: 15,
-        p1: {name: '0 ERROR (P1)', version: '1.0.0', bankSeconds: 150, thinking: true},
-        p2: {name: '0 ERROR (P2)', version: '1.0.0', bankSeconds: 150, thinking: false},
-        lines: ['|turn|1'],
-      };
-      await client.sendDiagnosticLive(diagFrame);
-      const diagStartEvt = await battleStream.waitForEvent('live', 3);
-      expect(diagStartEvt.data.smokeTesting).toEqual({slug: '0-error', name: '0 ERROR'});
-
-      await client.sendDiagnosticLive({...diagFrame, turn: 2, lines: ['|turn|1', '|turn|2']});
-      await client.sendDiagnosticLive({done: true, agentId: 1, versionId: 42});
-      const diagDoneEvt = await battleStream.waitForEvent('live', 4);
-      expect(diagDoneEvt.data.smokeTesting).toBeUndefined();
-      expect(battleStream.received.filter(e => e.event === 'live')).toHaveLength(4);
-    } finally {
-      await battleStream.close();
-      ctrl.close();
-      await srv.close();
     }
   });
 });
