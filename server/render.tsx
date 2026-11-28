@@ -771,7 +771,7 @@ export function buildBattleDetailClientJs(): string {
       const g2EndSuffix = end2.show ? (' · ' + end2.html) : '';
 
       const ladderMetaPrefix = !omitOutcome && m.ladderHref && m.ladderName
-        ? '<a href="' + esc(m.ladderHref) + '"><tt><strong>' +
+        ? '<a href="' + esc(m.ladderHref) + '" class="subtle"><tt><strong>' +
           esc(m.ladderName) + '</strong></tt></a> · '
         : '';
 
@@ -1444,7 +1444,8 @@ function buildBattlesScript(
         : '';
       const lm = ladderMeta[l.ladderId] || (l.slot && ladderMeta[l.slot]);
       const liveLadderPrefix = lm
-        ? '<a href="' + esc(lm.href) + '"><tt><strong>' + esc(lm.name) + '</strong></tt></a> · '
+        ? '<a href="' + esc(lm.href) + '" class="subtle"><tt><strong>' +
+          esc(lm.name) + '</strong></tt></a> · '
         : '';
       livePanel.innerHTML = '<div class="live-header"><span>' + liveLadderPrefix +
         '<code>' + esc(l.matchId) +
@@ -3277,7 +3278,7 @@ function renderLadderHtml(opts: {
       </section>
       {!isUpcoming && (
         <h3 id='battles'>
-          <a href={`/arena/battles/#${encodeURIComponent(l.slot)}`}>
+          <a href={`/arena/battles/#${encodeURIComponent(l.slot)}`} className='subtle'>
             Battles
             <svg
               className='heading-arrow'
@@ -3901,7 +3902,9 @@ function renderLivePanelInner(
         <span>
           {liveLadder && (
             <>
-              <a href={liveLadder.href}><tt><strong>{liveLadder.name}</strong></tt></a>
+              <a href={liveLadder.href} className='subtle'>
+                <tt><strong>{liveLadder.name}</strong></tt>
+              </a>
               {' · '}
             </>
           )}
@@ -4141,7 +4144,9 @@ export function battleInlineDetailHtml(
         <span>
           {!omitOutcome && m.ladderHref && m.ladderName && (
             <>
-              <a href={m.ladderHref}><tt><strong>{m.ladderName}</strong></tt></a>
+              <a href={m.ladderHref} className='subtle'>
+                <tt><strong>{m.ladderName}</strong></tt>
+              </a>
               {' · '}
             </>
           )}

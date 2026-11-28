@@ -4819,7 +4819,9 @@ describe('JSON route parity & retired pool archives', () => {
       expect(ladderHtml).not.toContain('back-link');
       expect(ladderHtml).toContain('class="ladder-live"');
       expect(ladderHtml).toContain('Alpha vs. Beta');
-      expect(ladderHtml).toContain('<h3 id="battles"><a href="/arena/battles/#rby">Battles<svg');
+      expect(ladderHtml).toContain(
+        '<h3 id="battles"><a href="/arena/battles/#rby" class="subtle">Battles<svg'
+      );
       expect(ladderHtml).toContain('class="heading-arrow"');
       expect(ladderHtml.indexOf('id="battles"')).toBeGreaterThan(
         ladderHtml.indexOf('id="standings"')
@@ -4832,11 +4834,11 @@ describe('JSON route parity & retired pool archives', () => {
       expect(battlesHtml).toContain('<h2>Battles</h2>');
       expect(battlesHtml).not.toContain('<h2><a href="/arena/"');
       expect(battlesHtml).toContain(
-        '<a href="/arena/ladders/rby/"><tt><strong>RBY</strong></tt></a> · ' +
+        '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · ' +
         '<code>gen1ou-0000010</code>'
       );
       expect(battlesHtml).toContain(
-        '<a href="/arena/ladders/rby/"><tt><strong>RBY</strong></tt></a> · <time'
+        '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · <time'
       );
 
       const profileHtml = await h.getText('/projects/alpha/');

@@ -2164,7 +2164,7 @@ export function renderAccountPage(opts: {
       <section id='submission'>
         <div className='section-header'>
           <h3><a href='#submission' className='subtle'>Submission</a></h3>
-          <a href='/rules/#submission' className='section-link'>Rules &amp; packaging {'\u2192'}</a>
+          <a href='/rules/#submission' className='section-link'>Rules</a>
         </div>
         <form
           id='submission-form'
