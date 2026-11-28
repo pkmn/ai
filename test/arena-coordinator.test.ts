@@ -284,6 +284,26 @@ describe('Coordinator', () => {
     }
   });
 
+  test('clears smokeTesting heartbeat when staging fails after smoke game completes', async () => {
+    const h = createMockCoordHarness('smoke-stage-fail');
+    h.stateDb.upsertLocalAgent = () => {
+      throw new Error('simulated sqlite write failure');
+    };
+    try {
+      await expect(
+        h.coord.processPendingSubmissions(
+          new Map([['gen9customgame', {...h.ladderSnap, format: 'gen9ou'}]])
+        )
+      ).rejects.toThrow(/simulated sqlite write failure/);
+      expect(h.heartbeats).toEqual([
+        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play'}},
+        {idle: true},
+      ]);
+    } finally {
+      h.stateDb.close();
+    }
+  }, 15_000);
+
   test('caps processPendingSubmissions to maxSubmissions (default 1) in FIFO order', async () => {
     const rootDir = path.join(tmpDir, 'smoke-cap');
     const stateDb = new arenaDb.Database(':memory:');

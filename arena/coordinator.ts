@@ -767,319 +767,330 @@ export class Coordinator {
       if (l.version) this.versionByLadderId.set(l.id, l.version);
     }
     let processed = 0;
+    let smokeHeartbeatActive = false;
 
-    for (const sub of submissions) {
-      if (this.draining || processed >= maxSubmissions || shouldYield?.()) break;
-      // Refresh the 15m server watchdog between submissions so large launch queues stay non-stale.
-      const sysInfo = await this.getSystemInfo?.();
-      await this.client.sendHeartbeat({
-        idle: true,
-        smokeTesting: {slug: sub.agentSlug, name: sub.agentName},
-        ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
-        ...(sysInfo ? {system: sysInfo} : {}),
-      }).catch(() => undefined);
-      processed++;
-      const mode = packages.toExecutionMode(sub.package);
-      const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
-      const target = targetId;
+    try {
+      for (const sub of submissions) {
+        if (this.draining || processed >= maxSubmissions || shouldYield?.()) break;
+        // Refresh the 15m server watchdog between submissions so large launch queues stay
+        // non-stale.
+        const sysInfo = await this.getSystemInfo?.();
+        await this.client.sendHeartbeat({
+          idle: true,
+          smokeTesting: {slug: sub.agentSlug, name: sub.agentName},
+          ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
+          ...(sysInfo ? {system: sysInfo} : {}),
+        }).catch(() => undefined);
+        smokeHeartbeatActive = true;
+        processed++;
+        const mode = packages.toExecutionMode(sub.package);
+        const targetId = packages.formatAgentTargetId(sub.agentSlug, sub.version, sub.versionId);
+        const target = targetId;
 
-      let unpackedBytes: number;
-      let resolvedSha256: string | undefined;
-      try {
-        const unpacked = mode === 'container'
-          ? packages.pullAndVerifyOciImage({
-            imageRef: sub.url,
-            agentTargetId: targetId,
-            expectedSha256: sub.sha256 || undefined,
-            creds: sub.authToken,
-            dirs: this.dirs,
-          })
-          : await packages.downloadAndUnpackBundle({
-            url: sub.url,
-            expectedSha256: sub.sha256 || undefined,
-            agentTargetId: targetId,
-            authToken: sub.authToken,
-            dirs: this.dirs,
-            allowPrivateUrls: this.devMode,
+        let unpackedBytes: number;
+        let resolvedSha256: string | undefined;
+        try {
+          const unpacked = mode === 'container'
+            ? packages.pullAndVerifyOciImage({
+              imageRef: sub.url,
+              agentTargetId: targetId,
+              expectedSha256: sub.sha256 || undefined,
+              creds: sub.authToken,
+              dirs: this.dirs,
+            })
+            : await packages.downloadAndUnpackBundle({
+              url: sub.url,
+              expectedSha256: sub.sha256 || undefined,
+              agentTargetId: targetId,
+              authToken: sub.authToken,
+              dirs: this.dirs,
+              allowPrivateUrls: this.devMode,
+            });
+          unpackedBytes = unpacked.unpackedBytes;
+          resolvedSha256 = unpacked.sha256;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await this.reportSubmissionOrOutbox({
+            versionId: sub.versionId,
+            smokeStatus: 'failed',
+            smokeError: `Package unpack/verification failed: ${msg}`,
           });
-        unpackedBytes = unpacked.unpackedBytes;
-        resolvedSha256 = unpacked.sha256;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        await this.reportSubmissionOrOutbox({
-          versionId: sub.versionId,
-          smokeStatus: 'failed',
-          smokeError: `Package unpack/verification failed: ${msg}`,
-        });
-        continue;
-      }
-
-      const candidateSpec = this.resolveLaunchSpec(mode, target);
-      const targetsToTest: Array<{
-        ladderId: string;
-        name: string;
-        format: string;
-        version?: string;
-        team: db.TeamMode;
-        smokeTeams?: [string, string];
-      }> = [];
-      const seenFormats = new Set<string>();
-      for (const lid of sub.ladders) {
-        const pendingMeta = pendingMetaById.get(lid);
-        const meta = pendingMeta ?? laddersById?.get(lid);
-        const format = meta?.format ?? lid;
-        const version = meta?.version;
-        const team = meta?.team ?? 'random';
-        const formatKey = `${format}::${version ?? ''}`;
-        if (!seenFormats.has(formatKey)) {
-          seenFormats.add(formatKey);
-          targetsToTest.push({
-            ladderId: lid,
-            name: pendingMeta?.name ?? format,
-            format,
-            version,
-            team,
-            smokeTeams: pendingMeta?.smokeTeams,
-          });
+          smokeHeartbeatActive = false;
+          continue;
         }
-      }
 
-      const smokeStartMillis = Date.now();
-      const smokeTelemetry: engine.SmokeTelemetry = {
-        maxInitMillis: 0,
-        maxTurnMillis: 0,
-        maxPeakRam: 0,
-      };
-      const diagnostics: SmokeDiagnosticInput[] = [];
-      let smokeError: string | undefined;
+        const candidateSpec = this.resolveLaunchSpec(mode, target);
+        const targetsToTest: Array<{
+          ladderId: string;
+          name: string;
+          format: string;
+          version?: string;
+          team: db.TeamMode;
+          smokeTeams?: [string, string];
+        }> = [];
+        const seenFormats = new Set<string>();
+        for (const lid of sub.ladders) {
+          const pendingMeta = pendingMetaById.get(lid);
+          const meta = pendingMeta ?? laddersById?.get(lid);
+          const format = meta?.format ?? lid;
+          const version = meta?.version;
+          const team = meta?.team ?? 'random';
+          const formatKey = `${format}::${version ?? ''}`;
+          if (!seenFormats.has(formatKey)) {
+            seenFormats.add(formatKey);
+            targetsToTest.push({
+              ladderId: lid,
+              name: pendingMeta?.name ?? format,
+              format,
+              version,
+              team,
+              smokeTeams: pendingMeta?.smokeTeams,
+            });
+          }
+        }
 
-      let keepStaged = false;
-      let smokeDurationMillis: number;
-      let threw = false;
-      try {
-        for (const item of targetsToTest) {
-          let t1Packed: string;
-          let t2Packed: string;
-          const subTeams = sub.teamsByLadder?.[item.ladderId];
-          if (item.team === 'pools') {
-            if (!subTeams || subTeams.length < 2) {
-              smokeError =
-                `Diagnostic test failed in ${item.format}: missing validated team roster for ` +
-                `${item.ladderId}`;
-              break;
-            }
-            t1Packed = subTeams[0];
-            t2Packed = subTeams.find(t => t !== t1Packed) ?? subTeams[1];
-          } else {
-            try {
-              if (item.team === 'harvested') {
-                // Never fall back to harvested ladder pools in diagnostic tests so private
-                // harvested teams cannot leak into exposed diagnostic logs.
-                if (!item.smokeTeams || item.smokeTeams.length < 2) {
-                  throw new Error(
-                    `missing sample team pool for ${item.format} (requires >= 2 teams)`
-                  );
-                }
-                [t1Packed, t2Packed] = item.smokeTeams;
-              } else {
-                ({t1Packed, t2Packed} = await sim.sampleRandomPair(
-                  item.format,
-                  '1,2,3,4',
-                  '5,6,7,8',
-                  item.version
-                ));
+        const smokeStartMillis = Date.now();
+        const smokeTelemetry: engine.SmokeTelemetry = {
+          maxInitMillis: 0,
+          maxTurnMillis: 0,
+          maxPeakRam: 0,
+        };
+        const diagnostics: SmokeDiagnosticInput[] = [];
+        let smokeError: string | undefined;
+
+        let keepStaged = false;
+        let smokeDurationMillis: number;
+        let threw = false;
+        try {
+          for (const item of targetsToTest) {
+            let t1Packed: string;
+            let t2Packed: string;
+            const subTeams = sub.teamsByLadder?.[item.ladderId];
+            if (item.team === 'pools') {
+              if (!subTeams || subTeams.length < 2) {
+                smokeError =
+                  `Diagnostic test failed in ${item.format}: missing validated team roster for ` +
+                  `${item.ladderId}`;
+                break;
               }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              const detail = `Diagnostic test setup fault in ${item.format}: ${msg}`;
+              t1Packed = subTeams[0];
+              t2Packed = subTeams.find(t => t !== t1Packed) ?? subTeams[1];
+            } else {
+              try {
+                if (item.team === 'harvested') {
+                  // Never fall back to harvested ladder pools in diagnostic tests so private
+                  // harvested teams cannot leak into exposed diagnostic logs.
+                  if (!item.smokeTeams || item.smokeTeams.length < 2) {
+                    throw new Error(
+                      `missing sample team pool for ${item.format} (requires >= 2 teams)`
+                    );
+                  }
+                  [t1Packed, t2Packed] = item.smokeTeams;
+                } else {
+                  ({t1Packed, t2Packed} = await sim.sampleRandomPair(
+                    item.format,
+                    '1,2,3,4',
+                    '5,6,7,8',
+                    item.version
+                  ));
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                const detail = `Diagnostic test setup fault in ${item.format}: ${msg}`;
+                this.notifyAlert({
+                  key: 'smoke-infra',
+                  message:
+                    `Diagnostic test infrastructure error for ${sub.agentSlug} ${sub.version}`,
+                  detail,
+                });
+                throw err;
+              }
+            }
+
+            const gameStartMillis = Date.now();
+            const game = new arbiter.TimeSlicedArenaGame({
+              format: item.format,
+              version: item.version,
+              seed: '1,2,3,4',
+              p1: {spec: candidateSpec, teamPacked: t1Packed},
+              p2: {spec: candidateSpec, teamPacked: t2Packed},
+              sendUtm: item.team !== 'random',
+              recordAiLogs: true,
+              liveInfo: true,
+              maxTurns: this.maxTurns,
+              maxWallMillis:
+                this.diagnosticWallCapMillis ?? engine.diagnosticWallCapMillis(item.format),
+              stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
+              devMode: this.devMode,
+              onTurn: info => {
+                if (!this.client.sendDiagnosticLive) return;
+                const p1Label = `${sub.agentName} (P1)`;
+                const p2Label = `${sub.agentName} (P2)`;
+                const lines = arbiter
+                  .rewriteBlindPlayerNames(info.omniscientLog, p1Label, p2Label)
+                  .split('\n');
+                return this.client.sendDiagnosticLive({
+                  versionId: sub.versionId,
+                  agentId: sub.agentId,
+                  agentSlug: sub.agentSlug,
+                  agentName: sub.agentName,
+                  version: sub.version,
+                  format: item.format,
+                  targetName: item.name,
+                  phase: info.phase,
+                  turn: info.turn,
+                  activeSlot: info.activeSlot,
+                  turnStartedAt: info.turnStartedAt,
+                  turnBudgetSeconds: info.turnBudgetSeconds,
+                  incrementSeconds: info.incrementSeconds,
+                  p1: {
+                    name: p1Label,
+                    version: sub.version,
+                    bankSeconds: info.p1.bankSeconds,
+                    thinking: info.activeSlot === 'p1',
+                    peakRam: info.p1.ram,
+                    ...(info.p1.info !== undefined ? {info: info.p1.info} : {}),
+                  },
+                  p2: {
+                    name: p2Label,
+                    version: sub.version,
+                    bankSeconds: info.p2.bankSeconds,
+                    thinking: info.activeSlot === 'p2',
+                    peakRam: info.p2.ram,
+                    ...(info.p2.info !== undefined ? {info: info.p2.info} : {}),
+                  },
+                  lines,
+                  ...(info.winHistory?.length ? {winHistory: info.winHistory} : {}),
+                }).then(() => undefined).catch(() => undefined);
+              },
+            });
+            const res = await game.run();
+            const gameDurationMillis = Math.max(1, Date.now() - gameStartMillis);
+            const diagLog = arbiter.rewriteBlindPlayerNames(
+              res.omniscientLog,
+              `${sub.agentName} (P1)`,
+              `${sub.agentName} (P2)`
+            );
+            const infoStatus = engine.classifyInfoStatus(
+              engine.mergeInfoCompliance(res.p1.infoCompliance, res.p2.infoCompliance)
+            );
+            diagnostics.push({
+              ladderId: item.ladderId,
+              format: item.format,
+              turns: res.turns,
+              endReason: res.endReason,
+              durationMillis: gameDurationMillis,
+              battleLog: engine.truncateDiagnosticLog(diagLog),
+              infoStatus,
+              ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
+              ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
+              ...(res.p1.cpuCores !== undefined ? {p1CpuCores: res.p1.cpuCores} : {}),
+              ...(res.p2.cpuCores !== undefined ? {p2CpuCores: res.p2.cpuCores} : {}),
+              ...(res.p1.peakRam > 0 ? {p1PeakRam: Math.round(res.p1.peakRam)} : {}),
+              ...(res.p2.peakRam > 0 ? {p2PeakRam: Math.round(res.p2.peakRam)} : {}),
+            });
+
+            const verdict = engine.classifySmokeGame(res, {
+              label: 'Diagnostic test',
+              format: item.format,
+              selfPlay: true,
+              p1Stderr: res.p1.stderr,
+              p2Stderr: res.p2.stderr,
+            });
+            if (verdict.kind === 'infra') {
               this.notifyAlert({
                 key: 'smoke-infra',
                 message:
                   `Diagnostic test infrastructure error for ${sub.agentSlug} ${sub.version}`,
-                detail,
+                detail: verdict.message,
               });
-              throw err;
+              throw new Error(verdict.message);
             }
+            if (verdict.kind === 'fail') {
+              smokeError = verdict.message;
+              break;
+            }
+            engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
+            engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
           }
+          keepStaged = smokeError === undefined;
+          smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
+        } catch (err) {
+          threw = true;
+          throw err;
+        } finally {
+          // Keep passed ladder builds staged locally on SSD (not yet archived to
+          // `/Volumes/Archive`) so Activation archives directly without re-downloading and
+          // one-time auth tokens can be scrubbed immediately after diagnostic fetch. Delete
+          // failed/errored builds immediately.
+          if (!keepStaged) {
+            this.cleanupUnpackedAgent(mode, targetId);
+          }
+          if (this.client.sendDiagnosticLive) {
+            await this.client.sendDiagnosticLive({
+              done: true,
+              agentId: sub.agentId,
+              versionId: sub.versionId,
+            }).catch(() => undefined);
+          }
+          if (threw && mode === 'container') {
+            await this.maybeRecyclePodmanVm();
+          }
+        }
 
-          const gameStartMillis = Date.now();
-          const game = new arbiter.TimeSlicedArenaGame({
-            format: item.format,
-            version: item.version,
-            seed: '1,2,3,4',
-            p1: {spec: candidateSpec, teamPacked: t1Packed},
-            p2: {spec: candidateSpec, teamPacked: t2Packed},
-            sendUtm: item.team !== 'random',
-            recordAiLogs: true,
-            liveInfo: true,
-            maxTurns: this.maxTurns,
-            maxWallMillis:
-              this.diagnosticWallCapMillis ?? engine.diagnosticWallCapMillis(item.format),
-            stderrCapture: engine.DIAGNOSTIC_STDERR_LIMITS,
-            devMode: this.devMode,
-            onTurn: info => {
-              if (!this.client.sendDiagnosticLive) return;
-              const p1Label = `${sub.agentName} (P1)`;
-              const p2Label = `${sub.agentName} (P2)`;
-              const lines = arbiter
-                .rewriteBlindPlayerNames(info.omniscientLog, p1Label, p2Label)
-                .split('\n');
-              return this.client.sendDiagnosticLive({
-                versionId: sub.versionId,
-                agentId: sub.agentId,
-                agentSlug: sub.agentSlug,
-                agentName: sub.agentName,
-                version: sub.version,
-                format: item.format,
-                targetName: item.name,
-                phase: info.phase,
-                turn: info.turn,
-                activeSlot: info.activeSlot,
-                turnStartedAt: info.turnStartedAt,
-                turnBudgetSeconds: info.turnBudgetSeconds,
-                incrementSeconds: info.incrementSeconds,
-                p1: {
-                  name: p1Label,
-                  version: sub.version,
-                  bankSeconds: info.p1.bankSeconds,
-                  thinking: info.activeSlot === 'p1',
-                  peakRam: info.p1.ram,
-                  ...(info.p1.info !== undefined ? {info: info.p1.info} : {}),
-                },
-                p2: {
-                  name: p2Label,
-                  version: sub.version,
-                  bankSeconds: info.p2.bankSeconds,
-                  thinking: info.activeSlot === 'p2',
-                  peakRam: info.p2.ram,
-                  ...(info.p2.info !== undefined ? {info: info.p2.info} : {}),
-                },
-                lines,
-                ...(info.winHistory?.length ? {winHistory: info.winHistory} : {}),
-              }).then(() => undefined).catch(() => undefined);
-            },
-          });
-          const res = await game.run();
-          const gameDurationMillis = Math.max(1, Date.now() - gameStartMillis);
-          const diagLog = arbiter.rewriteBlindPlayerNames(
-            res.omniscientLog,
-            `${sub.agentName} (P1)`,
-            `${sub.agentName} (P2)`
-          );
-          const infoStatus = engine.classifyInfoStatus(
-            engine.mergeInfoCompliance(res.p1.infoCompliance, res.p2.infoCompliance)
-          );
-          diagnostics.push({
-            ladderId: item.ladderId,
-            format: item.format,
-            turns: res.turns,
-            endReason: res.endReason,
-            durationMillis: gameDurationMillis,
-            battleLog: engine.truncateDiagnosticLog(diagLog),
-            infoStatus,
-            ...(res.p1.stderr ? {p1Stderr: res.p1.stderr} : {}),
-            ...(res.p2.stderr ? {p2Stderr: res.p2.stderr} : {}),
-            ...(res.p1.cpuCores !== undefined ? {p1CpuCores: res.p1.cpuCores} : {}),
-            ...(res.p2.cpuCores !== undefined ? {p2CpuCores: res.p2.cpuCores} : {}),
-            ...(res.p1.peakRam > 0 ? {p1PeakRam: Math.round(res.p1.peakRam)} : {}),
-            ...(res.p2.peakRam > 0 ? {p2PeakRam: Math.round(res.p2.peakRam)} : {}),
-          });
-
-          const verdict = engine.classifySmokeGame(res, {
-            label: 'Diagnostic test',
-            format: item.format,
-            selfPlay: true,
-            p1Stderr: res.p1.stderr,
-            p2Stderr: res.p2.stderr,
-          });
-          if (verdict.kind === 'infra') {
-            this.notifyAlert({
-              key: 'smoke-infra',
-              message:
-                `Diagnostic test infrastructure error for ${sub.agentSlug} ${sub.version}`,
-              detail: verdict.message,
+        try {
+          if (smokeError) {
+            await this.reportSubmissionOrOutbox({
+              versionId: sub.versionId,
+              smokeStatus: 'failed',
+              ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
+              smokeError,
+              ...(diagnostics.length ? {diagnostics} : {}),
             });
-            throw new Error(verdict.message);
+            smokeHeartbeatActive = false;
+            continue;
           }
-          if (verdict.kind === 'fail') {
-            smokeError = verdict.message;
-            break;
-          }
-          engine.recordSmokeTelemetry(smokeTelemetry, res.p1);
-          engine.recordSmokeTelemetry(smokeTelemetry, res.p2);
-        }
-        keepStaged = smokeError === undefined;
-        smokeDurationMillis = Math.max(1, Date.now() - smokeStartMillis);
-      } catch (err) {
-        threw = true;
-        throw err;
-      } finally {
-        // Keep passed ladder builds staged locally on SSD (not yet archived to `/Volumes/Archive`)
-        // so Activation archives directly without re-downloading and one-time auth tokens can be
-        // scrubbed immediately after diagnostic fetch. Delete failed/errored builds immediately.
-        if (!keepStaged) {
-          this.cleanupUnpackedAgent(mode, targetId);
-        }
-        if (this.client.sendDiagnosticLive) {
-          await this.client.sendDiagnosticLive({
-            done: true,
-            agentId: sub.agentId,
-            versionId: sub.versionId,
-          }).catch(() => undefined);
-        }
-        if (threw && mode === 'container') {
-          await this.maybeRecyclePodmanVm();
-        }
-        if (threw) {
-          await this.client.sendHeartbeat({
-            idle: true,
-            ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
-          }).catch(() => undefined);
-        }
-      }
 
-      try {
-        if (smokeError) {
+          this.stateDb.upsertLocalAgent({
+            versionId: sub.versionId,
+            agentId: sub.agentId,
+            slug: sub.agentSlug,
+            version: sub.version,
+            mode,
+            target: targetId,
+            residency: 'staged',
+            unpackedBytes,
+          });
+
           await this.reportSubmissionOrOutbox({
             versionId: sub.versionId,
-            smokeStatus: 'failed',
+            smokeStatus: 'staged',
             ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
-            smokeError,
+            unpackedBytes,
+            smokeDurationMillis,
+            smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),
+            ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
+              ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
+              : {}),
+            smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
+            ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
             ...(diagnostics.length ? {diagnostics} : {}),
           });
-          continue;
-        }
-
-        this.stateDb.upsertLocalAgent({
-          versionId: sub.versionId,
-          agentId: sub.agentId,
-          slug: sub.agentSlug,
-          version: sub.version,
-          mode,
-          target: targetId,
-          residency: 'staged',
-          unpackedBytes,
-        });
-
-        await this.reportSubmissionOrOutbox({
-          versionId: sub.versionId,
-          smokeStatus: 'staged',
-          ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
-          unpackedBytes,
-          smokeDurationMillis,
-          smokeInitMillis: Math.max(1, smokeTelemetry.maxInitMillis),
-          ...(smokeTelemetry.maxTeamPreviewMillis !== undefined
-            ? {smokeTeamPreviewMillis: Math.max(1, smokeTelemetry.maxTeamPreviewMillis)}
-            : {}),
-          smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
-          ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
-          ...(diagnostics.length ? {diagnostics} : {}),
-        });
-      } finally {
-        if (mode === 'container') {
-          await this.maybeRecyclePodmanVm();
+          smokeHeartbeatActive = false;
+        } finally {
+          if (mode === 'container') {
+            await this.maybeRecyclePodmanVm();
+          }
         }
       }
+    } catch (err) {
+      if (smokeHeartbeatActive) {
+        await this.client.sendHeartbeat({
+          idle: true,
+          ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
+        }).catch(() => undefined);
+      }
+      throw err;
     }
 
     return processed;
