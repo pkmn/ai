@@ -258,6 +258,14 @@ export async function runDaemon(opts: {
     let consecutiveCycleErrors = 0;
     let lastHostCheckAt = 0;
     const smokeCadence = new coordinator.SmokeCadenceTracker();
+    const sendIdleHeartbeat = async () => {
+      const sysInfo = await hostMonitor?.takePendingSnapshot();
+      await client.sendHeartbeat({
+        idle: true,
+        ...(stateDir && isDeployLockActive(stateDir) ? {restarting: true} : {}),
+        ...(sysInfo ? {system: sysInfo} : {}),
+      }).catch(() => undefined);
+    };
 
     while (!coord.isDraining()) {
       try {
@@ -274,12 +282,7 @@ export async function runDaemon(opts: {
           consecutiveCycleErrors = 0;
           hostMonitor?.recordDaemonErrors(0);
           if (!opts.once && !coord.isDraining()) {
-            const sysInfo = await hostMonitor?.takePendingSnapshot();
-            await client.sendHeartbeat({
-              idle: true,
-              ...(isDeployLockActive(stateDir) ? {restarting: true} : {}),
-              ...(sysInfo ? {system: sysInfo} : {}),
-            }).catch(() => undefined);
+            await sendIdleHeartbeat();
             await sleeper.sleep(pollIntervalMillis);
           }
           if (opts.once) break;
@@ -343,24 +346,14 @@ export async function runDaemon(opts: {
           }
         } finally {
           if (ingested > 0 && !played && !coord.isDraining()) {
-            const sysInfo = await hostMonitor?.takePendingSnapshot();
-            await client.sendHeartbeat({
-              idle: true,
-              ...(stateDir && isDeployLockActive(stateDir) ? {restarting: true} : {}),
-              ...(sysInfo ? {system: sysInfo} : {}),
-            }).catch(() => undefined);
+            await sendIdleHeartbeat();
           }
           if (stateDir) releaseMatchLock(stateDir);
         }
         consecutiveCycleErrors = 0;
         hostMonitor?.recordDaemonErrors(0);
         if (!played && ingested === 0 && !opts.once && !coord.isDraining()) {
-          const sysInfo = await hostMonitor?.takePendingSnapshot();
-          await client.sendHeartbeat({
-            idle: true,
-            ...(stateDir && isDeployLockActive(stateDir) ? {restarting: true} : {}),
-            ...(sysInfo ? {system: sysInfo} : {}),
-          }).catch(() => undefined);
+          await sendIdleHeartbeat();
           await sleeper.sleep(pollIntervalMillis);
         }
       } catch (err) {

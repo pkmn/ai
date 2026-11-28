@@ -329,6 +329,94 @@ async function setupDiscordWikiPage(fixture: Fixture): Promise<() => void> {
   };
 }
 
+function singlesLiveState(
+  p1Pokemon: arena.PokemonHealth[]
+): Parameters<arena.Handle['setLiveState']>[0] {
+  return {
+    stale: false,
+    updatedAt: NOW_SECONDS,
+    live: {
+      heartbeatSeq: 64,
+      matchId: 'gen9ou-0009997',
+      ladderId: 'gen9ou20261109',
+      slot: 'sv',
+      format: 'gen9ou',
+      game: 2,
+      turn: 24,
+      activeSlot: 'p1',
+      turnStartedAt: NOW_SECONDS - 5,
+      turnBudgetSeconds: 132,
+      incrementSeconds: 10,
+      game1Summary: {
+        winnerSlot: 'p2',
+        turns: 34,
+        endReason: 'timeout',
+        p1: {
+          bankSeconds: 0,
+          initMillis: 880,
+          teamPreviewMillis: 520,
+          meanTurnMillis: 3420,
+          ram: 1120,
+          cpuCores: 3.1,
+          pokemon: [
+            {percent: 29, color: 'yellow'},
+            {percent: 0, color: 'fainted'},
+            {percent: 0, color: 'fainted'},
+            {percent: 62, color: 'green'},
+            {percent: 0, color: 'fainted'},
+            {percent: 0, color: 'fainted'},
+          ],
+        },
+        p2: {
+          bankSeconds: 118,
+          initMillis: 610,
+          teamPreviewMillis: 390,
+          meanTurnMillis: 410,
+          ram: 940,
+          cpuCores: 2.3,
+          pokemon: [
+            {percent: 50, color: 'yellow'},
+            {percent: 0, color: 'fainted'},
+            {percent: 88, color: 'green'},
+            {percent: 0, color: 'fainted'},
+            {percent: 19, color: 'red'},
+            {percent: 0, color: 'fainted'},
+          ],
+        },
+      },
+      p1: {
+        slug: 'foul-play',
+        name: 'Foul Play',
+        version: '1.4.0',
+        bankSeconds: 132,
+        lastTurnMillis: 390,
+        meanTurnMillis: 415,
+        ram: 1090,
+        cpuCores: 2.9,
+        pokemon: p1Pokemon,
+      },
+      p2: {
+        slug: 'pokerus',
+        name: 'Pokérus',
+        version: '1.0.2',
+        bankSeconds: 126,
+        lastTurnMillis: 360,
+        meanTurnMillis: 375,
+        ram: 920,
+        cpuCores: 2.2,
+        pokemon: [
+          {percent: 45, color: 'yellow'},
+          {percent: 0, color: 'fainted'},
+          {percent: 94, color: 'green'},
+          {percent: 0, color: 'fainted'},
+          {percent: 0, color: 'fainted'},
+          {percent: 16, color: 'red'},
+        ],
+      },
+    },
+  };
+}
+
 export function buildScenarios(wikiSha: string): Scenario[] {
   return [
     // =========================================================================
@@ -926,96 +1014,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       title: 'Live (6v6 Singles)',
       path: '/arena/battles/',
       setup: fixture => {
-        fixture.arenaHandle.setLiveState({
-          stale: false,
-          updatedAt: NOW_SECONDS,
-          live: {
-            heartbeatSeq: 64,
-            matchId: 'gen9ou-0009997',
-            ladderId: 'gen9ou20261109',
-            slot: 'sv',
-            format: 'gen9ou',
-            game: 2,
-            turn: 24,
-            activeSlot: 'p1',
-            turnStartedAt: NOW_SECONDS - 5,
-            turnBudgetSeconds: 132,
-            incrementSeconds: 10,
-            game1Summary: {
-              winnerSlot: 'p2',
-              turns: 34,
-              endReason: 'timeout',
-              p1: {
-                bankSeconds: 0,
-                initMillis: 880,
-                teamPreviewMillis: 520,
-                meanTurnMillis: 3420,
-                ram: 1120,
-                cpuCores: 3.1,
-                pokemon: [
-                  {percent: 29, color: 'yellow'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 62, color: 'green'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 0, color: 'fainted'},
-                ],
-              },
-              p2: {
-                bankSeconds: 118,
-                initMillis: 610,
-                teamPreviewMillis: 390,
-                meanTurnMillis: 410,
-                ram: 940,
-                cpuCores: 2.3,
-                pokemon: [
-                  {percent: 50, color: 'yellow'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 88, color: 'green'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 19, color: 'red'},
-                  {percent: 0, color: 'fainted'},
-                ],
-              },
-            },
-            p1: {
-              slug: 'foul-play',
-              name: 'Foul Play',
-              version: '1.4.0',
-              bankSeconds: 132,
-              lastTurnMillis: 390,
-              meanTurnMillis: 415,
-              ram: 1090,
-              cpuCores: 2.9,
-              pokemon: [
-                {percent: 24, color: 'yellow'},
-                {percent: 100, color: 'green'},
-                {percent: 0, color: 'fainted'},
-                {percent: 81, color: 'green'},
-                {percent: 9, color: 'red'},
-                {percent: 50, color: 'yellow'},
-              ],
-            },
-            p2: {
-              slug: 'pokerus',
-              name: 'Pokérus',
-              version: '1.0.2',
-              bankSeconds: 126,
-              lastTurnMillis: 360,
-              meanTurnMillis: 375,
-              ram: 920,
-              cpuCores: 2.2,
-              pokemon: [
-                {percent: 45, color: 'yellow'},
-                {percent: 0, color: 'fainted'},
-                {percent: 94, color: 'green'},
-                {percent: 0, color: 'fainted'},
-                {percent: 0, color: 'fainted'},
-                {percent: 16, color: 'red'},
-              ],
-            },
-          },
-        });
+        fixture.arenaHandle.setLiveState(singlesLiveState([
+          {percent: 24, color: 'yellow'},
+          {percent: 100, color: 'green'},
+          {percent: 0, color: 'fainted'},
+          {percent: 81, color: 'green'},
+          {percent: 9, color: 'red'},
+          {percent: 50, color: 'yellow'},
+        ]));
         return () => {
           fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
         };
@@ -1028,96 +1034,14 @@ export function buildScenarios(wikiSha: string): Scenario[] {
       path: '/arena/battles/',
       click: '#live-hp-pct',
       setup: fixture => {
-        fixture.arenaHandle.setLiveState({
-          stale: false,
-          updatedAt: NOW_SECONDS,
-          live: {
-            heartbeatSeq: 64,
-            matchId: 'gen9ou-0009997',
-            ladderId: 'gen9ou20261109',
-            slot: 'sv',
-            format: 'gen9ou',
-            game: 2,
-            turn: 24,
-            activeSlot: 'p1',
-            turnStartedAt: NOW_SECONDS - 5,
-            turnBudgetSeconds: 132,
-            incrementSeconds: 10,
-            game1Summary: {
-              winnerSlot: 'p2',
-              turns: 34,
-              endReason: 'timeout',
-              p1: {
-                bankSeconds: 0,
-                initMillis: 880,
-                teamPreviewMillis: 520,
-                meanTurnMillis: 3420,
-                ram: 1120,
-                cpuCores: 3.1,
-                pokemon: [
-                  {percent: 29, color: 'yellow'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 62, color: 'green'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 0, color: 'fainted'},
-                ],
-              },
-              p2: {
-                bankSeconds: 118,
-                initMillis: 610,
-                teamPreviewMillis: 390,
-                meanTurnMillis: 410,
-                ram: 940,
-                cpuCores: 2.3,
-                pokemon: [
-                  {percent: 50, color: 'yellow'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 88, color: 'green'},
-                  {percent: 0, color: 'fainted'},
-                  {percent: 19, color: 'red'},
-                  {percent: 0, color: 'fainted'},
-                ],
-              },
-            },
-            p1: {
-              slug: 'foul-play',
-              name: 'Foul Play',
-              version: '1.4.0',
-              bankSeconds: 132,
-              lastTurnMillis: 390,
-              meanTurnMillis: 415,
-              ram: 1090,
-              cpuCores: 2.9,
-              pokemon: [
-                {percent: 100, color: 'green'},
-                {percent: 100, color: 'green'},
-                {percent: 100, color: 'green'},
-                {percent: 100, color: 'green'},
-                {percent: 100, color: 'green'},
-                {percent: 100, color: 'green'},
-              ],
-            },
-            p2: {
-              slug: 'pokerus',
-              name: 'Pokérus',
-              version: '1.0.2',
-              bankSeconds: 126,
-              lastTurnMillis: 360,
-              meanTurnMillis: 375,
-              ram: 920,
-              cpuCores: 2.2,
-              pokemon: [
-                {percent: 45, color: 'yellow'},
-                {percent: 0, color: 'fainted'},
-                {percent: 94, color: 'green'},
-                {percent: 0, color: 'fainted'},
-                {percent: 0, color: 'fainted'},
-                {percent: 16, color: 'red'},
-              ],
-            },
-          },
-        });
+        fixture.arenaHandle.setLiveState(singlesLiveState([
+          {percent: 100, color: 'green'},
+          {percent: 100, color: 'green'},
+          {percent: 100, color: 'green'},
+          {percent: 100, color: 'green'},
+          {percent: 100, color: 'green'},
+          {percent: 100, color: 'green'},
+        ]));
         return () => {
           fixture.arenaHandle.setLiveState(fixture.defaultLiveState);
         };

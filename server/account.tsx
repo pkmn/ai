@@ -1615,6 +1615,7 @@ function renderStagedSection(opts: {
 function renderHistorySection(
   versions: db.VersionHistoryView[],
   ladderById: Map<string, db.LadderRow>,
+  ladderNameById: Map<string, string>,
   opts: {canReuse?: boolean; claimedVersions?: ReadonlySet<string>} = {}
 ): util.Html {
   if (!versions.length) {
@@ -1628,7 +1629,6 @@ function renderHistorySection(
 
   const canReuse = Boolean(opts.canReuse);
   const claimedVersions = opts.claimedVersions ?? new Set<string>();
-  const ladderNameById = new Map([...ladderById].map(([id, l]) => [id, l.name]));
 
   return (
     <section id='history'>
@@ -2373,7 +2373,12 @@ export function renderAccountPage(opts: {
         </form>
       </section>
 
-      {renderHistorySection(versions, ladderById, {canReuse: canSubmitAny, claimedVersions})}
+      {renderHistorySection(
+        versions,
+        ladderById,
+        ladderNameById,
+        {canReuse: canSubmitAny, claimedVersions}
+      )}
 
       <script>{ACCOUNT_SCRIPT}</script>
     </>

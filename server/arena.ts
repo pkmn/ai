@@ -2197,14 +2197,8 @@ export function register(app: polka.Polka, options: Options): Handle {
     const countsBySlot = db.getMatchCountsBySlot();
     const recentMatches = db.getRecentMatches(RECENT_MATCHES_LIMIT)
       .map(m => enrichMatchView(publicDir, m));
-    const smokeTesting = getActiveSmokeTesting();
     return {
-      updatedAt: liveUpdatedAt ?? recentMatches[0]?.completedAt ?? 0,
-      stale: liveStale,
-      ...(liveRestarting && !liveStale ? {restarting: true} : {}),
-      ...(smokeTesting ? {smokeTesting} : {}),
-      live: liveStale ? undefined : currentLive,
-      runningTournament: getRunningTournamentInfo(),
+      ...buildLiveEventPayload(liveUpdatedAt ?? recentMatches[0]?.completedAt ?? 0),
       pageSize: RECENT_MATCHES_LIMIT,
       totalMatches: countsBySlot.all ?? recentMatches.length,
       countsBySlot,

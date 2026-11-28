@@ -134,113 +134,40 @@ export function getTournamentEntrants(
   }));
 }
 
-export function getTournamentEntrantsByAgent(
-  db: DatabaseSync
-): Map<number, AgentTournamentEntryView[]> {
-  const rows = db.prepare(`
-    SELECT
-      te.agent_id,
-      te.tournament_id,
-      t.name AS tournament_name,
-      t.status AS tournament_status,
-      t.starts_at,
-      av.version,
-      te.seed,
-      te.points,
-      te.game_wins,
-      te.game_losses,
-      te.game_ties,
-      te.elo,
-      te.se,
-      te.final_rank
-    FROM tournament_entrants te
-    JOIN tournaments t ON t.id = te.tournament_id
-    JOIN agent_versions av ON av.id = te.version_id
-    ORDER BY t.starts_at DESC, te.tournament_id DESC
-  `).all() as Array<{
-    agent_id: number;
-    tournament_id: string;
-    tournament_name: string;
-    tournament_status: 'scheduled' | 'running' | 'completed';
-    starts_at: number;
-    version: string;
-    seed: number;
-    points: number;
-    game_wins: number;
-    game_losses: number;
-    game_ties: number;
-    elo: number;
-    se: number;
-    final_rank: number | null;
-  }>;
-
-  const out = new Map<number, AgentTournamentEntryView[]>();
-  for (const r of rows) {
-    let list = out.get(r.agent_id);
-    if (!list) {
-      list = [];
-      out.set(r.agent_id, list);
-    }
-    list.push({
-      tournamentId: r.tournament_id,
-      tournamentName: r.tournament_name,
-      tournamentStatus: r.tournament_status,
-      startsAt: r.starts_at,
-      version: r.version,
-      seed: r.seed,
-      points: r.points,
-      gameWins: r.game_wins,
-      gameLosses: r.game_losses,
-      gameTies: r.game_ties,
-      elo: r.elo,
-      se: r.se,
-      finalRank: r.final_rank ?? undefined,
-    });
-  }
-  return out;
+interface RawAgentTournamentEntryRow {
+  agent_id?: number;
+  tournament_id: string;
+  tournament_name: string;
+  tournament_status: 'scheduled' | 'running' | 'completed';
+  starts_at: number;
+  version: string;
+  seed: number;
+  points: number;
+  game_wins: number;
+  game_losses: number;
+  game_ties: number;
+  elo: number;
+  se: number;
+  final_rank: number | null;
 }
 
-export function getTournamentEntriesForAgent(
-  db: DatabaseSync,
-  agentId: number
-): AgentTournamentEntryView[] {
-  const rows = db.prepare(`
-    SELECT
-      te.tournament_id,
-      t.name AS tournament_name,
-      t.status AS tournament_status,
-      t.starts_at,
-      av.version,
-      te.seed,
-      te.points,
-      te.game_wins,
-      te.game_losses,
-      te.game_ties,
-      te.elo,
-      te.se,
-      te.final_rank
-    FROM tournament_entrants te
-    JOIN tournaments t ON t.id = te.tournament_id
-    JOIN agent_versions av ON av.id = te.version_id
-    WHERE te.agent_id = ?
-    ORDER BY t.starts_at DESC, te.tournament_id DESC
-  `).all(agentId) as Array<{
-    tournament_id: string;
-    tournament_name: string;
-    tournament_status: 'scheduled' | 'running' | 'completed';
-    starts_at: number;
-    version: string;
-    seed: number;
-    points: number;
-    game_wins: number;
-    game_losses: number;
-    game_ties: number;
-    elo: number;
-    se: number;
-    final_rank: number | null;
-  }>;
+const AGENT_TOURNAMENT_ENTRY_COLS = `
+  te.tournament_id,
+  t.name AS tournament_name,
+  t.status AS tournament_status,
+  t.starts_at,
+  av.version,
+  te.seed,
+  te.points,
+  te.game_wins,
+  te.game_losses,
+  te.game_ties,
+  te.elo,
+  te.se,
+  te.final_rank`;
 
-  return rows.map(r => ({
+function mapAgentTournamentEntry(r: RawAgentTournamentEntryRow): AgentTournamentEntryView {
+  return {
     tournamentId: r.tournament_id,
     tournamentName: r.tournament_name,
     tournamentStatus: r.tournament_status,
@@ -254,7 +181,46 @@ export function getTournamentEntriesForAgent(
     elo: r.elo,
     se: r.se,
     finalRank: r.final_rank ?? undefined,
-  }));
+  };
+}
+
+export function getTournamentEntrantsByAgent(
+  db: DatabaseSync
+): Map<number, AgentTournamentEntryView[]> {
+  const rows = db.prepare(`
+    SELECT te.agent_id, ${AGENT_TOURNAMENT_ENTRY_COLS}
+    FROM tournament_entrants te
+    JOIN tournaments t ON t.id = te.tournament_id
+    JOIN agent_versions av ON av.id = te.version_id
+    ORDER BY t.starts_at DESC, te.tournament_id DESC
+  `).all() as unknown as Array<RawAgentTournamentEntryRow & {agent_id: number}>;
+
+  const out = new Map<number, AgentTournamentEntryView[]>();
+  for (const r of rows) {
+    let list = out.get(r.agent_id);
+    if (!list) {
+      list = [];
+      out.set(r.agent_id, list);
+    }
+    list.push(mapAgentTournamentEntry(r));
+  }
+  return out;
+}
+
+export function getTournamentEntriesForAgent(
+  db: DatabaseSync,
+  agentId: number
+): AgentTournamentEntryView[] {
+  const rows = db.prepare(`
+    SELECT ${AGENT_TOURNAMENT_ENTRY_COLS}
+    FROM tournament_entrants te
+    JOIN tournaments t ON t.id = te.tournament_id
+    JOIN agent_versions av ON av.id = te.version_id
+    WHERE te.agent_id = ?
+    ORDER BY t.starts_at DESC, te.tournament_id DESC
+  `).all(agentId) as unknown as RawAgentTournamentEntryRow[];
+
+  return rows.map(mapAgentTournamentEntry);
 }
 
 // Recomputes Round-Robin points, Sonneborn-Berger opponent-weighted tiebreakers, event-scoped
