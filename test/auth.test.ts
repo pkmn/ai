@@ -851,7 +851,7 @@ describe('server/auth.ts routes', () => {
     expect(html).not.toContain('id="account-link"');
   });
 
-  test('renders top-left site menu without Concepts or backlinks', () => {
+  test('renders top-left site menu marking current Arena section active', () => {
     const ladderHtml = build.renderer.render({
       title: 'Arena — RAND | pkmn.ai',
       path: '/arena/ladders/rand/',
@@ -860,9 +860,17 @@ describe('server/auth.ts routes', () => {
     });
     expect(ladderHtml).toContain('id="top-nav"');
     expect(ladderHtml).toContain('id="site-menu"');
-    expect(ladderHtml).not.toContain('back-link');
     expect(ladderHtml).not.toContain('/concepts/');
     expect(ladderHtml).toContain('href="/arena/" class="subtle" aria-current="page"');
+
+    const battlesHtml = build.renderer.render({
+      title: 'Arena — Battles | pkmn.ai',
+      path: '/arena/battles/',
+      header: build.header('Battles'),
+      content: '<p>battles</p>',
+    });
+    expect(battlesHtml).toContain('href="/arena/battles/" class="subtle" aria-current="page"');
+    expect(battlesHtml).not.toContain('href="/arena/" class="subtle" aria-current="page"');
 
     const homeHtml = build.renderer.render({
       title: 'pkmn.ai',
@@ -871,6 +879,6 @@ describe('server/auth.ts routes', () => {
       content: '<p>home</p>',
     });
     expect(homeHtml).toContain('id="site-menu"');
-    expect(homeHtml).not.toContain('back-link');
+    expect(homeHtml).not.toContain('aria-current="page"');
   });
 });

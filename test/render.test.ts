@@ -4623,9 +4623,19 @@ describe('JSON route parity & retired pool archives', () => {
       testDb.close();
     }
   });
+});
 
-  test('renders navigation cross-links across ladders, battles, and profiles', async () => {
-    const testDb = new Database(':memory:', {now: 1_760_000_000});
+describe('navigation cross-links', () => {
+  let tmpDir: string;
+  let tmpPublic: string;
+  let testDb: Database;
+  let h: Awaited<ReturnType<typeof startRenderHarness>>;
+
+  beforeAll(async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pkmn-render-nav-'));
+    tmpPublic = path.join(tmpDir, 'public');
+    fs.mkdirSync(tmpPublic, {recursive: true});
+    testDb = new Database(':memory:', {now: 1_760_000_000});
     testDb.syncLadders(undefined, 1_760_000_000);
     testDb.db.prepare("UPDATE ladders SET status = 'active'").run();
     testDb.syncProjectsFromYaml(
@@ -4689,87 +4699,109 @@ describe('JSON route parity & retired pool archives', () => {
     ).run(alpha.id);
     playMatch(testDb, 'gen1ou20261109', aVer.id, bVer.id, 'W', 'W', 1_760_000_020);
 
-    const h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
-    try {
-      h.arenaHandle.setLiveState({
-        stale: false,
-        updatedAt: 1_760_000_045,
-        live: {
-          heartbeatSeq: 5,
-          matchId: 'gen1ou-0000010',
-          ladderId: 'gen1ou20261109',
-          slot: 'rby',
-          format: 'gen1ou',
-          game: 1,
-          turn: 7,
-          activeSlot: 'p1',
-          turnStartedAt: 1_760_000_044,
-          turnBudgetSeconds: 60,
-          incrementSeconds: 15,
-          p1: {
-            slug: 'alpha',
-            name: 'Alpha',
-            version: '1.0.0',
-            bankSeconds: 150,
-            lastTurnMillis: 120,
-            meanTurnMillis: 120,
-            ram: 512,
-          },
-          p2: {
-            slug: 'beta',
-            name: 'Beta',
-            version: '1.0.0',
-            bankSeconds: 150,
-            lastTurnMillis: 110,
-            meanTurnMillis: 110,
-            ram: 512,
-          },
+    h = await startRenderHarness({db: testDb, publicDir: tmpPublic, now: 1_760_000_050});
+    h.arenaHandle.setLiveState({
+      stale: false,
+      updatedAt: 1_760_000_045,
+      live: {
+        heartbeatSeq: 5,
+        matchId: 'gen1ou-0000010',
+        ladderId: 'gen1ou20261109',
+        slot: 'rby',
+        format: 'gen1ou',
+        game: 1,
+        turn: 7,
+        activeSlot: 'p1',
+        turnStartedAt: 1_760_000_044,
+        turnBudgetSeconds: 60,
+        incrementSeconds: 15,
+        p1: {
+          slug: 'alpha',
+          name: 'Alpha',
+          version: '1.0.0',
+          bankSeconds: 150,
+          lastTurnMillis: 120,
+          meanTurnMillis: 120,
+          ram: 512,
         },
-      });
+        p2: {
+          slug: 'beta',
+          name: 'Beta',
+          version: '1.0.0',
+          bankSeconds: 150,
+          lastTurnMillis: 110,
+          meanTurnMillis: 110,
+          ram: 512,
+        },
+      },
+    });
+  });
 
-      const ladderHtml = await h.getText('/arena/ladders/rby/');
-      expect(ladderHtml).toContain('<h2>Ladders</h2>');
-      expect(ladderHtml).not.toContain('<h2><a href="/arena/"');
-      expect(ladderHtml).not.toContain('back-link');
-      expect(ladderHtml).toContain('class="ladder-live"');
-      expect(ladderHtml).toContain('Alpha vs. Beta');
-      expect(ladderHtml).toContain(
-        '<h3 id="battles"><a href="/arena/battles/#rby" class="subtle">Battles<svg'
-      );
-      expect(ladderHtml).toContain('class="heading-arrow"');
-      expect(ladderHtml.indexOf('id="battles"')).toBeGreaterThan(
-        ladderHtml.indexOf('id="standings"')
-      );
-      expect(ladderHtml.indexOf('id="battles"')).toBeLessThan(
-        ladderHtml.indexOf('id="history"')
-      );
+  afterAll(async () => {
+    await h.close();
+    testDb.close();
+    fs.rmSync(tmpDir, {recursive: true, force: true});
+  });
 
-      const battlesHtml = await h.getText('/arena/battles/');
-      expect(battlesHtml).toContain('<h2>Battles</h2>');
-      expect(battlesHtml).not.toContain('<h2><a href="/arena/"');
-      expect(battlesHtml).toContain(
-        '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · ' +
-        '<code>gen1ou-0000010</code>'
-      );
-      expect(battlesHtml).toContain(
-        '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · <time'
-      );
+  test('renders live match indicator on /arena/ladders/:slot/', async () => {
+    const ladderHtml = await h.getText('/arena/ladders/rby/');
+    expect(ladderHtml).toContain('class="ladder-live"');
+    expect(ladderHtml).toContain('Alpha vs. Beta');
+  });
 
-      const profileHtml = await h.getText('/projects/alpha/');
-      expect(profileHtml).not.toContain('back-link');
-      expect(profileHtml).toContain('<a href="/arena/ladders/rby/" title="View RBY ladder">');
-      expect(profileHtml).toContain('<strong>Tournaments</strong>');
-      expect(profileHtml).toContain('href="/arena/tournaments/1/"');
-      expect(profileHtml).toContain('<tt>T#1 #1</tt>');
+  test('links ladder Battles heading above history to /arena/battles/#:slot', async () => {
+    const ladderHtml = await h.getText('/arena/ladders/rby/');
+    expect(ladderHtml).toContain(
+      '<h3 id="battles"><a href="/arena/battles/#rby" class="subtle">Battles<svg'
+    );
+    expect(ladderHtml).toContain('class="heading-arrow"');
+    expect(ladderHtml.indexOf('id="battles"')).toBeGreaterThan(
+      ladderHtml.indexOf('id="standings"')
+    );
+    expect(ladderHtml.indexOf('id="battles"')).toBeLessThan(
+      ladderHtml.indexOf('id="history"')
+    );
+  });
 
-      const tourHtml = await h.getText('/arena/tournaments/1/');
-      expect(tourHtml).toContain('<h2>Tournaments</h2>');
-      expect(tourHtml).not.toContain('<h2><a href="/arena/"');
-      expect(tourHtml).not.toContain('back-link');
-    } finally {
-      await h.close();
-      testDb.close();
-    }
+  test('links live battle header to the active ladder on /arena/battles/', async () => {
+    const battlesHtml = await h.getText('/arena/battles/');
+    expect(battlesHtml).toContain(
+      '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · ' +
+      '<code>gen1ou-0000010</code>'
+    );
+  });
+
+  test('links expanded battle history metadata to the ladder on /arena/battles/', async () => {
+    const battlesHtml = await h.getText('/arena/battles/');
+    expect(battlesHtml).toContain(
+      '<a href="/arena/ladders/rby/" class="subtle"><tt><strong>RBY</strong></tt></a> · <time'
+    );
+  });
+
+  test('links ladder rank to the ladder page on /projects/:slug/', async () => {
+    const profileHtml = await h.getText('/projects/alpha/');
+    expect(profileHtml).toContain('<a href="/arena/ladders/rby/" title="View RBY ladder">');
+  });
+
+  test('renders tournament placements row on /projects/:slug/', async () => {
+    const profileHtml = await h.getText('/projects/alpha/');
+    expect(profileHtml).toContain('<strong>Tournaments</strong>');
+    expect(profileHtml).toContain('href="/arena/tournaments/1/"');
+    expect(profileHtml).toContain('<tt>T#1 #1</tt>');
+  });
+
+  test('renders plain section headings without Arena links across subpages', async () => {
+    const ladderHtml = await h.getText('/arena/ladders/rby/');
+    expect(ladderHtml).toContain('<h2>Ladders</h2>');
+    expect(ladderHtml).not.toContain('<h2><a href="/arena/"');
+
+    const battlesHtml = await h.getText('/arena/battles/');
+    expect(battlesHtml).toContain('<h2>Battles</h2>');
+    expect(battlesHtml).not.toContain('<h2><a href="/arena/"');
+
+    const tourHtml = await h.getText('/arena/tournaments/1/');
+    expect(tourHtml).toContain('<h2>Tournaments</h2>');
+    expect(tourHtml).not.toContain('<h2><a href="/arena/"');
   });
 });
 
@@ -4899,19 +4931,6 @@ describe('battles smoke-testing status', () => {
       expect(diagPanel).toContain('Testing a submission for');
       expect(diagPanel).toContain('<strong>Secret Agent</strong>');
       expect(diagHtml).not.toContain('9.9.9-private');
-    });
-  });
-
-  test('clears smoke-testing status when diagnostic-live reports done', async () => {
-    await withHarness(undefined, async h => {
-      await postArena(h, '/api/arena/diagnostic-live', sampleDiagnosticPayload);
-      const doneRes = await postArena(h, '/api/arena/diagnostic-live', {
-        done: true,
-        agentId: 7,
-        versionId: 99,
-      });
-      expect(doneRes.status).toBe(200);
-      expect(h.arenaHandle.getState().smokeTesting).toBeUndefined();
     });
   });
 

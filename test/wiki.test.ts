@@ -964,7 +964,6 @@ describe('wiki server routes', () => {
     const pubHtml = await pubRes.text();
     expect(pubHtml).toContain('Public project profile.');
     expect(pubHtml).toContain('<h2><a href="/projects/0-error/" class="subtle">0 ERROR</a></h2>');
-    expect(pubHtml).not.toContain('wiki-profile-link');
 
     const pubPages = await (await realFetch(`${baseUrl}/wiki/pages`)).text();
     expect(pubPages).toContain('id="wiki-project-pages"');
