@@ -3625,6 +3625,12 @@ describe('JSON route parity & retired pool archives', () => {
       expect(html).toMatch(
         /<span[^>]*class="(?:fainted hp-orb|hp-orb fainted)"[^>]*title="0%"[^>]*>\u25cf<\/span>/
       );
+      expect(html).toContain('id="live-hp-pct"');
+      expect(html).toContain('id="live-panel-wrap"');
+      expect(html).toContain('Show HP %');
+      expect(html).toContain('pkmn-live-hp-percent');
+      expect(html).toContain('<span class="hp-pct" aria-hidden="true">98%</span>');
+      expect(html).toContain('<span class="hp-pct" aria-hidden="true">0%</span>');
       expect(html).not.toContain('orb-svg');
     } finally {
       await h.close();

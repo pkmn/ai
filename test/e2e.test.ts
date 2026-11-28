@@ -1069,6 +1069,12 @@ describe('mock scenarios & E2E lifecycle', () => {
             meanTurnMillis: 300,
             ram: 1024,
             team: 'P1:aabbccddeeff',
+            pokemon: [
+              {percent: 84, color: 'green'},
+              {percent: 50, color: 'yellow'},
+              {percent: 16, color: 'red'},
+              {percent: 0, color: 'fainted'},
+            ],
           },
           p2: {
             slug: p2Entry.agentSlug,
@@ -1079,6 +1085,12 @@ describe('mock scenarios & E2E lifecycle', () => {
             meanTurnMillis: 400,
             ram: 1280,
             team: '112233445566',
+            pokemon: [
+              {percent: 100, color: 'green'},
+              {percent: 73, color: 'green'},
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ],
           },
         });
         await livePage.waitForFunction(
@@ -1087,6 +1099,30 @@ describe('mock scenarios & E2E lifecycle', () => {
         );
         expect(await livePage.locator('#state-p1').textContent()).toContain('RUNNING');
         expect(await livePage.locator('#state-p2').textContent()).toContain('PAUSED');
+
+        // Opt-in Show HP % toggle defaults off, persists to localStorage, and survives SSE + reload
+        const readHpPctUi = () => livePage.evaluate(() => ({
+          checked: (document.getElementById('live-hp-pct') as HTMLInputElement | undefined)
+            ?.checked,
+          expanded: document.getElementById('live-panel-wrap')?.classList.contains('show-hp-pct'),
+          saved: localStorage.getItem('pkmn-live-hp-percent'),
+          pctVisible: getComputedStyle(document.querySelector('#live-panel .hp-pct')!).display !==
+            'none',
+        }));
+        expect(await readHpPctUi()).toEqual({
+          checked: false,
+          expanded: false,
+          saved: null,
+          pctVisible: false,
+        });
+
+        await livePage.locator('#live-hp-pct').click();
+        expect(await readHpPctUi()).toEqual({
+          checked: true,
+          expanded: true,
+          saved: '1',
+          pctVisible: true,
+        });
 
         // Swap active slot & advance to Game 2 via SSE without refreshing
         await liveClient.sendHeartbeat({
@@ -1110,6 +1146,12 @@ describe('mock scenarios & E2E lifecycle', () => {
             meanTurnMillis: 305,
             ram: 1040,
             team: 'P1:aabbccddeeff',
+            pokemon: [
+              {percent: 91, color: 'green'},
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ],
           },
           p2: {
             slug: p2Entry.agentSlug,
@@ -1120,6 +1162,12 @@ describe('mock scenarios & E2E lifecycle', () => {
             meanTurnMillis: 405,
             ram: 1290,
             team: '112233445566',
+            pokemon: [
+              {percent: 100, color: 'green'},
+              {percent: 42, color: 'yellow'},
+              {percent: 0, color: 'fainted'},
+              {percent: 0, color: 'fainted'},
+            ],
           },
         });
         await livePage.waitForFunction(
@@ -1127,6 +1175,33 @@ describe('mock scenarios & E2E lifecycle', () => {
         );
         expect(await livePage.locator('#state-p1').textContent()).toContain('PAUSED');
         expect(await livePage.locator('#state-p2').textContent()).toContain('RUNNING');
+        expect(await readHpPctUi()).toEqual({
+          checked: true,
+          expanded: true,
+          saved: '1',
+          pctVisible: true,
+        });
+
+        // Persists across full reload and toggles back off by clicking the orbs directly
+        await livePage.reload({waitUntil: 'domcontentloaded'});
+        expect(await readHpPctUi()).toEqual({
+          checked: true,
+          expanded: true,
+          saved: '1',
+          pctVisible: true,
+        });
+
+        await livePage.locator('#live-panel .hp-orbs').first().click();
+        expect(await readHpPctUi()).toEqual({
+          checked: false,
+          expanded: false,
+          saved: null,
+          pctVisible: false,
+        });
+        await livePage.locator('label[for="bf-vgc"]').click();
+        await livePage.waitForFunction(
+          () => (document.getElementById('bf-vgc') as HTMLInputElement | undefined)?.checked
+        );
 
         // Complete VGC match & start next RBY match -> VGC row prepends to filtered history
         // AND #live-panel transitions to the new RBY match without refreshing!

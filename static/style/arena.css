@@ -246,6 +246,37 @@ table.matrix td.diag {
   background-color: color-mix(in oklab, var(--hl-name) 25%, var(--bg-color));
 }
 
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1ch;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 1.75rem 0 0.6rem;
+}
+
+.section-head h3 {
+  margin: 0;
+}
+
+.live-hp-toggle {
+  display: inline-flex;
+  gap: 0.45ch;
+  align-items: center;
+  font-size: 0.82em;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.live-hp-toggle input {
+  width: 0.9em;
+  height: 0.9em;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--link-color);
+}
+
 .live-panel {
   margin: 0.75rem 0 1.5rem;
   padding: 1.5ch 2ch;
@@ -276,14 +307,19 @@ table.matrix td.diag {
   gap: 0.2rem;
   align-items: center;
   line-height: 1;
+  cursor: pointer;
   user-select: none;
+}
+
+.hp-orb-item {
+  display: inline-flex;
+  align-items: center;
 }
 
 .hp-orb {
   color: var(--orb-green);
   font-size: 1.1em;
   line-height: 1;
-  cursor: help;
 }
 
 .hp-orb.yellow {
@@ -296,6 +332,44 @@ table.matrix td.diag {
 
 .hp-orb.fainted {
   color: rgb(var(--fg-base) / 26%);
+}
+
+.hp-pct {
+  display: none;
+}
+
+.live-panel.show-hp-pct .hp-orbs {
+  flex: 1 0 100%;
+  flex-wrap: wrap;
+  gap: 0.28rem 0.95ch;
+  order: 3;
+  margin-top: 0.15rem;
+}
+
+.live-panel.show-hp-pct .live-g1 .hp-orbs {
+  gap: 0.22rem 0.85ch;
+  margin-top: 0.1rem;
+}
+
+.live-panel.show-hp-pct .hp-orb-item {
+  gap: 0.35ch;
+}
+
+.live-panel.show-hp-pct .hp-orb {
+  font-size: 0.9em;
+}
+
+.live-panel.show-hp-pct .hp-pct {
+  display: inline;
+  color: rgb(var(--fg-base) / 85%);
+  font-size: 0.78em;
+  font-family: var(--monospace);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.live-panel.show-hp-pct .hp-orb.fainted + .hp-pct {
+  color: rgb(var(--fg-base) / 38%);
 }
 
 .live-g1 {
@@ -685,6 +759,10 @@ tr.battle-row.expanded .battle-toggle {
 
   .live-panel {
     padding: 1.1ch 1.25ch;
+  }
+
+  .live-panel.show-hp-pct .hp-orbs {
+    gap: 0.24rem 0.72ch;
   }
 
   .battle-detail {

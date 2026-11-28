@@ -1045,10 +1045,44 @@ function buildBattlesScript(
   agentLinksJson: string
 ): string {
   return `
+  (() => {
+    const HP_PCT_KEY = 'pkmn-live-hp-percent';
+    const wrap = document.getElementById('live-panel-wrap');
+    const toggle = document.getElementById('live-hp-pct');
+    let show = false;
+    try {
+      show = localStorage.getItem(HP_PCT_KEY) === '1';
+    } catch {}
+    if (wrap) wrap.classList.toggle('show-hp-pct', show);
+    if (toggle) toggle.checked = show;
+  })();
   document.addEventListener('DOMContentLoaded', () => {
     let state = ${initialLiveJson} || {};
     const agentLinks = ${agentLinksJson};
+    const HP_PCT_KEY = 'pkmn-live-hp-percent';
+    const livePanelWrap = document.getElementById('live-panel-wrap');
+    const liveHpToggle = document.getElementById('live-hp-pct');
     const livePanel = document.getElementById('live-panel');
+    const setShowHpPercent = show => {
+      if (livePanelWrap) livePanelWrap.classList.toggle('show-hp-pct', show);
+      if (liveHpToggle) liveHpToggle.checked = show;
+      try {
+        if (show) localStorage.setItem(HP_PCT_KEY, '1');
+        else localStorage.removeItem(HP_PCT_KEY);
+      } catch {}
+    };
+    if (liveHpToggle) {
+      liveHpToggle.addEventListener('change', () => {
+        setShowHpPercent(liveHpToggle.checked);
+      });
+    }
+    if (livePanel) {
+      livePanel.addEventListener('click', e => {
+        if (e.target.closest('.hp-orbs')) {
+          setShowHpPercent(!(livePanelWrap && livePanelWrap.classList.contains('show-hp-pct')));
+        }
+      });
+    }
     const battleViewerWrap = document.getElementById('battle-viewer-wrap');
     const liveViewerFrame = document.getElementById('ps-viewer-frame');
     ${util.UPDATE_TABLE_PAGER_SCRIPT}
@@ -1203,8 +1237,9 @@ function buildBattlesScript(
           ? m.color
           : 'green';
         const tip = pct + '%';
-        orbs += '<span class="hp-orb ' + color + '" title="' + tip +
-          '" role="img" aria-label="' + tip + '">&#9679;</span>';
+        orbs += '<span class="hp-orb-item"><span class="hp-orb ' + color + '" title="' + tip +
+          '" role="img" aria-label="' + tip + '">&#9679;</span>' +
+          '<span class="hp-pct" aria-hidden="true">' + tip + '</span></span>';
       }
       return orbs ? '<span class="hp-orbs" aria-label="Pokémon health">' + orbs + '</span>' : '';
     };
@@ -3576,8 +3611,11 @@ function renderPokemonOrbsNode(pokemon: readonly arena.PokemonHealth[] | undefin
       {pokemon.map(m => {
         const tip = `${Math.max(0, Math.min(100, Math.round(m.percent)))}%`;
         return (
-          <span className={`hp-orb ${m.color}`} title={tip} role='img' aria-label={tip}>
-            {'\u25cf'}
+          <span className='hp-orb-item'>
+            <span className={`hp-orb ${m.color}`} title={tip} role='img' aria-label={tip}>
+              {'\u25cf'}
+            </span>
+            <span className='hp-pct' aria-hidden='true'>{tip}</span>
           </span>
         );
       })}
@@ -4266,8 +4304,14 @@ function renderBattlesPage(opts: {
         </ul>
       </nav>
       <section id='live'>
-        <h3><a href='#live' className='subtle'>Live</a></h3>
-        <div className='live-panel'>
+        <div className='section-head'>
+          <h3><a href='#live' className='subtle'>Live</a></h3>
+          <label className='live-hp-toggle muted'>
+            <input type='checkbox' id='live-hp-pct' />
+            <span>Show HP %</span>
+          </label>
+        </div>
+        <div className='live-panel' id='live-panel-wrap'>
           <div id='live-panel'>
             {renderLivePanelInner(liveDoc, nowSec, links)}
           </div>
