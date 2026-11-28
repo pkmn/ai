@@ -810,12 +810,13 @@ export class Coordinator {
           resolvedSha256 = unpacked.sha256;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          await this.reportSubmissionOrOutbox({
+          if (await this.reportSubmissionOrOutbox({
             versionId: sub.versionId,
             smokeStatus: 'failed',
             smokeError: `Package unpack/verification failed: ${msg}`,
-          });
-          smokeHeartbeatActive = false;
+          })) {
+            smokeHeartbeatActive = false;
+          }
           continue;
         }
 
@@ -1052,14 +1053,15 @@ export class Coordinator {
 
         try {
           if (smokeError) {
-            await this.reportSubmissionOrOutbox({
+            if (await this.reportSubmissionOrOutbox({
               versionId: sub.versionId,
               smokeStatus: 'failed',
               ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
               smokeError,
               ...(diagnostics.length ? {diagnostics} : {}),
-            });
-            smokeHeartbeatActive = false;
+            })) {
+              smokeHeartbeatActive = false;
+            }
             continue;
           }
 
@@ -1074,7 +1076,7 @@ export class Coordinator {
             unpackedBytes,
           });
 
-          await this.reportSubmissionOrOutbox({
+          if (await this.reportSubmissionOrOutbox({
             versionId: sub.versionId,
             smokeStatus: 'staged',
             ...(resolvedSha256 ? {sha256: resolvedSha256} : {}),
@@ -1087,43 +1089,45 @@ export class Coordinator {
             smokeTurnMillis: Math.max(1, smokeTelemetry.maxTurnMillis),
             ...(smokeTelemetry.maxPeakRam > 0 ? {smokePeakRam: smokeTelemetry.maxPeakRam} : {}),
             ...(diagnostics.length ? {diagnostics} : {}),
-          });
-          smokeHeartbeatActive = false;
+          })) {
+            smokeHeartbeatActive = false;
+          }
         } finally {
           if (mode === 'container') {
             await this.maybeRecyclePodmanVm();
           }
         }
       }
-    } catch (err) {
+    } finally {
       if (smokeHeartbeatActive) {
         await this.client.sendHeartbeat({
           idle: true,
           ...(this.draining || this.isRestarting?.() ? {restarting: true} : {}),
         }).catch(() => undefined);
       }
-      throw err;
     }
 
     return processed;
   }
 
-  private async reportSubmissionOrOutbox(payload: arena.SubmissionStatusPayload) {
+  private async reportSubmissionOrOutbox(payload: arena.SubmissionStatusPayload): Promise<boolean> {
     if (this.stateDb.listOutbox(1).length > 0) {
       await this.flushOutbox();
       if (this.stateDb.listOutbox(1).length > 0) {
         this.stateDb.enqueueOutbox('submission-status', payload);
-        return;
+        return false;
       }
     }
     try {
       await this.sendSubmissionStatus(payload);
+      return true;
     } catch (err) {
       if (isPermanentClientError(err)) {
         console.error('Submission status permanently rejected by server:', err);
-        return;
+        return false;
       }
       this.stateDb.enqueueOutbox('submission-status', payload);
+      return false;
     }
   }
 

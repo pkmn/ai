@@ -304,6 +304,26 @@ describe('Coordinator', () => {
     }
   }, 15_000);
 
+  test('clears smokeTesting heartbeat when submission status is queued to outbox', async () => {
+    const h = createMockCoordHarness('smoke-outbox-clear');
+    (h.coord.client as unknown as {
+      reportSubmissionStatus: () => Promise<never>;
+    }).reportSubmissionStatus = () => Promise.reject(new Error('network blip'));
+    try {
+      const processed = await h.coord.processPendingSubmissions(
+        new Map([['gen9customgame', {...h.ladderSnap, format: 'gen9ou'}]])
+      );
+      expect(processed).toBe(1);
+      expect(h.stateDb.listOutbox(5)).toHaveLength(1);
+      expect(h.heartbeats).toEqual([
+        {idle: true, smokeTesting: {slug: 'foul-play', name: 'Foul Play', versionId: 30}},
+        {idle: true},
+      ]);
+    } finally {
+      h.stateDb.close();
+    }
+  }, 15_000);
+
   test('caps processPendingSubmissions to maxSubmissions (default 1) in FIFO order', async () => {
     const rootDir = path.join(tmpDir, 'smoke-cap');
     const stateDb = new arenaDb.Database(':memory:');
