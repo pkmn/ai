@@ -221,7 +221,9 @@ export type PodmanRecycleResult = {ok: true} | {ok: false; error: string};
 // `libkrun`/`krunkit` releases freed guest pages lazily via `MADV_FREE` on macOS, leaving an idle
 // Podman VM holding up to 26+ GiB of host RAM, compressed pages, and swap after an OCI match or
 // smoke test. Stopping and kickstarting `ai.pkmn.podman` immediately returns 100% of that memory
-// to macOS before the next native match (costing ~6s only after OCI runs).
+// to macOS before the next native match (costing ~6s only after OCI runs). Restart via `launchctl
+// kickstart -k system/ai.pkmn.podman` rather than spawning `podman machine start` directly so
+// `krunkit` does not inherit `ai.pkmn.arena`'s `taskpolicy -b` E-core QoS or process group.
 export async function recyclePodmanVm(deps?: PodmanRecycleDeps): Promise<PodmanRecycleResult> {
   const run = deps?.exec ?? (async (file, args, options) => {
     await execFileAsync(file, [...args], options);
