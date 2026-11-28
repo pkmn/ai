@@ -1183,7 +1183,15 @@ describe('mock scenarios & E2E lifecycle', () => {
         });
 
         // Persists across full reload and toggles back off by clicking the orbs directly
+        const streamRequest = livePage.waitForRequest(
+          r => r.url().includes('/api/battles/stream')
+        );
         await livePage.reload({waitUntil: 'domcontentloaded'});
+        await streamRequest;
+        for (let i = 0; i < 100 && viewArena.getState().sseViewers.battles === 0; i++) {
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        expect(viewArena.getState().sseViewers.battles).toBeGreaterThan(0);
         expect(await readHpPctUi()).toEqual({
           checked: true,
           expanded: true,
@@ -1198,10 +1206,14 @@ describe('mock scenarios & E2E lifecycle', () => {
           saved: null,
           pctVisible: false,
         });
+        const vgcFiltered = livePage.waitForResponse(
+          r => r.url().includes('/api/battles.json') && r.url().includes('slot=vgc')
+        );
         await livePage.locator('label[for="bf-vgc"]').click();
         await livePage.waitForFunction(
           () => (document.getElementById('bf-vgc') as HTMLInputElement | undefined)?.checked
         );
+        await vgcFiltered;
 
         // Complete VGC match & start next RBY match -> VGC row prepends to filtered history
         // AND #live-panel transitions to the new RBY match without refreshing!
